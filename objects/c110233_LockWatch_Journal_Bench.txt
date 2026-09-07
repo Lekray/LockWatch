@@ -40,6 +40,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       UpdatePhaseTxt@1000000020 : TextConst 'ENU=updating;RUS=обновление';
       ClosePhaseTxt@1000000021 : TextConst 'ENU=closing;RUS=закрытие';
       SweepPhaseTxt@1000000022 : TextConst 'ENU=cleanup;RUS=уборка';
+      ChkSummaryTxt@1000000024 : TextConst 'ENU=the summary folds the episodes into one line and adds the numbers up;RUS=сводка сводит эпизоды в одну строку и складывает числа';
+      SummaryTxt@1000000025 : TextConst 'ENU=lines %1, episodes %2 of %3, total wait %4 ms, longest %5 ms;RUS=строк %1, эпизодов %2 из %3, суммарное ожидание %4 мс, самое долгое %5 мс';
+      ChkWindowTxt@1000000026 : TextConst 'ENU=the threshold and the window of the summary are real, not decoration;RUS=порог и окно сводки настоящие, а не украшение';
+      WindowTxt@1000000027 : TextConst 'ENU=above a low threshold %1 of %2, above a high one %3, lines in a window past the last episode %4;RUS=выше низкого порога %1 из %2, выше высокого %3, строк в окне позже последнего эпизода %4';
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -75,6 +79,13 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Backdated@1000000015 : Integer;
       Removed@1000000016 : Integer;
       Worst@1000000017 : Integer;
+      Line@1000000018 : TEMPORARY Record 110234;
+      Lines@1000000019 : Integer;
+      Summed@1000000020 : Integer;
+      OverLow@1000000021 : Integer;
+      OverHigh@1000000022 : Integer;
+      FutureLines@1000000023 : Integer;
+      TotalWait@1000000024 : BigInteger;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -98,6 +109,32 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Check(Passed,Total,Report,ChkCloseTxt,
             (Closed = Waiters) AND (Granted = Waiters) AND (StillOpen = 0),
             STRSUBSTNO(CloseTxt,Closed,Waiters,Granted,StillOpen));
+
+      // Сводка проверяется ЗДЕСЬ, до состаривания и уборки: журнал в этот миг содержит
+      // ровно то, что мерный прогон в него положил, - пятьсот закрытых эпизодов одной
+      // таблицы и одного ключа. Обращений к SQL в сводке нет, поэтому и проверяется она
+      // без стенда с блокировками.
+      Summed := Journal.Summarize(Line,0DT,CURRENTDATETIME,AlertUnderTest);
+      Lines := Line.COUNT;
+      Line.FINDFIRST;
+      TotalWait := Line."Total Wait (ms)";
+      OverLow := Line."Over Threshold";
+      Check(Passed,Total,Report,ChkSummaryTxt,
+            (Summed = Waiters) AND (Lines = 1) AND (Line.Episodes = Waiters) AND
+            (TotalWait = Waiters * SecondWaitMs) AND (Line."Max Wait (ms)" = SecondWaitMs),
+            STRSUBSTNO(SummaryTxt,Lines,Line.Episodes,Waiters,TotalWait,Line."Max Wait (ms)"));
+
+      // Порог и окно проверяются тем, что их СДВИГАЮТ. Одна сводка ничего не доказывает:
+      // колонка "выше порога", равная числу эпизодов, одинаково выглядит и у настоящего
+      // счёта, и у того, который порога не читает вовсе.
+      Journal.Summarize(Line,0DT,CURRENTDATETIME,SecondWaitMs + 1);
+      Line.FINDFIRST;
+      OverHigh := Line."Over Threshold";
+      FutureLines := Journal.Summarize(Line,CURRENTDATETIME,CURRENTDATETIME,AlertUnderTest);
+      Lines := Line.COUNT;
+      Check(Passed,Total,Report,ChkWindowTxt,
+            (OverLow = Waiters) AND (OverHigh = 0) AND (FutureLines = 0) AND (Lines = 0),
+            STRSUBSTNO(WindowTxt,OverLow,Waiters,OverHigh,Lines));
 
       Backdated := Backdate(BackdateRows,BackdateDays);
       Removed := Journal.TrimOldEntries(RetentionUnderTest,Waiters);
@@ -133,7 +170,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // с COMMIT. Без COMMIT замер был бы вдвое красивее и вдвое бесполезнее - запись в
       // журнал транзакций и есть то, чем проход платит.
       Started := CURRENTDATETIME;
-      Journal.BeginPass(Started,PeriodMs);
+      Journal.BeginPass(Started,PeriodMs,AlertUnderTest);
       FOR Index := 1 TO Waiters DO BEGIN
         MakeObserved(Observed,Index,WaitMs);
         Journal.Observe(Observed);
@@ -193,7 +230,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Back@1000000003 : Duration;
     BEGIN
       // Состаривание идёт правкой поля, а не ожиданием месяца.
-      Back := Days * MsPerDay;
+      Back := Days * Parse.MsPerDay;
       Episode.RESET;
       Episode.SETFILTER("Victim SPID",'<%1',0);
       IF Episode.FINDSET(TRUE) THEN
@@ -204,12 +241,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         UNTIL (Moved >= Rows) OR (Episode.NEXT = 0);
       COMMIT;
       EXIT(Moved);
-    END;
-
-    LOCAL PROCEDURE MsPerDay@21() : Decimal;
-    BEGIN
-      // Дробный тип, а не целый: сорок пять суток в миллисекундах не помещаются в Integer.
-      EXIT(86400000);
     END;
 
     LOCAL PROCEDURE Sweep@6() : Integer;
@@ -319,6 +350,14 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Меньше состаривания, но больше суток: чистка обязана убрать состаренные и не
       // тронуть остальные. Проверка на месячном сроке заодно ловит переполнение Integer.
       EXIT(30);
+    END;
+
+    LOCAL PROCEDURE AlertUnderTest@21() : Integer;
+    BEGIN
+      // Между первым ожиданием и вторым: после второго прохода выше порога обязаны
+      // оказаться ВСЕ строки, и это же число делает вторую сводку - с порогом выше
+      // второго ожидания - заведомо пустой. Одно число, две противоположные проверки.
+      EXIT(4000);
     END;
 
     LOCAL PROCEDURE CeilingMs@18() : Integer;

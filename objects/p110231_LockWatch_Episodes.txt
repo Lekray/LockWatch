@@ -19,6 +19,14 @@ OBJECT Page 110231 LockWatch Episodes
     SourceTableView=SORTING(Started At)
                     ORDER(Descending);
     PageType=List;
+    OnOpenPage=BEGIN
+                 ReadAlertThreshold;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       SetStyle;
+                     END;
+
     ActionList=ACTIONS
     {
       { 40      ;    ;ActionContainer;
@@ -55,6 +63,21 @@ OBJECT Page 110231 LockWatch Episodes
                                  CurrPage.UPDATE(FALSE);
                                END;
                                 }
+      { 44      ;1   ;Action    ;
+                      Name=OpenSummary;
+                      CaptionML=[ENU=Summary;
+                                 RUS=Сводка];
+                      ToolTipML=[ENU=Open the summary: which tables and keys waited, and for how long. A storm of five hundred rows is one trouble there, not five hundred.;
+                                 RUS=Открыть сводку: какие таблицы и ключи ждали и на сколько. Шторм из пятисот строк там - одна беда, а не пятьсот.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=StatisticsDocument;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Summary");
+                               END;
+                                }
       { 43      ;1   ;Action    ;
                       Name=OpenSetup;
                       CaptionML=[ENU=Setup;
@@ -88,9 +111,10 @@ OBJECT Page 110231 LockWatch Episodes
 
     { 4   ;2   ;Field     ;
                 Name=MaxWait;
-                ToolTipML=[ENU=Specifies how long the wait lasted, in milliseconds. The number comes from the server counter and not from the difference of two observations.;
-                           RUS=Определяет, сколько ожидание длилось, в миллисекундах. Число взято у счётчика сервера, а не из разницы двух наблюдений.];
+                ToolTipML=[ENU=Specifies how long the wait lasted, in milliseconds. The number comes from the server counter and not from the difference of two observations. It is coloured once it crosses the alert threshold from the setup.;
+                           RUS=Определяет, сколько ожидание длилось, в миллисекундах. Число взято у счётчика сервера, а не из разницы двух наблюдений. Красится, как только переваливает порог тревоги из настройки.];
                 ApplicationArea=#All;
+                StyleExpr=WaitStyle;
                 SourceExpr="Max Wait (ms)" }
 
     { 5   ;2   ;Field     ;
@@ -113,6 +137,20 @@ OBJECT Page 110231 LockWatch Episodes
                            RUS=Определяет, что это за беда. Классы лечатся по-разному: эскалация - размером пачки, забытая транзакция - звонком, обычный спор за строку - кодом или ключом.];
                 ApplicationArea=#All;
                 SourceExpr=Class }
+
+    { 29  ;2   ;Field     ;
+                Name=Advice;
+                ToolTipML=[ENU=Specifies what to do about it. The advice follows from what is already known about the episode and adds nothing of its own: where nothing can be said, it is empty rather than polite.;
+                           RUS=Определяет, что с этим делать. Совет следует из того, что об эпизоде уже известно, и ничего от себя не добавляет: где сказать нечего, он пуст, а не вежлив.];
+                ApplicationArea=#All;
+                SourceExpr=Advice }
+
+    { 30  ;2   ;Field     ;
+                Name=AdviceEvidence;
+                ToolTipML=[ENU=Specifies the number the advice was given for. It stands next to the advice on purpose: advice without the number behind it is an opinion, and there is nothing to argue with.;
+                           RUS=Определяет число, по которому совет выдан. Стоит рядом с советом нарочно: совет без числа за ним - это мнение, и спорить с ним нечем.];
+                ApplicationArea=#All;
+                SourceExpr="Advice Evidence" }
 
     { 8   ;2   ;Field     ;
                 Name=NAVTableName;
@@ -263,6 +301,41 @@ OBJECT Page 110231 LockWatch Episodes
   }
   CODE
   {
+    VAR
+      AlertMs@1000000000 : Integer;
+      WaitStyle@1000000001 : Text[30];
+
+    LOCAL PROCEDURE ReadAlertThreshold@1();
+    VAR
+      Setup@1000000000 : Record 110230;
+    BEGIN
+      // Порог читается ОДИН раз при открытии, а не на каждой строке: страница листает
+      // тысячи строк, и чтение настройки на каждую было бы тысячей лишних обращений
+      // ради числа, которое за время просмотра не меняется.
+      Setup.FetchOnce;
+      AlertMs := Setup."Alert Threshold (ms)";
+    END;
+
+    LOCAL PROCEDURE SetStyle@2();
+    BEGIN
+      // Порог ноль означает "не тревожить вовсе", и тогда не красится ничего: цвет не
+      // должен появляться сам собой у того, кто тревогу выключил.
+      WaitStyle := StandardStyle;
+      IF (AlertMs > 0) AND ("Max Wait (ms)" >= AlertMs) THEN
+        WaitStyle := AlarmStyle;
+    END;
+
+    LOCAL PROCEDURE StandardStyle@3() : Text[30];
+    BEGIN
+      EXIT('Standard');
+    END;
+
+    LOCAL PROCEDURE AlarmStyle@4() : Text[30];
+    BEGIN
+      // Имена стилей - платформенные, и написать их с ошибкой можно молча: неизвестный
+      // стиль клиент рисует обычным, ничего не сказав. Поэтому они здесь по одному разу.
+      EXIT('Unfavorable');
+    END;
 
     BEGIN
     {
@@ -276,6 +349,11 @@ OBJECT Page 110231 LockWatch Episodes
       голова цепочки - это не непосредственный блокирующий; исход "не определён" - это
       ответ, а не пропуск; пустое имя пользователя - не сбой, а отсутствие права, которое
       никто не выдавал.
+
+      Совет и улика стоят РЯДОМ и разделены нарочно. Совет говорит, что делать, улика -
+      по какому числу он выдан, и без второго первое было бы мнением. Пустой совет тоже
+      ответ: там, где сказать нечего, вежливая общая фраза увела бы в сторону вернее,
+      чем молчание.
     }
     END.
   }

@@ -1,0 +1,69 @@
+OBJECT Table 110234 LockWatch Summary Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Summary Line;
+               RUS=Строка сводки LockWatch];
+  }
+  FIELDS
+  {
+    { 1   ;   ;NAV Table Name      ;Text250       ;CaptionML=[ENU=NAV Table Name;
+                                                              RUS=Таблица NAV] }
+    { 2   ;   ;NAV Key No.         ;Integer       ;CaptionML=[ENU=NAV Key No.;
+                                                              RUS=Ключ NAV];
+                                                   BlankNumbers=DontBlank }
+    { 10  ;   ;On SIFT             ;Boolean       ;CaptionML=[ENU=On SIFT;
+                                                              RUS=На SIFT-агрегате] }
+    { 11  ;   ;Episodes            ;Integer       ;CaptionML=[ENU=Episodes;
+                                                              RUS=Эпизодов] }
+    { 12  ;   ;Over Threshold      ;Integer       ;CaptionML=[ENU=Over Threshold;
+                                                              RUS=Из них выше порога] }
+    { 13  ;   ;Total Wait (ms)     ;BigInteger    ;CaptionML=[ENU=Total Wait (ms);
+                                                              RUS=Суммарное ожидание, мс] }
+    { 14  ;   ;Max Wait (ms)       ;Integer       ;CaptionML=[ENU=Max Wait (ms);
+                                                              RUS=Самое долгое, мс] }
+    { 15  ;   ;Last At             ;DateTime      ;CaptionML=[ENU=Last At;
+                                                              RUS=Последний эпизод] }
+    { 16  ;   ;Advice              ;Text250       ;CaptionML=[ENU=Advice;
+                                                              RUS=Совет] }
+  }
+  KEYS
+  {
+    {    ;NAV Table Name,NAV Key No.              ;Clustered=Yes }
+    {    ;Total Wait (ms)                          }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    BEGIN
+    {
+      Строка сводки: одна таблица и один её ключ за выбранное окно. Живёт только в
+      памяти - страница сводки объявлена временной, и ни одна строка отсюда в базу не
+      попадает. Объект таблицы всё равно нужен: страница без источника не бывает.
+
+      Итог считается ПЕРЕБОРОМ журнала, а не SumIndexFields и не FlowField'ами. Причина
+      та же, по которой их нет и в самом журнале: наблюдатель, заведший себе SIFT-
+      агрегат на таблице, куда фоновая задача пишет каждые три секунды, сам станет тем,
+      за что дерутся. Сводку открывают руками и изредка, а платить за неё пришлось бы
+      каждой записью эпизода.
+
+      "Суммарное ожидание" объявлено BigInteger не для запаса: при сроке хранения в
+      месяц двухсот тысяч эпизодов по десять секунд хватает, чтобы перевалить за предел
+      Integer, и сумма молча ушла бы в минус.
+
+      Совет в строке - совет САМОГО ДОЛГОГО эпизода группы, а не самый частый: чинить
+      начинают с худшего, а частый совет на хвосте мелких ожиданий увёл бы в сторону.
+    }
+    END.
+  }
+}

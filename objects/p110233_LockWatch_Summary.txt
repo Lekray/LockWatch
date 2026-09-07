@@ -1,0 +1,372 @@
+OBJECT Page 110233 LockWatch Summary
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Summary;
+               RUS=Сводка блокировок];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    Editable=No;
+    SourceTable=Table110234;
+    SourceTableTemporary=Yes;
+    SourceTableView=SORTING(Total Wait (ms))
+                    ORDER(Descending);
+    PageType=Worksheet;
+    OnOpenPage=BEGIN
+                 SetWindow(DayHours);
+                 Fill;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       SetStyle;
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 20      ;    ;ActionContainer;
+                      Name=SummaryActions;
+                      ActionContainerType=ActionItems }
+      { 21      ;1   ;Action    ;
+                      Name=WindowDay;
+                      CaptionML=[ENU=Last Day;
+                                 RUS=За сутки];
+                      ToolTipML=[ENU=Sum up the last twenty-four hours. This is the window the question is usually about: a shift, or the night before.;
+                                 RUS=Свести последние сутки. Обычно спрашивают именно про это окно: смену или прошедшую ночь.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Calendar;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 SetWindow(DayHours);
+                                 Refill;
+                               END;
+                                }
+      { 22      ;1   ;Action    ;
+                      Name=WindowWeek;
+                      CaptionML=[ENU=Last Week;
+                                 RUS=За неделю];
+                      ToolTipML=[ENU=Sum up the last seven days, so that a table that hurts once a week is not lost among the daily noise.;
+                                 RUS=Свести последние семь суток, чтобы таблица, которая болит раз в неделю, не потерялась в суточном шуме.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=CalendarWorkcenter;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 SetWindow(WeekHours);
+                                 Refill;
+                               END;
+                                }
+      { 23      ;1   ;Action    ;
+                      Name=WindowAll;
+                      CaptionML=[ENU=Whole Journal;
+                                 RUS=Весь журнал];
+                      ToolTipML=[ENU=Sum up everything the journal still holds. How far back that reaches is set by the retention term, not by this window.;
+                                 RUS=Свести всё, что журнал ещё хранит. Насколько это далеко, задаёт срок хранения, а не это окно.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=ClearFilter;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 SetWholeJournal;
+                                 Refill;
+                               END;
+                                }
+      { 24      ;1   ;Action    ;
+                      Name=ShowEpisodes;
+                      CaptionML=[ENU=Episodes;
+                                 RUS=Эпизоды];
+                      ToolTipML=[ENU=Open the episodes this line was summed from, with the same window and the same table and key.;
+                                 RUS=Открыть эпизоды, из которых сложена эта строка, - с тем же окном, той же таблицей и тем же ключом.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Log;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowEpisodes;
+                               END;
+                                }
+      { 25      ;1   ;Action    ;
+                      Name=OpenSetup;
+                      CaptionML=[ENU=Setup;
+                                 RUS=Настройка];
+                      ToolTipML=[ENU=Open the setup, where the alert threshold and the retention term live.;
+                                 RUS=Открыть настройку, где живут порог тревоги и срок хранения.];
+                      ApplicationArea=#All;
+                      Image=Setup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Setup");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Window;
+                CaptionML=[ENU=Window;
+                           RUS=Окно];
+                GroupType=Group }
+
+    { 3   ;2   ;Field     ;
+                Name=WindowFrom;
+                CaptionML=[ENU=From;
+                           RUS=С];
+                ToolTipML=[ENU=Specifies the beginning of the summed window. Empty means the whole journal, as far back as the retention term keeps it.;
+                           RUS=Определяет начало сведённого окна. Пусто означает весь журнал - настолько назад, насколько его держит срок хранения.];
+                ApplicationArea=#All;
+                SourceExpr=WindowFrom }
+
+    { 4   ;2   ;Field     ;
+                Name=WindowTo;
+                CaptionML=[ENU=To;
+                           RUS=По];
+                ToolTipML=[ENU=Specifies the end of the summed window. It is the moment the summary was built, not the current moment: the numbers do not move under the eyes.;
+                           RUS=Определяет конец сведённого окна. Это миг, когда сводка была построена, а не текущий: числа не едут под глазами.];
+                ApplicationArea=#All;
+                SourceExpr=WindowTo }
+
+    { 5   ;2   ;Field     ;
+                Name=AlertMs;
+                CaptionML=[ENU=Alert Threshold (ms);
+                           RUS=Порог тревоги, мс];
+                ToolTipML=[ENU=Specifies the threshold the column of episodes above it is counted against. It is taken from the setup, and zero there means do not alert at all rather than alert on everything.;
+                           RUS=Определяет порог, по которому считается колонка "из них выше порога". Берётся из настройки, и ноль в ней означает "не тревожить вовсе", а не "тревожить на всём".];
+                ApplicationArea=#All;
+                SourceExpr=AlertMs }
+
+    { 6   ;2   ;Field     ;
+                Name=TotalEpisodes;
+                CaptionML=[ENU=Episodes in Window;
+                           RUS=Эпизодов в окне];
+                ToolTipML=[ENU=Specifies how many episodes went into this summary. A zero here with a busy server means the window is wrong, not that the server is quiet.;
+                           RUS=Определяет, сколько эпизодов легло в эту сводку. Ноль здесь при шумном сервере означает неверное окно, а не тишину.];
+                ApplicationArea=#All;
+                SourceExpr=TotalEpisodes }
+
+    { 10  ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 11  ;2   ;Field     ;
+                Name=NAVTableName;
+                ToolTipML=[ENU=Specifies the table the locks sat on. An empty name is not a gap: it means the resource was not recognised, and the episodes behind it are shown with their raw SQL name.;
+                           RUS=Определяет таблицу, на которой сидели блокировки. Пустое имя - не пропуск: значит, ресурс не опознан, и эпизоды за ним показаны сырым именем SQL.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Table Name" }
+
+    { 12  ;2   ;Field     ;
+                Name=NAVKeyNo;
+                ToolTipML=[ENU=Specifies the key of the table the fight was over. Different keys of one table are different lines: they are cured differently.;
+                           RUS=Определяет ключ таблицы, за который шёл спор. Разные ключи одной таблицы - разные строки: лечатся они по-разному.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Key No." }
+
+    { 13  ;2   ;Field     ;
+                Name=TotalWait;
+                ToolTipML=[ENU=Specifies how much waiting this table and key cost over the window, in milliseconds. The lines are sorted by this: it is the number that says where the pain is, not the count of episodes.;
+                           RUS=Определяет, во сколько миллисекунд ожидания обошлись эта таблица и этот ключ за окно. По нему строки и упорядочены: именно он говорит, где болит, а не число эпизодов.];
+                ApplicationArea=#All;
+                SourceExpr="Total Wait (ms)" }
+
+    { 14  ;2   ;Field     ;
+                Name=Episodes;
+                ToolTipML=[ENU=Specifies how many episodes fell into this line.;
+                           RUS=Определяет, сколько эпизодов попало в эту строку.];
+                ApplicationArea=#All;
+                SourceExpr=Episodes }
+
+    { 15  ;2   ;Field     ;
+                Name=OverThreshold;
+                ToolTipML=[ENU=Specifies how many of those episodes crossed the alert threshold. One long wait hurts more than a hundred short ones, and this column tells them apart.;
+                           RUS=Определяет, сколько из этих эпизодов перевалило порог тревоги. Одно долгое ожидание больнее сотни коротких, и эта колонка их различает.];
+                ApplicationArea=#All;
+                StyleExpr=OverThresholdStyle;
+                SourceExpr="Over Threshold" }
+
+    { 16  ;2   ;Field     ;
+                Name=MaxWait;
+                ToolTipML=[ENU=Specifies the longest single wait in this line, in milliseconds.;
+                           RUS=Определяет самое долгое одиночное ожидание в этой строке, в миллисекундах.];
+                ApplicationArea=#All;
+                SourceExpr="Max Wait (ms)" }
+
+    { 17  ;2   ;Field     ;
+                Name=OnSIFT;
+                ToolTipML=[ENU=Specifies whether the fight was over a SIFT aggregate rather than over a data row. That is cured by the key, not by an index.;
+                           RUS=Определяет, шёл ли спор за SIFT-агрегат, а не за строку данных. Это лечится ключом, а не индексом.];
+                ApplicationArea=#All;
+                SourceExpr="On SIFT" }
+
+    { 18  ;2   ;Field     ;
+                Name=LastAt;
+                ToolTipML=[ENU=Specifies when the last episode of this line began.;
+                           RUS=Определяет, когда начался последний эпизод этой строки.];
+                ApplicationArea=#All;
+                SourceExpr="Last At" }
+
+    { 19  ;2   ;Field     ;
+                Name=Advice;
+                ToolTipML=[ENU=Specifies what to do about it. The advice is taken from the longest episode of the line, not from the most frequent one: the worst case is where the fixing starts.;
+                           RUS=Определяет, что с этим делать. Совет взят у самого долгого эпизода строки, а не у самого частого: чинить начинают с худшего.];
+                ApplicationArea=#All;
+                SourceExpr=Advice }
+
+  }
+  CODE
+  {
+    VAR
+      Journal@1000000000 : Codeunit 110232;
+      WindowFrom@1000000001 : DateTime;
+      WindowTo@1000000002 : DateTime;
+      AlertMs@1000000003 : Integer;
+      TotalEpisodes@1000000004 : Integer;
+      OverThresholdStyle@1000000005 : Text[30];
+
+    LOCAL PROCEDURE SetWindow@1(Hours@1000000000 : Integer);
+    VAR
+      Back@1000000001 : Duration;
+    BEGIN
+      // Верхняя граница берётся ОДИН раз и запоминается, а не считается при каждом
+      // обращении к строке: иначе окно уезжало бы, пока сводку разглядывают, и две
+      // соседние колонки оказались бы посчитаны за разные промежутки.
+      WindowTo := CURRENTDATETIME;
+      Back := Hours * MsPerHour;
+      WindowFrom := WindowTo - Back;
+    END;
+
+    LOCAL PROCEDURE SetWholeJournal@2();
+    BEGIN
+      // Пустая нижняя граница означает "весь журнал". Насколько это далеко, решает срок
+      // хранения, а не сводка: показывать окно шире хранимого было бы обещанием пустоты.
+      WindowTo := CURRENTDATETIME;
+      WindowFrom := 0DT;
+    END;
+
+    LOCAL PROCEDURE Fill@3();
+    VAR
+      Setup@1000000000 : Record 110230;
+    BEGIN
+      // Порог берётся из настройки при каждом сведении, а не запоминается: его меняют
+      // ровно тогда, когда сводка не сошлась с ощущением, и увидеть новый порог хотят
+      // сразу же.
+      Setup.FetchOnce;
+      AlertMs := Setup."Alert Threshold (ms)";
+      TotalEpisodes := Journal.Summarize(Rec,WindowFrom,WindowTo,AlertMs);
+    END;
+
+    LOCAL PROCEDURE Refill@4();
+    BEGIN
+      // Заполнение и обновление экрана разделены нарочно: при открытии страницы обновлять
+      // ещё нечего, а из действия - обязательно, иначе строки сменились бы, а на экране
+      // осталось прежнее.
+      //
+      // Курсор ставится на первую строку ДО обновления. Строки перед этим удалены все до
+      // одной, и на тихом сервере новых не появилось вовсе - самый обычный случай для
+      // здоровой базы, и оставлять экран на строке, которой больше нет, незачем.
+      Fill;
+      IF FINDFIRST THEN;
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    LOCAL PROCEDURE ShowEpisodes@5();
+    VAR
+      Episode@1000000000 : Record 110231;
+      TableName@1000000001 : Text[250];
+      KeyNo@1000000002 : Integer;
+    BEGIN
+      // Имя и ключ снимаются в свои переменные до отбора: в отборе слева поле чужой
+      // записи, справа - поле нашей, и запись их одним именем читается как ошибка,
+      // даже когда работает.
+      TableName := "NAV Table Name";
+      KeyNo := "NAV Key No.";
+      Episode.SETRANGE("NAV Table Name",TableName);
+      Episode.SETRANGE("NAV Key No.",KeyNo);
+      IF WindowFrom = 0DT THEN
+        Episode.SETFILTER("Started At",'<=%1',WindowTo)
+      ELSE
+        Episode.SETRANGE("Started At",WindowFrom,WindowTo);
+      PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
+    END;
+
+    LOCAL PROCEDURE SetStyle@10();
+    BEGIN
+      // Строка, где есть хоть один эпизод выше порога, красится. Порог ноль означает
+      // "не тревожить вовсе", и тогда не красится ничего: цвет не должен появляться
+      // сам собой у того, кто тревогу выключил.
+      OverThresholdStyle := StandardStyle;
+      IF (AlertMs > 0) AND ("Over Threshold" > 0) THEN
+        OverThresholdStyle := AlarmStyle;
+    END;
+
+    LOCAL PROCEDURE StandardStyle@11() : Text[30];
+    BEGIN
+      EXIT('Standard');
+    END;
+
+    LOCAL PROCEDURE AlarmStyle@12() : Text[30];
+    BEGIN
+      // Имена стилей - платформенные, и написать их с ошибкой можно молча: неизвестный
+      // стиль клиент рисует обычным, ничего не сказав. Поэтому они здесь по одному разу.
+      EXIT('Unfavorable');
+    END;
+
+    LOCAL PROCEDURE DayHours@6() : Integer;
+    BEGIN
+      // Сутки. Окно по умолчанию: спрашивают обычно про смену или прошедшую ночь, а не
+      // про месяц, и сводка за месяц на первом экране увела бы взгляд с того, что болит
+      // сейчас, на то, что болело когда-то.
+      EXIT(24);
+    END;
+
+    LOCAL PROCEDURE WeekHours@7() : Integer;
+    BEGIN
+      // Семь суток. Второе окно нужно ровно за тем, чтобы увидеть беду, которая случается
+      // раз в неделю - закрытие периода, выгрузку, регламент, - и в суточном окне видна
+      // только в тот самый день.
+      EXIT(168);
+    END;
+
+    LOCAL PROCEDURE MsPerHour@8() : Integer;
+    BEGIN
+      EXIT(3600000);
+    END;
+
+    BEGIN
+    {
+      Сводка: какие таблицы и ключи ждут блокировок и на сколько. Это первый из трёх
+      вопросов, ради которых инструмент затевался, и до сих пор на него отвечал только
+      журнал - построчно, а значит никак: пятьсот строк одного шторма выглядят как
+      пятьсот бед, хотя беда одна.
+
+      Строки упорядочены по СУММАРНОМУ ожиданию, а не по числу эпизодов. Число эпизодов
+      говорит, как часто задевали, сумма - во сколько это обошлось, и лечить начинают со
+      второго. Колонка "из них выше порога" стоит рядом с числом эпизодов ровно затем,
+      чтобы одно долгое ожидание не потерялось на фоне сотни коротких.
+
+      Тип страницы - Worksheet, а не List, и это не украшение: шапка с окном обязана
+      быть ВИДНА рядом с числами. Число без окна, за которое оно посчитано, - не число.
+
+      Окно задаётся кнопками, а не полями ввода. Причина не в лени: верхняя граница
+      берётся один раз и запоминается, и пока сводку разглядывают, числа не едут. Поле
+      ввода с датой соблазняло бы править её по одному концу и сравнивать несравнимое.
+
+      Строка сводки - не ответ, а вопрос: "почему эта таблица столько ждёт". Ответ лежит
+      в эпизодах за ней, поэтому кнопка "Эпизоды" переносит туда ТОТ ЖЕ отбор - окно,
+      таблицу и ключ, - а не открывает журнал целиком.
+    }
+    END.
+  }
+}

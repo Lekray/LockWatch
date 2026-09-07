@@ -83,7 +83,7 @@ OBJECT Codeunit 110235 LockWatch Pass
 
       Parse.Chains(Waiter,Blocker,RowCount,Head,Depth,Ring,Behind);
 
-      Journal.BeginPass(ObservedAt,Setup."Poll Period (ms)");
+      Journal.BeginPass(ObservedAt,Setup."Poll Period (ms)",Setup."Alert Threshold (ms)");
       Observed.RESET;
       IF Observed.FINDSET THEN
         REPEAT

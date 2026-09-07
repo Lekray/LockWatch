@@ -12,6 +12,23 @@ OBJECT Codeunit 110230 LockWatch Parse
   }
   CODE
   {
+    VAR
+      AdvDeadlockTxt@1000000000 : TextConst 'ENU=The server broke the cycle itself. This is cured by the order of acquisition - both sides must take the same records in the same order - and neither by an index nor by a retry.;RUS=Круг разорвал сам сервер. Лечится порядком захвата - обе стороны обязаны брать одни и те же записи в одном порядке, - а не индексом и не повтором.';
+      AdvEscalationTxt@1000000001 : TextConst 'ENU=Escalation: the lock left the rows for the whole table and stopped everyone at once. This is cured by the size of the batch - commit more often - and not by an index.;RUS=Эскалация: блокировка ушла со строк на таблицу целиком и остановила всех разом. Лечится размером пачки - фиксировать чаще, - а не индексом.';
+      AdvSleepingTxt@1000000002 : TextConst 'ENU=The culprit holds a transaction and sends no statements at all. That is a forgotten dialog or a wait for a human, and it is cured by a phone call rather than by a change to the code.;RUS=Виновник держит транзакцию и не шлёт ни одного оператора. Это забытое окно или ожидание человека, и лечится оно звонком, а не правкой кода.';
+      AdvForeignTxt@1000000003 : TextConst 'ENU=The head of the chain is not a NAV session. The tool cannot see inside it, so the answer is on that side - a job of its own, an outside utility, a restore - and not in NAV code.;RUS=Голова цепочки - не сессия NAV. Внутрь неё инструмент не видит, и разбираться надо на той стороне - своё задание, чужая утилита, восстановление, - а не в коде NAV.';
+      AdvSiftTxt@1000000004 : TextConst 'ENU=The fight is over a SIFT aggregate, not over a data row. That is cured by the key: maintenance of SIFT on this key is either switched off or narrowed down.;RUS=Спор идёт за SIFT-агрегат, а не за строку данных. Лечится ключом: ведение SIFT по этому ключу либо отключается, либо сужается.';
+      AdvQueueTxt@1000000005 : TextConst 'ENU=A queue has formed behind one head: the trouble is one and the journal rows are many. The head of the chain is what has to be fixed, not each victim in turn.;RUS=За одной головой выстроилась очередь: беда одна, а строк в журнале много. Чинить надо голову цепочки, а не каждую жертву по очереди.';
+      AdvTimedOutTxt@1000000006 : TextConst 'ENU=The victim did not get its lock: the platform gave up on its own limit and a human saw the refusal. Look at what holds the lock that long, not at the victim.;RUS=Жертва не дождалась: платформа сняла ожидание по своему пределу, и человек увидел отказ. Смотреть надо на то, что держит блокировку так долго, а не на жертву.';
+      AdvLongWaitTxt@1000000007 : TextConst 'ENU=The wait is longer than the alert threshold, and there are no signs of escalation, of a sleeping transaction or of a queue. Look at the operation itself and at the document the fight is over.;RUS=Ожидание дольше порога тревоги, а признаков эскалации, сна и очереди нет. Смотреть надо на саму операцию и на документ, за который идёт спор.';
+      EvDeadlockTxt@1000000010 : TextConst 'ENU=deadlock, waited %1 ms;RUS=взаимоблокировка, ожидание %1 мс';
+      EvEscalationTxt@1000000011 : TextConst 'ENU=escalation, waited %1 ms;RUS=эскалация, ожидание %1 мс';
+      EvSleepingTxt@1000000012 : TextConst 'ENU=the culprit is in a transaction and silent, waited %1 ms;RUS=виновник в транзакции и молчит, ожидание %1 мс';
+      EvForeignTxt@1000000013 : TextConst 'ENU=the head of the chain is not a NAV session, waited %1 ms;RUS=голова цепочки - не сессия NAV, ожидание %1 мс';
+      EvSiftTxt@1000000014 : TextConst 'ENU=a SIFT aggregate, NAV key %1;RUS=SIFT-агрегат, ключ NAV %1';
+      EvQueueTxt@1000000015 : TextConst 'ENU=%1 victims behind one head;RUS=жертв за одной головой %1';
+      EvTimedOutTxt@1000000016 : TextConst 'ENU=refused on the limit, %1 ms;RUS=отказ по пределу, %1 мс';
+      EvLongWaitTxt@1000000017 : TextConst 'ENU=%1 ms against the threshold of %2 ms;RUS=%1 мс при пороге %2 мс';
 
     [External]
     PROCEDURE NavLockTimeoutMs@10() : Integer;
@@ -385,6 +402,139 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
+    PROCEDURE AdviceNone@41() : Integer;
+    BEGIN
+      EXIT(0);
+    END;
+
+    [External]
+    PROCEDURE AdviceDeadlock@42() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE AdviceEscalation@43() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    [External]
+    PROCEDURE AdviceSleeping@44() : Integer;
+    BEGIN
+      EXIT(3);
+    END;
+
+    [External]
+    PROCEDURE AdviceForeignHead@45() : Integer;
+    BEGIN
+      EXIT(4);
+    END;
+
+    [External]
+    PROCEDURE AdviceSift@46() : Integer;
+    BEGIN
+      EXIT(5);
+    END;
+
+    [External]
+    PROCEDURE AdviceQueue@47() : Integer;
+    BEGIN
+      EXIT(6);
+    END;
+
+    [External]
+    PROCEDURE AdviceTimedOut@48() : Integer;
+    BEGIN
+      EXIT(7);
+    END;
+
+    [External]
+    PROCEDURE AdviceLongWait@49() : Integer;
+    BEGIN
+      EXIT(8);
+    END;
+
+    [External]
+    PROCEDURE AdviceQueueWaiters@50() : Integer;
+    BEGIN
+      // Двое. Меньше нельзя: жертва за головой всегда есть хотя бы одна - она сама, - и
+      // порог в единицу означал бы "очередь есть всегда". Двое за одной головой это уже
+      // не совпадение, а очередь, и совет про неё верен ровно с этого числа.
+      EXIT(2);
+    END;
+
+    [External]
+    PROCEDURE Advise@51(EpisodeClassNo@1000 : Integer;OutcomeNo@1001 : Integer;MaxWaitMs@1002 : Integer;AlertMs@1003 : Integer;VictimsBehindHead@1004 : Integer;OnSift@1005 : Boolean;NavKeyNo@1006 : Integer;HeadIsForeign@1007 : Boolean;VAR AdviceText@1008 : Text;VAR Evidence@1009 : Text) : Integer;
+    BEGIN
+      // Совет - это не пересказ строки, а ответ на вопрос "что с этим делать". Отсюда и
+      // порядок: беда, у которой есть СВОЁ лечение, старше беды, про которую известна
+      // только длительность. Сначала три класса - у каждого лечение разное и названное,
+      // потом три признака устройства, и только в конце длительность как таковая.
+      //
+      // Улика рядом с советом обязательна. Совет без числа, по которому он выдан, - это
+      // мнение: его нечем оспорить и нечем проверить. По улике видно, на чём именно
+      // совет держится, и она же ловит совет, выданный не по тому признаку.
+      AdviceText := '';
+      Evidence := '';
+
+      IF EpisodeClassNo = ClassDeadlock THEN BEGIN
+        AdviceText := AdvDeadlockTxt;
+        Evidence := STRSUBSTNO(EvDeadlockTxt,MaxWaitMs);
+        EXIT(AdviceDeadlock);
+      END;
+
+      IF EpisodeClassNo = ClassEscalation THEN BEGIN
+        AdviceText := AdvEscalationTxt;
+        Evidence := STRSUBSTNO(EvEscalationTxt,MaxWaitMs);
+        EXIT(AdviceEscalation);
+      END;
+
+      IF EpisodeClassNo = ClassSleepingTran THEN BEGIN
+        AdviceText := AdvSleepingTxt;
+        Evidence := STRSUBSTNO(EvSleepingTxt,MaxWaitMs);
+        EXIT(AdviceSleeping);
+      END;
+
+      // Чужая голова старше и агрегата, и очереди: пока цепочку держит не сессия NAV,
+      // любой совет про ключи и пачки адресован не туда.
+      IF HeadIsForeign THEN BEGIN
+        AdviceText := AdvForeignTxt;
+        Evidence := STRSUBSTNO(EvForeignTxt,MaxWaitMs);
+        EXIT(AdviceForeignHead);
+      END;
+
+      IF OnSift THEN BEGIN
+        AdviceText := AdvSiftTxt;
+        Evidence := STRSUBSTNO(EvSiftTxt,NavKeyNo);
+        EXIT(AdviceSift);
+      END;
+
+      IF VictimsBehindHead >= AdviceQueueWaiters THEN BEGIN
+        AdviceText := AdvQueueTxt;
+        Evidence := STRSUBSTNO(EvQueueTxt,VictimsBehindHead);
+        EXIT(AdviceQueue);
+      END;
+
+      IF OutcomeNo = OutcomeTimedOut THEN BEGIN
+        AdviceText := AdvTimedOutTxt;
+        Evidence := STRSUBSTNO(EvTimedOutTxt,MaxWaitMs);
+        EXIT(AdviceTimedOut);
+      END;
+
+      // Ноль в пороге означает "не тревожить вовсе", а не "тревожить всегда". Разница не
+      // теоретическая: без этой оговорки выключенная тревога дала бы совет КАЖДОМУ
+      // эпизоду, и советчик стал бы шумом, который перестают читать.
+      IF (AlertMs > 0) AND (MaxWaitMs >= AlertMs) THEN BEGIN
+        AdviceText := AdvLongWaitTxt;
+        Evidence := STRSUBSTNO(EvLongWaitTxt,MaxWaitMs,AlertMs);
+        EXIT(AdviceLongWait);
+      END;
+
+      EXIT(AdviceNone);
+    END;
+
+    [External]
     PROCEDURE TextFingerprint@23(Value@1000 : Text) : Code[20];
     VAR
       Hash@1001 : BigInteger;
@@ -593,6 +743,11 @@ OBJECT Codeunit 110230 LockWatch Parse
 
       Числа с именами собраны наверху отдельными функциями: у каждого рядом довод,
       откуда оно взялось. В настройке им не место - от среды они не зависят.
+
+      Советчик живёт здесь же и по той же причине: совет - это чистая функция от того,
+      что уже известно про эпизод, и проверяется он без базы. Порядок правил в нём
+      важнее самих правил, и потому он проверяется отдельно: случай, где сходятся сразу
+      несколько признаков, обязан дать тот совет, у которого лечение точнее.
     }
     END.
   }

@@ -17,6 +17,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal@1000000001 : Record 110231;
       PassAt@1000000002 : DateTime;
       PassPeriodMs@1000000003 : Integer;
+      PassAlertMs@1000000011 : Integer;
       NextEntryNo@1000000004 : Integer;
       PassStarted@1000000005 : Boolean;
       OpenedCount@1000000006 : Integer;
@@ -26,13 +27,17 @@ OBJECT Codeunit 110232 LockWatch Journal
       NoPassErr@1000000010 : TextConst 'ENU=LockWatch: an episode was offered outside a pass. A pass is opened by BeginPass and closed by FinishPass.;RUS=LockWatch: эпизод предложен вне прохода. Проход открывается процедурой BeginPass и закрывается FinishPass.';
 
     [External]
-    PROCEDURE BeginPass@1(ObservedAt@1000000000 : DateTime;PeriodMs@1000000001 : Integer);
+    PROCEDURE BeginPass@1(ObservedAt@1000000000 : DateTime;PeriodMs@1000000001 : Integer;AlertMs@1000000012 : Integer);
     BEGIN
       // Момент прохода берётся ОДИН на весь проход и приходит снаружи - часами SQL,
       // тем же запросом, что отдал очередь. Свои часы здесь не годятся: между съёмом
       // и записью проходят миллисекунды, и они легли бы в начало каждого эпизода.
       PassAt := ObservedAt;
       PassPeriodMs := PeriodMs;
+      // Порог тревоги нужен не журналу, а советчику: он единственное, что советчик берёт
+      // из настройки, и приходит он сюда тем же путём, что и период - снаружи и один раз
+      // на проход, а не чтением настройки на каждую строку.
+      PassAlertMs := AlertMs;
       OpenedCount := 0;
       UpdatedCount := 0;
       ClosedCount := 0;
@@ -167,8 +172,83 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal := Row;
       Journal."Entry No." := NextNo;
       Journal.Open := FALSE;
+      ApplyAdvice(Journal);
       Journal.INSERT;
       EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ApplyAdvice@11(VAR Row@1000000000 : Record 110231);
+    VAR
+      AdviceText@1000000001 : Text;
+      Evidence@1000000002 : Text;
+    BEGIN
+      // Совет - чистая функция от полей строки, и живёт он в разборе: журнал только
+      // относит ему то, что уже знает, и кладёт ответ обратно. Никакого своего суждения
+      // здесь нет, и потому советчик проверяется без базы вовсе.
+      Parse.Advise(Row.Class,Row.Outcome,Row."Max Wait (ms)",PassAlertMs,
+                   Row."Victims Behind Head",Row."On SIFT",Row."NAV Key No.",
+                   Row."Head Is Foreign",AdviceText,Evidence);
+      Row.Advice := COPYSTR(AdviceText,1,MAXSTRLEN(Row.Advice));
+      Row."Advice Evidence" := COPYSTR(Evidence,1,MAXSTRLEN(Row."Advice Evidence"));
+    END;
+
+    [External]
+    PROCEDURE Summarize@15(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;
+    VAR
+      Episode@1000000004 : Record 110231;
+      Counted@1000000005 : Integer;
+      WaitMs@1000000006 : Integer;
+    BEGIN
+      // Сводка считается ПЕРЕБОРОМ, а не агрегатом базы. FlowField со счётом по журналу
+      // означал бы SumIndexFields на таблице, куда фоновая задача пишет каждые три
+      // секунды, - то есть наблюдатель сам стал бы тем, за что дерутся. Сводку открывают
+      // руками и изредка, и платить за неё каждой записью эпизода незачем.
+      Line.RESET;
+      Line.DELETEALL;
+
+      Episode.RESET;
+      Episode.SETCURRENTKEY("NAV Table Name","Started At");
+      // Пустая нижняя граница означает "весь журнал". Диапазон с пустым концом выглядел
+      // бы тем же самым, но означал бы отбор ПО пустому значению, а не его отсутствие.
+      IF FromAt = 0DT THEN
+        Episode.SETFILTER("Started At",'<=%1',ToAt)
+      ELSE
+        Episode.SETRANGE("Started At",FromAt,ToAt);
+      IF Episode.FINDSET THEN
+        REPEAT
+          Counted := Counted + 1;
+          WaitMs := Episode."Max Wait (ms)";
+          IF NOT Line.GET(Episode."NAV Table Name",Episode."NAV Key No.") THEN BEGIN
+            Line.INIT;
+            Line."NAV Table Name" := Episode."NAV Table Name";
+            Line."NAV Key No." := Episode."NAV Key No.";
+            Line.INSERT;
+          END;
+          Line.Episodes := Line.Episodes + 1;
+          Line."Total Wait (ms)" := Line."Total Wait (ms)" + WaitMs;
+          IF (AlertMs > 0) AND (WaitMs >= AlertMs) THEN
+            Line."Over Threshold" := Line."Over Threshold" + 1;
+          IF Episode."On SIFT" THEN
+            Line."On SIFT" := TRUE;
+          IF Episode."Started At" > Line."Last At" THEN
+            Line."Last At" := Episode."Started At";
+          // Совет строки - совет самого долгого эпизода группы. Первый эпизод берётся
+          // безусловно, а дальше только строго длиннее: при равенстве побеждает первый
+          // встреченный, и строка сводки не меняется от порядка чтения.
+          IF (Line.Episodes = 1) OR (WaitMs > Line."Max Wait (ms)") THEN BEGIN
+            Line."Max Wait (ms)" := WaitMs;
+            Line.Advice := Episode.Advice;
+          END;
+          Line.MODIFY;
+        UNTIL Episode.NEXT = 0;
+
+      // Порядок - часть смысла сводки, а не украшение страницы: первым идёт то, во что
+      // ожидание обошлось дороже всего. Поэтому он ставится здесь, а не только видом
+      // страницы, который перебор строк по временной записи мог бы и сбросить.
+      Line.RESET;
+      Line.SETCURRENTKEY("Total Wait (ms)");
+      Line.ASCENDING(FALSE);
+      EXIT(Counted);
     END;
 
     [External]
@@ -224,6 +304,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal."Ended At" := 0DT;
       Journal.Outcome := Journal.Outcome::Undetermined;
       Journal.Open := TRUE;
+      ApplyAdvice(Journal);
       Journal.INSERT;
       OpenedCount := OpenedCount + 1;
     END;
@@ -250,13 +331,15 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal."No Document Reason" := Keep."No Document Reason";
       Journal."User Name" := Keep."User Name";
       Journal."User Source" := Keep."User Source";
-      Journal.Advice := Keep.Advice;
-      Journal."Advice Evidence" := Keep."Advice Evidence";
+      // Совета в этом списке нет нарочно. Всё остальное здесь - то, что установлено ОДИН
+      // раз и повторно не выясняется, а совет обязан идти за строкой: ожидание растёт,
+      // класс меняется, и совет, поставленный при открытии, к закрытию был бы про другое.
       Journal.Open := TRUE;
       Journal."Last Seen At" := PassAt;
       Journal."Max Wait (ms)" := Keep."Max Wait (ms)";
       IF Observed."Last Wait (ms)" > Journal."Max Wait (ms)" THEN
         Journal."Max Wait (ms)" := Observed."Last Wait (ms)";
+      ApplyAdvice(Journal);
       Journal.MODIFY;
       UpdatedCount := UpdatedCount + 1;
     END;
@@ -278,6 +361,9 @@ OBJECT Codeunit 110232 LockWatch Journal
       // держится проверкой в обкатке.
       Journal.Outcome := Parse.Outcome(Journal."Last Wait (ms)",PassPeriodMs,VictimIsNav);
       Journal.Open := FALSE;
+      // Совет пересчитывается ПОСЛЕ исхода, а не до: "отказ по пределу" - это отдельный
+      // совет, и до закрытия эпизода он неизвестен.
+      ApplyAdvice(Journal);
       Journal.MODIFY;
       ClosedCount := ClosedCount + 1;
     END;
