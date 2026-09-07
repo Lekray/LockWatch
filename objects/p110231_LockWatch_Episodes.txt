@@ -1,0 +1,282 @@
+OBJECT Page 110231 LockWatch Episodes
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Episodes;
+               RUS=Эпизоды блокировок];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    Editable=No;
+    SourceTable=Table110231;
+    SourceTableView=SORTING(Started At)
+                    ORDER(Descending);
+    PageType=List;
+    ActionList=ACTIONS
+    {
+      { 40      ;    ;ActionContainer;
+                      Name=EpisodeActions;
+                      ActionContainerType=ActionItems }
+      { 41      ;1   ;Action    ;
+                      Name=OpenOnly;
+                      CaptionML=[ENU=Open Only;
+                                 RUS=Только идущие];
+                      ToolTipML=[ENU=Show only the episodes still waiting right now.;
+                                 RUS=Показать только эпизоды, которые идут прямо сейчас.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=FilterLines;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 SETRANGE(Open,TRUE);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 42      ;1   ;Action    ;
+                      Name=ShowAll;
+                      CaptionML=[ENU=All;
+                                 RUS=Все];
+                      ToolTipML=[ENU=Drop the filter and show finished episodes too.;
+                                 RUS=Снять отбор и показать также законченные эпизоды.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=ClearFilter;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 SETRANGE(Open);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 43      ;1   ;Action    ;
+                      Name=OpenSetup;
+                      CaptionML=[ENU=Setup;
+                                 RUS=Настройка];
+                      ToolTipML=[ENU=Open the LockWatch setup and its watchdog line.;
+                                 RUS=Открыть настройку LockWatch и строку её сторожа.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Setup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Setup");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                Name=StartedAt;
+                ToolTipML=[ENU=Specifies when the wait began. It is counted back from the observation by the length the server reported, not measured by our own clock.;
+                           RUS=Определяет, когда ожидание началось. Считается назад от наблюдения на длительность, которую назвал сервер, а не меряется своими часами.];
+                ApplicationArea=#All;
+                SourceExpr="Started At" }
+
+    { 4   ;2   ;Field     ;
+                Name=MaxWait;
+                ToolTipML=[ENU=Specifies how long the wait lasted, in milliseconds. The number comes from the server counter and not from the difference of two observations.;
+                           RUS=Определяет, сколько ожидание длилось, в миллисекундах. Число взято у счётчика сервера, а не из разницы двух наблюдений.];
+                ApplicationArea=#All;
+                SourceExpr="Max Wait (ms)" }
+
+    { 5   ;2   ;Field     ;
+                Name=Open;
+                ToolTipML=[ENU=Specifies whether the wait is still going on.;
+                           RUS=Определяет, идёт ли ожидание до сих пор.];
+                ApplicationArea=#All;
+                SourceExpr=Open }
+
+    { 6   ;2   ;Field     ;
+                Name=Outcome;
+                ToolTipML=[ENU=Specifies how the wait ended. Undetermined is an honest answer and not a gap: a waiter that got its lock and one that gave up both vanish from the queue the same way, and only two cases out of three can be told apart for certain.;
+                           RUS=Определяет, чем ожидание кончилось. "Не определён" - честный ответ, а не пропуск: дождавшийся и отвалившийся исчезают из очереди одинаково, и твёрдо различимы лишь два случая из трёх.];
+                ApplicationArea=#All;
+                SourceExpr=Outcome }
+
+    { 7   ;2   ;Field     ;
+                Name=Class;
+                ToolTipML=[ENU=Specifies what kind of trouble this is. The classes are cured differently: an escalation by the size of the batch, a forgotten transaction by a phone call, a plain row fight by code or by a key.;
+                           RUS=Определяет, что это за беда. Классы лечатся по-разному: эскалация - размером пачки, забытая транзакция - звонком, обычный спор за строку - кодом или ключом.];
+                ApplicationArea=#All;
+                SourceExpr=Class }
+
+    { 8   ;2   ;Field     ;
+                Name=NAVTableName;
+                ToolTipML=[ENU=Specifies the table the lock sits on, as SQL names it.;
+                           RUS=Определяет таблицу, на которой сидит блокировка, - так, как её называет SQL.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Table Name" }
+
+    { 9   ;2   ;Field     ;
+                Name=NAVKeyNo;
+                ToolTipML=[ENU=Specifies the NAV key number. Minus one means the name could not be read: the row is kept and counted rather than dropped, because a silent gap is a lie.;
+                           RUS=Определяет номер ключа NAV. Минус один означает, что имя прочитать не удалось: строка не выбрасывается, а показывается и считается, потому что молчаливый пропуск и есть ложь.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Key No." }
+
+    { 10  ;2   ;Field     ;
+                Name=OnSIFT;
+                ToolTipML=[ENU=Specifies whether the fight is over a SIFT aggregate rather than over the rows themselves.;
+                           RUS=Определяет, идёт ли спор за SIFT-агрегат, а не за сами строки.];
+                ApplicationArea=#All;
+                SourceExpr="On SIFT" }
+
+    { 11  ;2   ;Field     ;
+                Name=DocumentNo;
+                ToolTipML=[ENU=Specifies the document the victim was working with, when it can be told at all.;
+                           RUS=Определяет документ, с которым работала жертва, если его вообще удаётся назвать.];
+                ApplicationArea=#All;
+                SourceExpr="Document No." }
+
+    { 12  ;2   ;Field     ;
+                Name=UserName;
+                ToolTipML=[ENU=Specifies the account behind the victim. Empty is not a failure: without the platform switch the tool names the operation, not the person, and it does not pretend otherwise.;
+                           RUS=Определяет учётную запись жертвы. Пусто - не сбой: без соответствующей настройки платформы инструмент называет операцию, а не человека, и не притворяется, что может иначе.];
+                ApplicationArea=#All;
+                SourceExpr="User Name" }
+
+    { 13  ;2   ;Field     ;
+                Name=VictimSPID;
+                ToolTipML=[ENU=Specifies the server session of the victim.;
+                           RUS=Определяет серверный сеанс жертвы.];
+                ApplicationArea=#All;
+                SourceExpr="Victim SPID" }
+
+    { 14  ;2   ;Field     ;
+                Name=VictimHost;
+                ToolTipML=[ENU=Specifies the machine the victim session came from. With the process number next to it, it tells one service instance from another.;
+                           RUS=Определяет машину, с которой пришёл сеанс жертвы. Вместе с номером процесса это и отличает один экземпляр службы от другого.];
+                ApplicationArea=#All;
+                SourceExpr="Victim Host" }
+
+    { 15  ;2   ;Field     ;
+                Name=VictimProcessId;
+                ToolTipML=[ENU=Specifies the process of the victim session.;
+                           RUS=Определяет процесс сеанса жертвы.];
+                ApplicationArea=#All;
+                SourceExpr="Victim Process Id" }
+
+    { 16  ;2   ;Field     ;
+                Name=HeadSPID;
+                ToolTipML=[ENU=Specifies the head of the chain - the session that waits for nobody, that is, the one truly to blame. It is not the same as the immediate blocker: in a chain the immediate one is himself a victim, and blaming him sends people to fix the wrong thing.;
+                           RUS=Определяет голову цепочки - сеанс, который сам не ждёт, то есть настоящего виновника. Это не то же, что непосредственный блокирующий: в цепочке тот сам пострадавший, и по такому журналу чинят не то.];
+                ApplicationArea=#All;
+                SourceExpr="Head SPID" }
+
+    { 17  ;2   ;Field     ;
+                Name=VictimsBehindHead;
+                ToolTipML=[ENU=Specifies how many waiters stand behind this head. One head with forty victims is one trouble, not forty, and this number is what decides what to fix first.;
+                           RUS=Определяет, сколько ждущих стоит за этой головой. Одна голова с сорока жертвами - одна беда, а не сорок, и по этому числу решают, что чинить первым.];
+                ApplicationArea=#All;
+                SourceExpr="Victims Behind Head" }
+
+    { 18  ;2   ;Field     ;
+                Name=ChainDepth;
+                ToolTipML=[ENU=Specifies how many links away the head is.;
+                           RUS=Определяет, за сколько звеньев от жертвы стоит голова.];
+                ApplicationArea=#All;
+                SourceExpr="Chain Depth" }
+
+    { 19  ;2   ;Field     ;
+                Name=ChainRing;
+                ToolTipML=[ENU=Specifies whether the chain closed into a ring - a deadlock either about to happen or already broken up by the server.;
+                           RUS=Определяет, замкнулась ли цепочка в кольцо: взаимоблокировка на подходе либо уже разобранная сервером.];
+                ApplicationArea=#All;
+                SourceExpr="Chain Ring" }
+
+    { 20  ;2   ;Field     ;
+                Name=HeadIsForeign;
+                ToolTipML=[ENU=Specifies whether the head of the chain is not a NAV session. Cleared when it cannot be told: hinting that the culprit is outside when it is not known would send people looking in the wrong place.;
+                           RUS=Определяет, что голова цепочки - не сеанс NAV. Если выяснить не удалось, признак снят: подсказывать, что виновник снаружи, не зная этого, значит отправить искать не туда.];
+                ApplicationArea=#All;
+                SourceExpr="Head Is Foreign" }
+
+    { 21  ;2   ;Field     ;
+                Name=BlockerSPID;
+                ToolTipML=[ENU=Specifies the immediate blocker - whom the server named, not who is to blame.;
+                           RUS=Определяет непосредственного блокирующего - того, кого назвал сервер, а не того, кто виноват.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker SPID" }
+
+    { 22  ;2   ;Field     ;
+                Name=BlockerTranBeganAt;
+                ToolTipML=[ENU=Specifies when the transaction of the immediate blocker began. Long before the wait means the trouble is the transaction and not the statement.;
+                           RUS=Определяет, когда началась транзакция непосредственного блокирующего. Задолго до ожидания - значит, беда в транзакции, а не в операторе.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Tran Began At" }
+
+    { 23  ;2   ;Field     ;
+                Name=WaitType;
+                ToolTipML=[ENU=Specifies what the victim is asking for. The mode next to it is what the blocker is holding - the two are different things and are named separately on purpose.;
+                           RUS=Определяет, чего просит жертва. Режим рядом - то, что держит блокирующий. Это разные вещи, и названы они порознь нарочно.];
+                ApplicationArea=#All;
+                SourceExpr="Wait Type" }
+
+    { 24  ;2   ;Field     ;
+                Name=HeldMode;
+                ToolTipML=[ENU=Specifies the mode of the lock being held.;
+                           RUS=Определяет режим держимой блокировки.];
+                ApplicationArea=#All;
+                SourceExpr="Held Mode" }
+
+    { 25  ;2   ;Field     ;
+                Name=ResourceUnresolved;
+                ToolTipML=[ENU=Specifies that the resource description could not be parsed. The raw text is kept in the SQL object name next to it.;
+                           RUS=Определяет, что описание ресурса разобрать не удалось. Сырой текст лежит рядом, в имени объекта SQL.];
+                ApplicationArea=#All;
+                SourceExpr="Resource Unresolved" }
+
+    { 26  ;2   ;Field     ;
+                Name=SQLObjectName;
+                ToolTipML=[ENU=Specifies the SQL name of the object the lock sits on.;
+                           RUS=Определяет имя объекта SQL, на котором сидит блокировка.];
+                ApplicationArea=#All;
+                SourceExpr="SQL Object Name" }
+
+    { 27  ;2   ;Field     ;
+                Name=EndedAt;
+                ToolTipML=[ENU=Specifies the last moment the wait was certainly still going. The exact end is not known: the victim leaves the queue between two passes, and pretending to a precise moment would be a plausible lie.;
+                           RUS=Определяет последний миг, когда ожидание точно ещё шло. Точного конца мы не знаем: жертва уходит из очереди между проходами, и назвать миг точнее значило бы соврать правдоподобно.];
+                ApplicationArea=#All;
+                SourceExpr="Ended At" }
+
+    { 28  ;2   ;Field     ;
+                Name=EntryNo;
+                Visible=FALSE;
+                ApplicationArea=#All;
+                SourceExpr="Entry No." }
+
+  }
+  CODE
+  {
+
+    BEGIN
+    {
+      Журнал эпизодов. Список, а не карточка: сравнивают здесь строки между собой, а не
+      разглядывают одну.
+
+      Порядок - по началу, сверху свежее. Отбор "только идущие" вынесен кнопкой, потому
+      что вопрос "что происходит ПРЯМО СЕЙЧАС" задают первым и в спешке.
+
+      Колонки подписаны длинно и честно, и три подписи стоят того, чтобы их прочли:
+      голова цепочки - это не непосредственный блокирующий; исход "не определён" - это
+      ответ, а не пропуск; пустое имя пользователя - не сбой, а отсутствие права, которое
+      никто не выдавал.
+    }
+    END.
+  }
+}

@@ -1,0 +1,268 @@
+OBJECT Page 110230 LockWatch Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Setup;
+               RUS=Настройка LockWatch];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    SourceTable=Table110230;
+    PageType=Card;
+    OnOpenPage=BEGIN
+                 FetchOnce;
+               END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           ScheduledTasks := Task.ScheduledCount;
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 40      ;    ;ActionContainer;
+                      Name=WatchActions;
+                      ActionContainerType=ActionItems }
+      { 41      ;1   ;Action    ;
+                      Name=StartWatch;
+                      CaptionML=[ENU=Start;
+                                 RUS=Завести сторожа];
+                      ToolTipML=[ENU=Arm the background watch. It reschedules itself and never takes more than a tenth of the time.;
+                                 RUS=Завести фоновое наблюдение. Оно перевзводит себя само и не берёт себе больше одной десятой времени.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Start;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 Task.StartWatch;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 42      ;1   ;Action    ;
+                      Name=StopWatch;
+                      CaptionML=[ENU=Stop;
+                                 RUS=Остановить сторожа];
+                      ToolTipML=[ENU=Stop the background watch and cancel its scheduled task.;
+                                 RUS=Остановить фоновое наблюдение и снять его запланированную задачу.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Stop;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 Task.StopWatch;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 43      ;1   ;Action    ;
+                      Name=RunOnce;
+                      CaptionML=[ENU=One pass now;
+                                 RUS=Один проход сейчас];
+                      ToolTipML=[ENU=Read the wait queue once, right now. A failure is shown here and not hidden in the watchdog line.;
+                                 RUS=Снять очередь ожиданий один раз, прямо сейчас. Отказ показывается тут же, а не прячется в строке сторожа.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Refresh;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 Task.RunOnce;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 44      ;1   ;Action    ;
+                      Name=ShowEpisodes;
+                      CaptionML=[ENU=Episodes;
+                                 RUS=Эпизоды];
+                      ToolTipML=[ENU=Open the journal of lock episodes.;
+                                 RUS=Открыть журнал эпизодов блокировки.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Log;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Episodes");
+                               END;
+                                }
+      { 45      ;1   ;Action    ;
+                      Name=ShowContextTables;
+                      CaptionML=[ENU=Context Tables;
+                                 RUS=Таблицы контекста];
+                      ToolTipML=[ENU=Open the list of tables whose document number the journal may name.;
+                                 RUS=Открыть список таблиц, номер документа которых журнал вправе называть.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Table;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Context Tables");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                CaptionML=[ENU=Watch;
+                           RUS=Наблюдение];
+                GroupType=Group }
+
+    { 3   ;2   ;Field     ;
+                Name=Enabled;
+                CaptionML=[ENU=Enabled;
+                           RUS=Включён];
+                ToolTipML=[ENU=Specifies whether the background watch is armed. Set it with Start and Stop rather than by hand: the switch alone neither creates the task nor cancels it.;
+                           RUS=Определяет, заведено ли фоновое наблюдение. Ставится кнопками, а не руками: сам по себе выключатель ни задачу не создаёт, ни задачу не снимает.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr=Enabled }
+
+    { 4   ;2   ;Field     ;
+                Name=ScheduledTasks;
+                CaptionML=[ENU=Scheduled Tasks;
+                           RUS=Запланированных задач];
+                ToolTipML=[ENU=Specifies how many passes are queued in the task scheduler. One is right. Zero with the watch enabled means the chain broke. More than one means two watches would be closing each other episodes.;
+                           RUS=Определяет, сколько проходов стоит в планировщике. Правильно - один. Ноль при включённом стороже означает, что цепочка оборвалась. Больше одного - что два наблюдателя закрывают эпизоды друг другу.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr=ScheduledTasks }
+
+    { 5   ;2   ;Field     ;
+                Name=SQLServer;
+                CaptionML=[ENU=SQL Server;
+                           RUS=Сервер SQL];
+                ToolTipML=[ENU=Specifies the SQL server holding this database. The platform does not tell it to the code: the server it does report is the NAV one. The database name itself is never asked for - it is taken from the platform, because a mistake there would mean watching the wrong database.;
+                           RUS=Определяет сервер SQL, на котором лежит эта база. Платформа его коду не отдаёт: сервер, который она называет, - НАВовский. Имя самой базы не спрашивается вовсе, оно берётся у платформы: ошибка в нём означала бы наблюдение не за той базой.];
+                ApplicationArea=#All;
+                SourceExpr="SQL Server" }
+
+    { 6   ;1   ;Group     ;
+                CaptionML=[ENU=Limits;
+                           RUS=Пределы];
+                GroupType=Group }
+
+    { 7   ;2   ;Field     ;
+                Name=PollPeriod;
+                CaptionML=[ENU=Poll Period (ms);
+                           RUS=Период опроса, мс];
+                ToolTipML=[ENU=Specifies how often the queue is read. It must be shorter than the NAV lock timeout of 10 000 ms: an episode fits entirely inside that window, and a longer period would lose whole episodes without saying so.;
+                           RUS=Определяет, как часто снимается очередь. Должен быть короче предела ожидания NAV в 10 000 мс: эпизод целиком укладывается в это окно, и период длиннее терял бы эпизоды целиком, ничего об этом не сообщая.];
+                ApplicationArea=#All;
+                SourceExpr="Poll Period (ms)" }
+
+    { 8   ;2   ;Field     ;
+                Name=MaxRows;
+                CaptionML=[ENU=Max Rows per Pass;
+                           RUS=Потолок строк за проход];
+                ToolTipML=[ENU=Specifies how many waiters one pass takes. When the queue is longer, the longest waits are kept and the pass is marked truncated.;
+                           RUS=Определяет, сколько ждущих берёт один проход. Если очередь длиннее, остаются самые долгие ожидания, а проход метится усечённым.];
+                ApplicationArea=#All;
+                SourceExpr="Max Rows per Pass" }
+
+    { 9   ;2   ;Field     ;
+                Name=Retention;
+                CaptionML=[ENU=Retention (Days);
+                           RUS=Срок хранения, дней];
+                ToolTipML=[ENU=Specifies how long an episode stays in the journal. The term is declared and enforced: the journal names other people accounts, and keeping it forever is a separate conversation with security.;
+                           RUS=Определяет, сколько эпизод живёт в журнале. Срок объявленный и соблюдаемый: журнал называет чужие учётные записи, и бессрочное хранение - отдельный разговор со службой безопасности.];
+                ApplicationArea=#All;
+                SourceExpr="Retention (Days)" }
+
+    { 10  ;2   ;Field     ;
+                Name=AlertThreshold;
+                CaptionML=[ENU=Alert Threshold (ms);
+                           RUS=Порог тревоги, мс];
+                ToolTipML=[ENU=Specifies the wait length worth shouting about.;
+                           RUS=Определяет длительность ожидания, о которой стоит кричать.];
+                ApplicationArea=#All;
+                SourceExpr="Alert Threshold (ms)" }
+
+    { 11  ;2   ;Field     ;
+                Name=CollectStatementValues;
+                CaptionML=[ENU=Collect Statement Values;
+                           RUS=Собирать значения в операторах];
+                ToolTipML=[ENU=Specifies whether the text of the blocking statement is kept with its parameter values. Off by default and deliberately: for a security review that is an export of data, not of structure.;
+                           RUS=Определяет, хранить ли текст оператора виновника вместе со значениями параметров. Выключено по умолчанию и нарочно: для службы безопасности это выгрузка данных, а не структуры.];
+                ApplicationArea=#All;
+                SourceExpr="Collect Statement Values" }
+
+    { 12  ;1   ;Group     ;
+                CaptionML=[ENU=Last Pass;
+                           RUS=Последний проход];
+                GroupType=Group }
+
+    { 13  ;2   ;Field     ;
+                Name=LastPassAt;
+                CaptionML=[ENU=Last Pass At;
+                           RUS=Последний проход];
+                ToolTipML=[ENU=Specifies when the last pass read the queue. The moment comes from the SQL clock, not the NAV one.;
+                           RUS=Определяет, когда последний проход снял очередь. Момент взят часами SQL, а не NAV.];
+                ApplicationArea=#All;
+                SourceExpr="Last Pass At" }
+
+    { 14  ;2   ;Field     ;
+                Name=LastPassMs;
+                CaptionML=[ENU=Last Pass (ms);
+                           RUS=Последний проход, мс];
+                ToolTipML=[ENU=Specifies what the last pass cost. The next pass is put off to ten times this, so a pass that got expensive thins the watch out instead of piling on.;
+                           RUS=Определяет, чего стоил последний проход. Следующий откладывается на десять таких, поэтому подорожавший проход разрежает наблюдение, а не наваливается.];
+                ApplicationArea=#All;
+                SourceExpr="Last Pass (ms)" }
+
+    { 15  ;2   ;Field     ;
+                Name=LastPassRows;
+                CaptionML=[ENU=Last Pass Rows;
+                           RUS=Строк в последнем проходе];
+                ToolTipML=[ENU=Specifies how many waiters the last pass saw.;
+                           RUS=Определяет, сколько ждущих увидел последний проход.];
+                ApplicationArea=#All;
+                SourceExpr="Last Pass Rows" }
+
+    { 16  ;2   ;Field     ;
+                Name=LastPassTruncated;
+                CaptionML=[ENU=Last Pass Truncated;
+                           RUS=Последний проход усечён];
+                ToolTipML=[ENU=Specifies whether the queue was longer than the ceiling. Set, the journal holds the longest waits of that pass and not the whole queue.;
+                           RUS=Определяет, была ли очередь длиннее потолка. Если стоит, в журнале лежат самые долгие ожидания того прохода, а не вся очередь.];
+                ApplicationArea=#All;
+                SourceExpr="Last Pass Truncated" }
+
+    { 17  ;2   ;Field     ;
+                Name=WatchdogMessage;
+                CaptionML=[ENU=Watchdog Message;
+                           RUS=Сообщение сторожа];
+                ToolTipML=[ENU=Specifies what the last pass has to say. It is written even when the pass went through: an empty line would read as all is well, while it means nothing is known.;
+                           RUS=Определяет, что говорит последний проход. Пишется и на удачном проходе: пустая строка читалась бы как "всё хорошо", а означает "ничего не известно".];
+                ApplicationArea=#All;
+                MultiLine=Yes;
+                SourceExpr="Watchdog Message" }
+
+  }
+  CODE
+  {
+    VAR
+      Task@1000000000 : Codeunit 110236;
+      ScheduledTasks@1000000001 : Integer;
+
+    BEGIN
+    {
+      Настройка и пульт. Кнопок пять, и три из них - про то, чтобы человек мог убедиться
+      своими глазами, а не поверить на слово: один проход сейчас, журнал, таблицы контекста.
+
+      Число запланированных задач вынесено на экран нарочно. Ноль при включённом стороже
+      означает, что цепочка оборвалась, и это единственный видимый признак: сама по себе
+      строка настройки при этом выглядит совершенно здоровой.
+    }
+    END.
+  }
+}

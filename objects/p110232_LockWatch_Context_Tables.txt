@@ -1,0 +1,105 @@
+OBJECT Page 110232 LockWatch Context Tables
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Context Tables;
+               RUS=Таблицы контекста LockWatch];
+    SourceTable=Table110232;
+    PageType=List;
+    ActionList=ACTIONS
+    {
+      { 40      ;    ;ActionContainer;
+                      Name=ContextActions;
+                      ActionContainerType=ActionItems }
+      { 41      ;1   ;Action    ;
+                      Name=OpenSetup;
+                      CaptionML=[ENU=Setup;
+                                 RUS=Настройка];
+                      ToolTipML=[ENU=Open the LockWatch setup.;
+                                 RUS=Открыть настройку LockWatch.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Setup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Setup");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                Name=TableNo;
+                ToolTipML=[ENU=Specifies the table whose document number the journal may name. Object numbers live here, in the data, and not in the code - the code goes to a public repository, the data does not.;
+                           RUS=Определяет таблицу, номер документа которой журнал вправе называть. Номера объектов живут здесь, в данных, а не в коде: код уезжает в публичный репозиторий, данные - нет.];
+                ApplicationArea=#All;
+                SourceExpr="Table No." }
+
+    { 4   ;2   ;Field     ;
+                Name=TableName;
+                ToolTipML=[ENU=Specifies the name of that table. It is filled in by the tool: a setting holding a bare number reads as anything at all and cannot be checked by eye.;
+                           RUS=Определяет имя этой таблицы. Подставляется само: строка настройки, в которой стоит один номер, читается как что угодно и глазами не проверяется.];
+                ApplicationArea=#All;
+                SourceExpr="Table Name" }
+
+    { 5   ;2   ;Field     ;
+                Name=DocumentFieldNo;
+                ToolTipML=[ENU=Specifies the field of that table carrying the document number.;
+                           RUS=Определяет поле этой таблицы, несущее номер документа.];
+                ApplicationArea=#All;
+                SourceExpr="Document Field No." }
+
+    { 6   ;2   ;Field     ;
+                Name=DocumentCaption;
+                ToolTipML=[ENU=Specifies what to call that document on screen.;
+                           RUS=Определяет, как называть этот документ на экране.];
+                ApplicationArea=#All;
+                SourceExpr="Document Caption" }
+
+    { 7   ;2   ;Field     ;
+                Name=Enabled;
+                ToolTipML=[ENU=Specifies whether this table takes part in naming documents.;
+                           RUS=Определяет, участвует ли эта таблица в назывании документов.];
+                ApplicationArea=#All;
+                SourceExpr=Enabled }
+
+    { 8   ;2   ;Field     ;
+                Name=AdapterPresent;
+                ToolTipML=[ENU=Specifies whether the subscriber adapter for this table exists. Without it the row is good for parsing but collects nothing, and the document column stays empty - which reads as no locks by document, and that is the worst possible answer.;
+                           RUS=Определяет, заведён ли переходник-подписчик для этой таблицы. Без него строка годится для разбора, но съёма не даёт, и колонка документа остаётся пустой - а это читается как "блокировок по документам не было", худший из возможных ответов.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr="Adapter Present" }
+
+  }
+  CODE
+  {
+
+    BEGIN
+    {
+      Список "таблица плюс поле, несущее номер документа". Единственное место, где номера
+      доработанных объектов заказчика вообще появляются, - и появляются они в ДАННЫХ, а не
+      в коде: код уезжает в публичный репозиторий, данные остаются на контуре.
+
+      Колонка "переходник заведён" заполняется не человеком, а сторожем, и смотреть на неё
+      надо в первую очередь: номер таблицы в подписке на событие - константа времени
+      компиляции, поэтому на каждую таблицу нужен свой маленький объект-переходник. Строка
+      без него выглядит рабочей и молчит.
+    }
+    END.
+  }
+}

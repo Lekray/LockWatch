@@ -1,0 +1,211 @@
+OBJECT Codeunit 110236 LockWatch Task
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            RunAndReschedule;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Setup@1000000000 : Record 110230;
+      NoSchedulerErr@1000000001 : TextConst 'ENU=The service instance runs with the task scheduler switched off (EnableTaskScheduler in the service configuration). Until it is on, the watch cannot arm itself.;RUS=Экземпляр службы работает с выключенным планировщиком задач (EnableTaskScheduler в конфигурации службы). Пока он выключен, сторож завестись не может.';
+      StartedTxt@1000000002 : TextConst 'ENU=The watch is armed, the first pass is due shortly.;RUS=Сторож заведён, первый проход вот-вот.';
+      StoppedTxt@1000000003 : TextConst 'ENU=The watch is stopped by hand.;RUS=Сторож остановлен вручную.';
+      DisabledTxt@1000000004 : TextConst 'ENU=The watch is switched off in the setup, the chain of passes ends here.;RUS=Сторож выключен в настройке, цепочка проходов на этом кончается.';
+      PassFailedTxt@1000000005 : TextConst 'ENU=The pass fell over and was picked up by the task: %1;RUS=Проход упал и был подхвачен задачей: %1';
+
+    [External]
+    PROCEDURE StartWatch@1();
+    BEGIN
+      // Завод сторожа идемпотентен: сначала снимаются все свои задачи, потом ставится одна.
+      // Две цепочки проходов, идущие вперемежку, - это не удвоенное наблюдение, а два
+      // наблюдателя, закрывающих эпизоды друг другу, и разобрать потом такой журнал нельзя.
+      Setup.FetchOnce;
+      IF NOT TASKSCHEDULER.CANCREATETASK THEN
+        ERROR(NoSchedulerErr);
+      CancelOurTasks;
+      Setup.Enabled := TRUE;
+      Setup."Watchdog Message" := StartedTxt;
+      Setup.MODIFY;
+      COMMIT;
+      Schedule(FirstDelayMs);
+    END;
+
+    [External]
+    PROCEDURE StopWatch@2();
+    BEGIN
+      Setup.FetchOnce;
+      Setup.Enabled := FALSE;
+      Setup."Watchdog Message" := StoppedTxt;
+      Setup.MODIFY;
+      COMMIT;
+      // Снимаем задачу И гасим выключатель. Одного выключателя мало: уже поставленная
+      // задача всё равно проснётся, и человек увидит проход после того, как нажал "стоп".
+      CancelOurTasks;
+    END;
+
+    [External]
+    PROCEDURE RunOnce@3();
+    VAR
+      Pass@1000000000 : Codeunit 110235;
+    BEGIN
+      // Вручную - напрямую и БЕЗ перехвата: человек, нажавший кнопку, должен увидеть
+      // отказ окном, а не вычитать его потом из сообщения сторожа.
+      Pass.RunPass;
+    END;
+
+    [External]
+    PROCEDURE ScheduledCount@4() : Integer;
+    VAR
+      ScheduledTask@1000000000 : Record 2000000175;
+    BEGIN
+      ScheduledTask.SETRANGE("Run Codeunit",CODEUNIT::"LockWatch Task");
+      ScheduledTask.SETRANGE(Company,COMPANYNAME);
+      EXIT(ScheduledTask.COUNT);
+    END;
+
+    LOCAL PROCEDURE RunAndReschedule@5();
+    BEGIN
+      Setup.FetchOnce;
+      IF NOT Setup.Enabled THEN BEGIN
+        // Выключатель сняли между проходами. Цепочка обрывается сама и говорит об этом:
+        // сторож, замолчавший без объяснения, неотличим от сторожа, который умер.
+        Setup."Watchdog Message" := DisabledTxt;
+        Setup.MODIFY;
+        COMMIT;
+        EXIT;
+      END;
+
+      // Проход зовётся через CODEUNIT.RUN нарочно. Своя ошибка внутри прохода откатит
+      // его транзакцию, но НЕ уронит задачу - иначе цепочка оборвалась бы на первой же
+      // неожиданности, и наблюдение кончилось бы молча, посреди ночи.
+      IF NOT CODEUNIT.RUN(CODEUNIT::"LockWatch Pass") THEN
+        NoteFailure(GETLASTERRORTEXT);
+
+      Setup.FetchOnce;
+      Reschedule;
+    END;
+
+    LOCAL PROCEDURE Reschedule@6();
+    VAR
+      DelayMs@1000000000 : Integer;
+      Floor@1000000001 : Integer;
+    BEGIN
+      // Обратная связь работает на РАЗРЕЖЕНИЕ, а не на учащение. Правило простое и
+      // проверяемое: наблюдатель не берёт себе больше одной десятой времени. Если проход
+      // стоил 450 мс, следующий будет не раньше чем через 4500, каким бы ни был период.
+      // Учащение при занятости было бы разгоном самого себя: в шторм проход дорожает, а
+      // от учащения дорожал бы ещё, и наблюдатель добил бы сервер, который пришёл лечить.
+      // Выключатель перечитывается ЗДЕСЬ, а не только в начале задачи. Между этими двумя
+      // мигами проходит целый проход, и человек успевает нажать "стоп": остановка сняла бы
+      // строку задачи, а перевзвод тут же поставил бы новую - сторож воскресал бы сам,
+      // ровно один раз, и объяснить это было бы нечем. Прогоном это НЕ ловится: окно
+      // длиной в проход открыто пять миллисекунд из трёх секунд, и попасть в него нарочно
+      // нельзя. Поэтому проверка здесь одна - чтение кода, и она записана.
+      IF NOT Setup.Enabled THEN BEGIN
+        Setup."Watchdog Message" := DisabledTxt;
+        Setup.MODIFY;
+        COMMIT;
+        EXIT;
+      END;
+      DelayMs := Setup."Poll Period (ms)";
+      IF DelayMs <= 0 THEN
+        DelayMs := FirstDelayMs;
+      Floor := Setup."Last Pass (ms)" * MaxDutyFactor;
+      IF Floor > DelayMs THEN
+        DelayMs := Floor;
+      Schedule(DelayMs);
+    END;
+
+    LOCAL PROCEDURE Schedule@7(DelayMs@1000000000 : Integer);
+    VAR
+      Delay@1000000001 : Duration;
+    BEGIN
+      IF NOT TASKSCHEDULER.CANCREATETASK THEN
+        EXIT;
+      Delay := DelayMs;
+      TASKSCHEDULER.CREATETASK(CODEUNIT::"LockWatch Task",0,TRUE,COMPANYNAME,CURRENTDATETIME + Delay);
+    END;
+
+    LOCAL PROCEDURE CancelOurTasks@8() : Integer;
+    VAR
+      ScheduledTask@1000000000 : Record 2000000175;
+      Cancelled@1000000001 : Integer;
+    BEGIN
+      // Таблица задач общая на базу (DataPerCompany No), поэтому отбор идёт и по компании:
+      // снять чужую задачу той же компании нельзя, а снять свою в другой компании - тем более.
+      ScheduledTask.SETRANGE("Run Codeunit",CODEUNIT::"LockWatch Task");
+      ScheduledTask.SETRANGE(Company,COMPANYNAME);
+      IF ScheduledTask.FINDSET THEN
+        REPEAT
+          IF TASKSCHEDULER.TASKEXISTS(ScheduledTask.ID) THEN BEGIN
+            TASKSCHEDULER.CANCELTASK(ScheduledTask.ID);
+            Cancelled := Cancelled + 1;
+          END;
+        UNTIL ScheduledTask.NEXT = 0;
+      EXIT(Cancelled);
+    END;
+
+    LOCAL PROCEDURE NoteFailure@9(ErrorText@1000000000 : Text);
+    BEGIN
+      Setup.FetchOnce;
+      Setup."Watchdog Message" :=
+        COPYSTR(STRSUBSTNO(PassFailedTxt,ErrorText),1,MAXSTRLEN(Setup."Watchdog Message"));
+      Setup.MODIFY;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE FirstDelayMs@10() : Integer;
+    BEGIN
+      // Секунда после нажатия. Достаточно, чтобы транзакция завода успела закрыться, и
+      // достаточно мало, чтобы человек увидел первый проход, не уходя со страницы.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE MaxDutyFactor@11() : Integer;
+    BEGIN
+      // Доля времени, которую наблюдателю позволено занимать: одна десятая. Число это -
+      // не про удобство, а про обещание заказчику. Всё, что дороже, само себя разредит.
+      EXIT(10);
+    END;
+
+    BEGIN
+    {
+      Фоновая задача. Своя самоперевзводящаяся цепочка TASKSCHEDULER, а не запись в очередь
+      заданий: очередь на целевом контуре доработана заказчиком, и вешаться в неё значит
+      зависеть от чужих правок и делить с ними ошибки.
+
+      Цепочка держится на трёх решениях, и каждое - про то, чтобы наблюдение не кончилось
+      незаметно:
+
+      1. Проход зовётся через CODEUNIT.RUN. Ошибка внутри откатит его транзакцию, но не
+         уронит задачу: без этого цепочка оборвалась бы на первой неожиданности, ночью и
+         молча, а утром журнал выглядел бы как "блокировок не было".
+      2. Выключенный сторож обрывает цепочку САМ и пишет об этом. Замолчавший без
+         объяснения неотличим от умершего. Выключатель перечитывается ДВАЖДЫ - и перед
+         проходом, и перед перевзводом: между ними проходит целый проход, и нажатое в это
+         время "стоп" иначе отменялось бы перевзводом.
+      3. Завод идемпотентен: сначала снимаются свои задачи, потом ставится одна. Две
+         цепочки вперемежку - это два наблюдателя, закрывающих эпизоды друг другу.
+
+      Обратная связь - только на разрежение. Наблюдатель не берёт себе больше одной
+      десятой времени, и в шторм, когда проход дорожает, он сам отходит в сторону.
+      Учащение при занятости было бы разгоном самого себя.
+
+      Планировщик может быть выключен в конфигурации службы, и тогда завод отказывает
+      ВНЯТНО, называя параметр. Молчаливо не завестись - худший из возможных ответов:
+      кнопка нажата, сообщение бодрое, наблюдения нет.
+    }
+    END.
+  }
+}

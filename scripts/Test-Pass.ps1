@@ -56,7 +56,9 @@ $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
 function Invoke-Sql([string]$query) {
-    $answer = & sqlcmd -S $Server -d $Database -E -l 30 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
+    # -w 500 обязателен: по умолчанию sqlcmd рвёт строку на 80 знаках, и длинное значение
+    # приходит ДВУМЯ строками. Проверка, читающая первую, получает обрезок и судит по нему.
+    $answer = & sqlcmd -S $Server -d $Database -E -l 30 -w 500 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
     if ($LASTEXITCODE -ne 0) { Fail "SQL не выполнился: $($answer -join ' ')" }
     return ,@($answer | Where-Object { $_ -and ($_ -notmatch '^\(') })
 }

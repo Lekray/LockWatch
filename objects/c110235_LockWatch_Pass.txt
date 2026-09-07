@@ -9,6 +9,10 @@ OBJECT Codeunit 110235 LockWatch Pass
   }
   PROPERTIES
   {
+    OnRun=BEGIN
+            RunPass;
+          END;
+
   }
   CODE
   {
