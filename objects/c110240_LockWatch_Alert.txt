@@ -1,0 +1,196 @@
+OBJECT Codeunit 110240 LockWatch Alert
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+      Alert@1000000001 : Record 110236;
+      NextEntryNo@1000000002 : Integer;
+      RaisedCount@1000000003 : Integer;
+      LatchedCount@1000000004 : Integer;
+      NoSourceTxt@1000000005 : TextConst 'ENU=The event source %1 is not registered on this machine, so the alert stayed in the journal. Registering a source needs an administrator - New-EventLog -LogName Application -Source %1.;RUS=Источник событий %1 на этой машине не заведён, и тревога осталась в журнале. Заводит источник администратор - New-EventLog -LogName Application -Source %1.';
+      WriteFailedTxt@1000000006 : TextConst 'ENU=The Windows event log refused the entry, the alert stayed in the journal: %1;RUS=Журнал событий Windows запись не принял, тревога осталась в журнале: %1';
+      WrittenTxt@1000000007 : TextConst 'ENU=Written to the Windows event log, source %1.;RUS=Записана в журнал событий Windows, источник %1.';
+      OffTxt@1000000008 : TextConst 'ENU=The channel outwards is switched off in the setup, the alert is in the journal only.;RUS=Канал наружу выключен в настройке, тревога только в журнале.';
+      EntryTxt@1000000009 : TextConst 'ENU=LockWatch: a lock has been waiting %1 ms, over the threshold of %2 ms. Head of the chain: session %3. Table %4, key %5. Document %6, user %7. %8;RUS=LockWatch: блокировка держит уже %1 мс при пороге %2 мс. Голова цепочки - сеанс %3. Таблица %4, ключ %5. Документ %6, пользователь %7. %8';
+
+    [External]
+    PROCEDURE BeginPass@1();
+    BEGIN
+      RaisedCount := 0;
+      LatchedCount := 0;
+    END;
+
+    [External]
+    PROCEDURE Raise@2(VAR Episode@1000000000 : Record 110231;ThresholdMs@1000000001 : Integer;ToEventLog@1000000002 : Boolean;SourceName@1000000003 : Text) : Boolean;
+    VAR
+      Now@1000000004 : DateTime;
+      Latch@1000000005 : Duration;
+    BEGIN
+      // Защёлка ищется по ГОЛОВЕ цепочки, а не по эпизоду: одна забытая транзакция в шторм
+      // держит сотни жертв, и тревога на каждую - это мусор, который перестают читать.
+      // Окно защёлки живёт в разборе функцией с доводом рядом.
+      IF ThresholdMs <= 0 THEN
+        EXIT(FALSE);
+      IF Episode."Max Wait (ms)" < ThresholdMs THEN
+        EXIT(FALSE);
+      Now := CURRENTDATETIME;
+      Latch := Parse.AlertLatchMs;
+
+      Alert.RESET;
+      Alert.SETCURRENTKEY("Head SPID","Last Seen At");
+      Alert.SETRANGE("Head SPID",Episode."Head SPID");
+      Alert.SETFILTER("Last Seen At",'>=%1',Now - Latch);
+      IF Alert.FINDLAST THEN BEGIN
+        // Та же голова в том же окне - тревога уже поднята. Строка не заводится заново, а
+        // растёт: число эпизодов за защёлкой и есть мера того, сколько народу задето.
+        Alert."Last Seen At" := Now;
+        Alert.Episodes := Alert.Episodes + 1;
+        IF Episode."Max Wait (ms)" > Alert."Max Wait (ms)" THEN
+          Alert."Max Wait (ms)" := Episode."Max Wait (ms)";
+        Alert.MODIFY;
+        LatchedCount := LatchedCount + 1;
+        EXIT(FALSE);
+      END;
+
+      Alert.RESET;
+      Alert.INIT;
+      Alert."Entry No." := NextNo;
+      Alert."Raised At" := Now;
+      Alert."Last Seen At" := Now;
+      Alert."Head SPID" := Episode."Head SPID";
+      Alert."NAV Table Name" := Episode."NAV Table Name";
+      Alert."NAV Key No." := Episode."NAV Key No.";
+      Alert.Episodes := 1;
+      Alert."Max Wait (ms)" := Episode."Max Wait (ms)";
+      Alert."Threshold (ms)" := ThresholdMs;
+      Alert."Document No." := Episode."Document No.";
+      Alert."User Name" := Episode."User Name";
+      Alert."Episode Entry No." := Episode."Entry No.";
+      Alert.Advice := Episode.Advice;
+      Alert.Channel := Alert.Channel::JournalOnly;
+      IF ToEventLog THEN
+        Announce(Alert,SourceName)
+      ELSE
+        Alert."Channel Note" := COPYSTR(OffTxt,1,MAXSTRLEN(Alert."Channel Note"));
+      Alert.INSERT;
+      RaisedCount := RaisedCount + 1;
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE PassCounts@3(VAR Raised@1000000000 : Integer;VAR Latched@1000000001 : Integer);
+    BEGIN
+      Raised := RaisedCount;
+      Latched := LatchedCount;
+    END;
+
+    [External]
+    PROCEDURE TrimOldEntries@4(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    VAR
+      Threshold@1000000002 : DateTime;
+      Age@1000000003 : Duration;
+      Removed@1000000004 : Integer;
+    BEGIN
+      // Срок тот же, что у журнала эпизодов, и чистка такая же порционная: тревоги
+      // показывают чужие учётные записи, и бессрочное хранение - отдельный разговор.
+      IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
+        EXIT(0);
+      Age := RetentionDays * Parse.MsPerDay;
+      Threshold := CURRENTDATETIME - Age;
+      Alert.RESET;
+      Alert.SETCURRENTKEY("Raised At");
+      Alert.SETFILTER("Raised At",'<%1',Threshold);
+      IF Alert.FINDSET(TRUE) THEN
+        REPEAT
+          Alert.DELETE;
+          Removed := Removed + 1;
+        UNTIL (Removed >= MaxRows) OR (Alert.NEXT = 0);
+      EXIT(Removed);
+    END;
+
+    LOCAL PROCEDURE Announce@5(VAR Row@1000000000 : Record 110236;SourceName@1000000001 : Text);
+    VAR
+      Message@1000000002 : Text;
+    BEGIN
+      // Канал наружу может не сработать, и молчащий канал, о котором никто не знает, хуже
+      // отсутствующего. Поэтому ответ канала пишется В СТРОКУ, а не в никуда, и строка
+      // остаётся в журнале тревог в любом случае.
+      Message := STRSUBSTNO(EntryTxt,Row."Max Wait (ms)",Row."Threshold (ms)",Row."Head SPID",
+                            Row."NAV Table Name",Row."NAV Key No.",Row."Document No.",
+                            Row."User Name",Row.Advice);
+      IF NOT TryWriteEventLog(SourceName,Message) THEN BEGIN
+        Row."Channel Note" := COPYSTR(STRSUBSTNO(WriteFailedTxt,GETLASTERRORTEXT),1,MAXSTRLEN(Row."Channel Note"));
+        EXIT;
+      END;
+      Row.Channel := Row.Channel::EventLog;
+      Row."Channel Note" := COPYSTR(STRSUBSTNO(WrittenTxt,SourceName),1,MAXSTRLEN(Row."Channel Note"));
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryWriteEventLog@6(SourceName@1000000000 : Text;Message@1000000001 : Text);
+    VAR
+      EventLog@1000000002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.EventLog";
+      EntryType@1000000003 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Diagnostics.EventLogEntryType";
+    BEGIN
+      // Источник событий заводит АДМИНИСТРАТОР, и заводится он один раз на машину. Писать
+      // в чужой источник - скажем, в источник самой службы NAV - нельзя: мониторинг
+      // припишет нашу запись платформе, и разбираться будут не с тем.
+      //
+      // Создавать источник отсюда мы не пробуем вовсе. Создание требует прав, которых у
+      // службы нет и быть не должно, а неудачная попытка выглядит в журнале приложений
+      // отказом безопасности - шумом, за который отвечать нам.
+      IF NOT EventLog.SourceExists(SourceName) THEN
+        ERROR(NoSourceTxt,SourceName);
+      EntryType := EntryType.Warning;
+      EventLog.WriteEntry(SourceName,Message,EntryType);
+    END;
+
+    LOCAL PROCEDURE NextNo@7() : Integer;
+    VAR
+      Last@1000000000 : Record 110236;
+    BEGIN
+      IF NextEntryNo = 0 THEN BEGIN
+        Last.RESET;
+        IF Last.FINDLAST THEN
+          NextEntryNo := Last."Entry No.";
+      END;
+      NextEntryNo := NextEntryNo + 1;
+      EXIT(NextEntryNo);
+    END;
+
+    BEGIN
+    {
+      Тревога: порог из настройки наконец не только красит строку, но и зовёт человека.
+
+      Три решения, и каждое против одного и того же - против тревоги, которую перестают
+      читать:
+
+      1. Защёлка по ГОЛОВЕ цепочки, а не по эпизоду. Одна забытая транзакция в шторм
+         держит сотни жертв; сотня строк тревоги - это мусор. Пока голова та же и окно не
+         вышло, строка одна, а число эпизодов за ней растёт полем.
+      2. Тревога только на ИДУЩИЙ эпизод. Смысл её - "происходит сейчас, вмешайся";
+         звать человека к тому, что кончилось само, значит приучить его не читать.
+      3. Ответ канала пишется в строку словами. Канал наружу может не сработать - нет
+         источника событий, не выдали прав, - и тогда тревога всё равно остаётся здесь, а
+         причина молчания видна. Молчащий канал, о котором никто не знает, хуже
+         отсутствующего.
+
+      Наружу тревога уходит в журнал событий Windows, и это выбор не от бедности. Своего
+      канала в журнал событий у C/AL 2018 нет вовсе; почта требует настроенного SMTP,
+      которого может не быть; а журнал событий Windows - ровно то, что мониторинг на
+      сервере и без нас уже читает.
+    }
+    END.
+  }
+}

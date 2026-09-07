@@ -1,0 +1,216 @@
+OBJECT Page 110235 LockWatch Alerts
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Alerts;
+               RUS=Тревоги LockWatch];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    Editable=No;
+    SourceTable=Table110236;
+    SourceTableView=SORTING(Raised At)
+                    ORDER(Descending);
+    PageType=List;
+    ActionList=ACTIONS
+    {
+      { 20      ;    ;ActionContainer;
+                      Name=AlertActions;
+                      ActionContainerType=ActionItems }
+      { 21      ;1   ;Action    ;
+                      Name=ShowEpisode;
+                      CaptionML=[ENU=Episode;
+                                 RUS=Эпизод];
+                      ToolTipML=[ENU=Open the episode that raised this alert. The others behind the same latch are found by the head of the chain.;
+                                 RUS=Открыть эпизод, поднявший эту тревогу. Остальные за той же защёлкой ищутся по голове цепочки.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Log;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowEpisode;
+                               END;
+                                }
+      { 22      ;1   ;Action    ;
+                      Name=ShowHead;
+                      CaptionML=[ENU=All Behind This Head;
+                                 RUS=Все за этой головой];
+                      ToolTipML=[ENU=Open every episode this head of the chain held, so that the number of episodes behind the latch can be seen as rows.;
+                                 RUS=Открыть все эпизоды, которые держала эта голова цепочки, - чтобы число эпизодов за защёлкой стало видно строками.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Track;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowHead;
+                               END;
+                                }
+      { 23      ;1   ;Action    ;
+                      Name=OpenSetup;
+                      CaptionML=[ENU=Setup;
+                                 RUS=Настройка];
+                      ToolTipML=[ENU=Open the setup, where the threshold and the channel outwards live.;
+                                 RUS=Открыть настройку, где живут порог и канал наружу.];
+                      ApplicationArea=#All;
+                      Image=Setup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Setup");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                Name=RaisedAt;
+                ToolTipML=[ENU=Specifies when the alert was raised. It is the first moment the wait crossed the threshold, not the moment the wait began.;
+                           RUS=Определяет, когда тревога поднята. Это первый миг, когда ожидание перевалило порог, а не миг начала ожидания.];
+                ApplicationArea=#All;
+                SourceExpr="Raised At" }
+
+    { 4   ;2   ;Field     ;
+                Name=LastSeenAt;
+                ToolTipML=[ENU=Specifies when this alert was last confirmed. While it keeps moving, the trouble is still going on.;
+                           RUS=Определяет, когда тревога подтверждалась в последний раз. Пока время движется, беда ещё идёт.];
+                ApplicationArea=#All;
+                SourceExpr="Last Seen At" }
+
+    { 5   ;2   ;Field     ;
+                Name=MaxWait;
+                ToolTipML=[ENU=Specifies the longest wait behind this alert, in milliseconds.;
+                           RUS=Определяет самое долгое ожидание за этой тревогой, в миллисекундах.];
+                ApplicationArea=#All;
+                SourceExpr="Max Wait (ms)" }
+
+    { 6   ;2   ;Field     ;
+                Name=Episodes;
+                ToolTipML=[ENU=Specifies how many episodes fell behind this one alert. The latch holds them together on purpose: one forgotten transaction in a storm holds hundreds of victims, and a hundred alerts is not an alert but noise.;
+                           RUS=Определяет, сколько эпизодов легло за одной этой тревогой. Защёлка держит их вместе нарочно: одна забытая транзакция в шторм держит сотни жертв, а сотня тревог - это не тревога, а шум.];
+                ApplicationArea=#All;
+                SourceExpr=Episodes }
+
+    { 7   ;2   ;Field     ;
+                Name=HeadSPID;
+                ToolTipML=[ENU=Specifies the head of the chain - the session that waits for nobody and holds everyone else.;
+                           RUS=Определяет голову цепочки - сеанс, который сам ни на кого не ждёт и держит всех остальных.];
+                ApplicationArea=#All;
+                SourceExpr="Head SPID" }
+
+    { 8   ;2   ;Field     ;
+                Name=NAVTableName;
+                ToolTipML=[ENU=Specifies the table the first episode behind this alert sat on.;
+                           RUS=Определяет таблицу, на которой сидел первый эпизод этой тревоги.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Table Name" }
+
+    { 9   ;2   ;Field     ;
+                Name=NAVKeyNo;
+                ToolTipML=[ENU=Specifies the key of that table.;
+                           RUS=Определяет ключ этой таблицы.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Key No." }
+
+    { 10  ;2   ;Field     ;
+                Name=DocumentNo;
+                ToolTipML=[ENU=Specifies the document the fight was over, if either road to it answered.;
+                           RUS=Определяет документ, за который шёл спор, - если на него ответила хоть одна из дорог.];
+                ApplicationArea=#All;
+                SourceExpr="Document No." }
+
+    { 11  ;2   ;Field     ;
+                Name=UserName;
+                ToolTipML=[ENU=Specifies the user the mark named. An empty name is not a fault: without the mark and without the platform road there is nobody to ask.;
+                           RUS=Определяет учётную запись, которую назвала отметка. Пустое имя - не сбой: без отметки и без дороги от платформы спросить его не у кого.];
+                ApplicationArea=#All;
+                SourceExpr="User Name" }
+
+    { 12  ;2   ;Field     ;
+                Name=Advice;
+                ToolTipML=[ENU=Specifies what to do about it - the advice of the episode that raised the alert.;
+                           RUS=Определяет, что с этим делать, - совет того эпизода, который поднял тревогу.];
+                ApplicationArea=#All;
+                SourceExpr=Advice }
+
+    { 13  ;2   ;Field     ;
+                Name=Threshold;
+                ToolTipML=[ENU=Specifies the threshold the alert was raised against. It is kept in the row because the setting changes, and an alert judged by the old threshold must stay readable.;
+                           RUS=Определяет порог, по которому тревога поднята. Хранится в строке потому, что настройку меняют, а тревога, поднятая по прежнему порогу, должна остаться понятной.];
+                ApplicationArea=#All;
+                SourceExpr="Threshold (ms)" }
+
+    { 14  ;2   ;Field     ;
+                Name=Channel;
+                ToolTipML=[ENU=Specifies where the alert went besides this journal.;
+                           RUS=Определяет, куда тревога ушла кроме этого журнала.];
+                ApplicationArea=#All;
+                SourceExpr=Channel }
+
+    { 15  ;2   ;Field     ;
+                Name=ChannelNote;
+                ToolTipML=[ENU=Specifies what the channel outwards had to say. A channel that stays silent without anyone knowing is worse than no channel at all, so the reason is written here in words.;
+                           RUS=Определяет, что сказал канал наружу. Молчащий канал, о котором никто не знает, хуже отсутствующего, поэтому причина записана здесь словами.];
+                ApplicationArea=#All;
+                SourceExpr="Channel Note" }
+
+    { 16  ;2   ;Field     ;
+                Name=EpisodeEntryNo;
+                Visible=FALSE;
+                ApplicationArea=#All;
+                SourceExpr="Episode Entry No." }
+
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE ShowEpisode@1();
+    VAR
+      Episode@1000000000 : Record 110231;
+    BEGIN
+      IF NOT Episode.GET("Episode Entry No.") THEN
+        EXIT;
+      Episode.SETRECFILTER;
+      PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
+    END;
+
+    LOCAL PROCEDURE ShowHead@2();
+    VAR
+      Episode@1000000000 : Record 110231;
+      Spid@1000000001 : Integer;
+    BEGIN
+      // Отбор по голове, а не по одному эпизоду: за тревогой стоит столько эпизодов,
+      // сколько жертв держала эта голова, и увидеть их надо всех.
+      Spid := "Head SPID";
+      Episode.SETCURRENTKEY("Head SPID",Open);
+      Episode.SETRANGE("Head SPID",Spid);
+      PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
+    END;
+
+    BEGIN
+    {
+      Тревоги. Строка на голову цепочки за окно, а не на эпизод, и это главное, что нужно
+      знать при чтении: число в колонке "эпизодов за защёлкой" и есть мера того, скольких
+      задело, а строк при этом одна.
+
+      Колонка "что сказал канал" стоит рядом с колонкой "куда ушла" нарочно. Канал наружу
+      может не сработать - источника событий на машине нет, прав не выдали, - и тогда
+      тревога всё равно здесь, а причина молчания записана словами. Пустая колонка на её
+      месте читалась бы как "всё ушло куда надо".
+    }
+    END.
+  }
+}

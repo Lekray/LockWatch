@@ -193,6 +193,32 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
+    PROCEDURE PickAlerting@16(VAR Buffer@1000000000 : TEMPORARY Record 110231;AlertMs@1000000001 : Integer;MaxRows@1000000002 : Integer) : Integer;
+    VAR
+      Picked@1000000003 : Integer;
+    BEGIN
+      // На тревогу разбираются только ИДУЩИЕ эпизоды. Смысл тревоги - "происходит сейчас,
+      // вмешайся"; звать человека к тому, что кончилось само, значит приучить его тревогу
+      // не читать, и тогда она не сработает в тот раз, когда была нужна.
+      Buffer.RESET;
+      Buffer.DELETEALL;
+      IF (AlertMs <= 0) OR (MaxRows <= 0) THEN
+        EXIT(0);
+      Journal.RESET;
+      Journal.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Journal.SETRANGE(Open,TRUE);
+      Journal.SETFILTER("Max Wait (ms)",'>=%1',AlertMs);
+      IF Journal.FINDSET THEN
+        REPEAT
+          Buffer := Journal;
+          Buffer.INSERT;
+          Picked := Picked + 1;
+        UNTIL (Picked >= MaxRows) OR (Journal.NEXT = 0);
+      Journal.RESET;
+      EXIT(Picked);
+    END;
+
+    [External]
     PROCEDURE Summarize@15(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;
     VAR
       Episode@1000000004 : Record 110231;

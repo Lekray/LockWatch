@@ -1,0 +1,83 @@
+OBJECT Table 110236 LockWatch Alert
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Alert;
+               RUS=Тревога LockWatch];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;CaptionML=[ENU=Entry No.;
+                                                              RUS=Номер записи] }
+    { 10  ;   ;Raised At           ;DateTime      ;CaptionML=[ENU=Raised At;
+                                                              RUS=Поднята] }
+    { 11  ;   ;Last Seen At        ;DateTime      ;CaptionML=[ENU=Last Seen At;
+                                                              RUS=Последнее подтверждение] }
+    { 12  ;   ;Head SPID           ;Integer       ;CaptionML=[ENU=Head SPID;
+                                                              RUS=Голова цепочки, spid] }
+    { 13  ;   ;NAV Table Name      ;Text250       ;CaptionML=[ENU=NAV Table Name;
+                                                              RUS=Таблица NAV] }
+    { 14  ;   ;NAV Key No.         ;Integer       ;CaptionML=[ENU=NAV Key No.;
+                                                              RUS=Ключ NAV];
+                                                   BlankNumbers=DontBlank }
+    { 20  ;   ;Episodes            ;Integer       ;CaptionML=[ENU=Episodes;
+                                                              RUS=Эпизодов за защёлкой] }
+    { 21  ;   ;Max Wait (ms)       ;Integer       ;CaptionML=[ENU=Max Wait (ms);
+                                                              RUS=Самое долгое, мс] }
+    { 22  ;   ;Threshold (ms)      ;Integer       ;CaptionML=[ENU=Threshold (ms);
+                                                              RUS=Порог, по которому поднята] }
+    { 23  ;   ;Document No.        ;Code20        ;CaptionML=[ENU=Document No.;
+                                                              RUS=Документ] }
+    { 24  ;   ;User Name           ;Code50        ;CaptionML=[ENU=User Name;
+                                                              RUS=Пользователь] }
+    { 25  ;   ;Episode Entry No.   ;Integer       ;CaptionML=[ENU=Episode Entry No.;
+                                                              RUS=Эпизод, поднявший тревогу] }
+    { 30  ;   ;Advice              ;Text250       ;CaptionML=[ENU=Advice;
+                                                              RUS=Совет] }
+    { 40  ;   ;Channel             ;Option        ;CaptionML=[ENU=Channel;
+                                                              RUS=Куда ушла]
+                                                   OptionCaptionML=[ENU=Journal only,Windows event log;
+                                                                    RUS=Только в журнал,В журнал событий Windows];
+                                                   OptionString=JournalOnly,EventLog }
+    { 41  ;   ;Channel Note        ;Text250       ;CaptionML=[ENU=Channel Note;
+                                                              RUS=Что сказал канал] }
+  }
+  KEYS
+  {
+    {    ;Entry No.                               ;Clustered=Yes }
+    {    ;Head SPID,Last Seen At                   }
+    {    ;Raised At                                }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    BEGIN
+    {
+      Тревога: строка на ГОЛОВУ цепочки за окно, а не на эпизод. Одна забытая транзакция в
+      шторм породит сотни эпизодов, и сотня тревог - это не тревога, а мусор, который
+      перестают читать через день. Отсюда защёлка: пока та же голова держит очередь,
+      строка одна, а число эпизодов за ней растёт полем.
+
+      Тревога поднимается только на ИДУЩИЙ эпизод. Смысл её - "происходит сейчас,
+      вмешайся"; на законченный эпизод вмешиваться уже некуда, и звать человека к тому,
+      что кончилось само, значит приучить его тревогу не читать. Взаимоблокировки сюда по
+      той же причине не попадают: круг разорвал сервер, и звать за этим никого не надо.
+
+      "Куда ушла" и "что сказал канал" стоят в строке рядом нарочно. Канал наружу может не
+      сработать - источника событий нет, прав не выдали, - и тогда тревога всё равно
+      остаётся здесь, а причина молчания записана словами. Молчащий канал, о котором никто
+      не знает, хуже отсутствующего.
+    }
+    END.
+  }
+}

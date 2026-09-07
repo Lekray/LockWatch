@@ -36,7 +36,7 @@ param(
     [string] $Company  = $env:LW_COMPANY,
     [int]    $TableNo  = $env:LW_DOC_TABLE_NO,
     [int]    $FieldNo  = $env:LW_DOC_FIELD_NO,
-    [int]    $AdapterObjectNo = 110240,
+    [int]    $AdapterObjectNo = 110250,
     [int]    $SampleAdapterId = 110237,
     [int]    $BenchCodeunitId = 110239,
     [int]    $TaskCodeunitId  = 110236,

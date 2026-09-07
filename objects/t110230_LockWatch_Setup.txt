@@ -41,6 +41,13 @@ OBJECT Table 110230 LockWatch Setup
     { 21  ;   ;Alert Threshold (ms);Integer       ;CaptionML=[ENU=Alert Threshold (ms);
                                                               RUS=Порог тревоги, мс];
                                                    MinValue=0 }
+    { 22  ;   ;Alert Channel       ;Option        ;CaptionML=[ENU=Alert Channel;
+                                                              RUS=Канал тревоги];
+                                                   OptionCaptionML=[ENU=Off,Journal only,Windows event log;
+                                                                    RUS=Выключена,Только журнал,Журнал событий Windows];
+                                                   OptionString=Off,Journal,EventLog }
+    { 23  ;   ;Alert Event Source  ;Text50        ;CaptionML=[ENU=Alert Event Source;
+                                                              RUS=Источник событий для тревоги] }
     { 30  ;   ;Deadlocks Enabled   ;Boolean       ;CaptionML=[ENU=Deadlocks Enabled;
                                                               RUS=Собирать взаимоблокировки] }
     { 31  ;   ;Deadlocks Read Until;DateTime      ;CaptionML=[ENU=Deadlocks Read Until;
@@ -100,6 +107,8 @@ OBJECT Table 110230 LockWatch Setup
       "Collect Statement Values" := FALSE;
       "Deadlocks Enabled" := TRUE;
       "Coverage Enabled" := TRUE;
+      "Alert Channel" := "Alert Channel"::Journal;
+      "Alert Event Source" := DefaultEventSource;
       INSERT;
     END;
 
@@ -142,6 +151,15 @@ OBJECT Table 110230 LockWatch Setup
       // учётные записи, и бессрочное хранение - отдельный разговор со службой
       // безопасности, которого мы не выиграем.
       EXIT(30);
+    END;
+
+    LOCAL PROCEDURE DefaultEventSource@8() : Text[50];
+    BEGIN
+      // Имя источника событий Windows. Заводит его администратор один раз на машину, и до
+      // тех пор канал наружу молчит - но молчит СЛОВАМИ: причина пишется в строку тревоги.
+      // Писать в чужой источник, скажем в источник самой службы NAV, нельзя: мониторинг
+      // припишет запись платформе, и разбираться будут не с тем.
+      EXIT('LockWatch');
     END;
 
     LOCAL PROCEDURE DefaultAlertMs@7() : Integer;

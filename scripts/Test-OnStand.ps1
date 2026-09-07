@@ -158,6 +158,40 @@ if ($roundTrip -ne $monolith) {
     Fail "cp866 теряет символы: $(($lost | Select-Object -Unique) -join ', ')"
 }
 
+# Точка с запятой и знак равенства ВНУТРИ многоязычного текста ломают импорт, и отказ
+# указывает не на причину: "'' is not an option" либо "You cannot enter ... in ToolTipML",
+# и номер строки. Ловилось трижды, каждый раз стоило по прогону, поэтому проверка стоит
+# здесь - ДО finsql, а не после.
+#
+# Разбор простой: содержимое ML-литерала в квадратных скобках и текста TextConst в
+# кавычках, а внутри - каждая точка с запятой обязана быть РАЗДЕЛИТЕЛЕМ ЯЗЫКОВ, то есть за
+# ней должен стоять трёхбуквенный код и знак равенства. Всё прочее - беда.
+$mlProblems = @()
+$mlLiterals = @()
+foreach ($m in [regex]::Matches($monolith, '(?s)(?:Caption|ToolTip|OptionCaption|Description|Instruction)ML=\[(.*?)\]')) {
+    $mlLiterals += $m.Groups[1].Value
+}
+foreach ($m in [regex]::Matches($monolith, "TextConst '([^']*)'")) {
+    $mlLiterals += $m.Groups[1].Value
+}
+foreach ($literal in $mlLiterals) {
+    if ($literal -notmatch '^\s*[A-Z]{3}=') { continue }
+    foreach ($hit in [regex]::Matches($literal, ';')) {
+        if ($hit.Index -eq $literal.Length - 1) { continue }
+        $tail = $literal.Substring($hit.Index + 1)
+        if ($tail -notmatch '^\s*[A-Z]{3}=') {
+            $near = $literal.Substring([Math]::Max(0, $hit.Index - 60), [Math]::Min(80, $literal.Length - [Math]::Max(0, $hit.Index - 60)))
+            $mlProblems += "точка с запятой не разделяет языки: ...$near"
+        }
+    }
+    $equals = ([regex]::Matches($literal, '=')).Count
+    $codes = ([regex]::Matches($literal, '(?:^|;)\s*[A-Z]{3}=')).Count
+    if ($equals -ne $codes) {
+        $mlProblems += "знак равенства внутри текста ($equals при $codes языках): $($literal.Substring(0, [Math]::Min(120, $literal.Length)))"
+    }
+}
+if ($mlProblems) { Fail ("многоязычный текст не переживёт импорт:`n" + (($mlProblems | Select-Object -Unique | Select-Object -First 5) -join "`n")) }
+
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $monolith, (New-Object System.Text.UTF8Encoding($false)))

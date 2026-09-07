@@ -56,6 +56,9 @@ $context = "[$Company`$LockWatch Context Table]"
 $setup   = "[$Company`$LockWatch Setup]"
 $mark    = "[$Company`$LockWatch Context Mark]"
 $coverage = "[$Company`$LockWatch Coverage]"
+$alert    = "[$Company`$LockWatch Alert]"
+$alertSource = 'LockWatch'
+$alertThresholdMs = 1000
 # Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
 $blankDate = "CONVERT(datetime,'17530101')"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
@@ -144,6 +147,14 @@ try {
     # Накопительный слой, наоборот, чистится и остаётся ВКЛЮЧЁННЫМ: без чистки проверка
     # прошла бы на строках прошлого прогона, то есть не проверяла бы ничего.
     Invoke-Sql "DELETE FROM $coverage; UPDATE $setup SET [Coverage Enabled] = 1, [Coverage Since] = $blankDate;" | Out-Null
+    # Тревога включается НАРУЖУ и с низким порогом: опыт держит блокировку около пяти
+    # секунд, и порог по умолчанию она перевалила бы на самой границе. Проверка, стоящая
+    # на границе, проверяет часы, а не тревогу.
+    Invoke-Sql @"
+DELETE FROM $alert;
+UPDATE $setup SET [Alert Channel] = 2, [Alert Threshold (ms)] = $alertThresholdMs, [Alert Event Source] = N'$alertSource';
+"@ | Out-Null
+    $alertSince = Get-Date
     if (-not $KeepJournal) { Invoke-Sql "DELETE FROM $episode;" | Out-Null }
     # Дорога по хэшу самой блокировки включается ДО перезапуска службы: список таблиц
     # контекста служба держит в кэше, и строка, вставленная запросом при работающей службе,
@@ -274,6 +285,24 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # бы выдумать факт, которого нет, и выдумать правдоподобно.
     Check 'чужой сессии исход не приписан' ($c[1] -eq '0') "исход $($c[1]) при ожидаемом 0 (не определён)"
 
+    $alertRow = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),[Channel]) + '|' + CONVERT(varchar(11),[Episodes]) + '|' +
+  CONVERT(varchar(11),[Max Wait (ms)]) + '|' + CONVERT(varchar(11),[Head SPID])
+FROM $alert ORDER BY [Entry No_] DESC;
+"@
+    $alertCount = [int](Scalar "SELECT COUNT(*) FROM $alert;")
+    $al = ($alertRow -split '\|') | ForEach-Object { $_.Trim() }
+    # Канал наружу - единственная часть тревоги, которую нельзя проверить внутри NAV:
+    # запись в журнал событий Windows либо есть, либо её нет, и спросить об этом можно
+    # только сам журнал.
+    $written = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = $alertSource; StartTime = $alertSince } -ErrorAction SilentlyContinue)
+    Check 'тревога поднята одной строкой на голову цепочки' `
+        (($alertCount -eq 1) -and ($al.Count -eq 4) -and ([int]$al[1] -ge 1) -and ([int]$al[2] -ge $alertThresholdMs)) `
+        "строк тревоги $alertCount, эпизодов за защёлкой $($al[1]), самое долгое $($al[2]) мс, голова $($al[3])"
+    Check 'тревога ушла наружу, в журнал событий Windows' `
+        (($al[0] -eq '1') -and ($written.Count -ge 1)) `
+        "канал $($al[0]) при ожидаемом 1 (журнал событий), записей в журнале Windows $($written.Count)"
+
     # Накопительный слой проверяется здесь ровно на том, чего не может проверить мерный
     # прогон: что счётчики читаются с НАСТОЯЩЕГО сервера и что имя индекса разбирается в
     # номер ключа NAV. Арифметика приростов проверена без базы, в мерном прогоне.
@@ -301,6 +330,9 @@ finally {
     $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $context WHERE [Table No_] = 110233;"
     $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = 1;"
     $cleanup += " DELETE FROM $coverage; UPDATE $setup SET [Coverage Since] = $blankDate;"
+    # Настройка тревоги возвращается в исходное: порог и канал - то, чем инструмент
+    # заводится, и оставлять их сдвинутыми после прогона нельзя.
+    $cleanup += " DELETE FROM $alert; UPDATE $setup SET [Alert Channel] = 1, [Alert Threshold (ms)] = 5000;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
     & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }

@@ -210,6 +210,20 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Coverage Enabled" }
 
+    { 50  ;2   ;Field     ;
+                Name=AlertChannel;
+                ToolTipML=[ENU=Specifies where an alert goes when a wait crosses the threshold. The journal of alerts is written in any case, and the Windows event log is what monitoring on the server already reads without us.;
+                           RUS=Определяет, куда уходит тревога, когда ожидание переваливает порог. Журнал тревог пишется в любом случае, а журнал событий Windows - ровно то, что мониторинг на сервере и без нас уже читает.];
+                ApplicationArea=#All;
+                SourceExpr="Alert Channel" }
+
+    { 51  ;2   ;Field     ;
+                Name=AlertEventSource;
+                ToolTipML=[ENU=Specifies the name of the Windows event source. An administrator registers it once per machine, and until then the channel outwards stays silent - but it says so in words, in the alert row itself.;
+                           RUS=Определяет имя источника событий Windows. Администратор заводит его один раз на машину, и до тех пор канал наружу молчит - но молчит словами, в самой строке тревоги.];
+                ApplicationArea=#All;
+                SourceExpr="Alert Event Source" }
+
     { 12  ;1   ;Group     ;
                 CaptionML=[ENU=Last Pass;
                            RUS=Последний проход];

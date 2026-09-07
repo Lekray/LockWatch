@@ -78,6 +78,20 @@ OBJECT Page 110231 LockWatch Episodes
                                  PAGE.RUN(PAGE::"LockWatch Summary");
                                END;
                                 }
+      { 46      ;1   ;Action    ;
+                      Name=OpenAlerts;
+                      CaptionML=[ENU=Alerts;
+                                 RUS=Тревоги];
+                      ToolTipML=[ENU=Open the alerts: one row per head of a chain, not per episode. A hundred alerts is not an alert but noise, and the latch is what keeps them apart.;
+                                 RUS=Открыть тревоги: строка на голову цепочки, а не на эпизод. Сотня тревог - это не тревога, а шум, и держит их порознь защёлка.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Alerts;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Alerts");
+                               END;
+                                }
       { 45      ;1   ;Action    ;
                       Name=OpenCoverage;
                       CaptionML=[ENU=Coverage;

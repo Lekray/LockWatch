@@ -21,6 +21,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       Sql@1000000001 : Codeunit 110234;
       Journal@1000000002 : Codeunit 110232;
       Coverage@1000000036 : Codeunit 110238;
+      AlertMgt@1000000040 : Codeunit 110240;
       NamesFailedTxt@1000000003 : TextConst 'ENU=Episodes are logged, but table and key names are missing: %1;RUS=Эпизоды записаны, но имена таблиц и ключей не получены: %1';
       OtherDbTxt@1000000004 : TextConst 'ENU=Skipped %1 waits belonging to another database on the same server.;RUS=Пропущено %1 ожиданий, относящихся к другой базе на том же сервере.';
       QuietTxt@1000000005 : TextConst 'ENU=Pass went through, the queue is empty.;RUS=Проход прошёл, очередь пуста.';
@@ -36,6 +37,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
       CoverageFailedTxt@1000000037 : TextConst 'ENU=Coverage counters are not read: %1;RUS=Счётчики охвата не прочитаны: %1';
       CoverageTxt@1000000038 : TextConst 'ENU=Coverage: %1 indexes grew.;RUS=Охват: приросло индексов %1.';
+      AlertsTxt@1000000041 : TextConst 'ENU=Alerts raised %1, held back by the latch %2.;RUS=Тревог поднято %1, придержано защёлкой %2.';
       CoverageResetTxt@1000000039 : TextConst 'ENU=Coverage: %1 counters were zeroed by the server, that much waiting is lost from the total.;RUS=Охват: счётчиков обнулено сервером %1, столько же ожиданий потеряно для итога.';
 
     [External]
@@ -106,6 +108,10 @@ OBJECT Codeunit 110235 LockWatch Pass
       // блокировка, которую виновник держит прямо сейчас. На закрытом эпизоде разбирать
       // нечего вовсе - ожидание кончилось ровно потому, что блокировку отпустили.
       Note := Note + NameDocuments;
+
+      // Тревога поднимается ПОСЛЕ разбора документа: в неё должны попасть и номер
+      // документа, и учётная запись, а до разбора их ещё нет.
+      Note := Note + RaiseAlerts(Setup);
 
       // Взаимоблокировки собираются ПОСЛЕ очереди и не каждым проходом. Они приходят
       // готовыми эпизодами и ведению не подлежат: сервер уже разорвал круг.
@@ -217,6 +223,36 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF Added > 0 THEN
         Note := Note + ' ' + STRSUBSTNO(DeadlocksTxt,Added);
       EXIT(Note);
+    END;
+
+    LOCAL PROCEDURE RaiseAlerts@12(VAR Setup@1000000000 : Record 110230) : Text;
+    VAR
+      Pending@1000000001 : TEMPORARY Record 110231;
+      Picked@1000000002 : Integer;
+      Raised@1000000003 : Integer;
+      Latched@1000000004 : Integer;
+    BEGIN
+      IF Setup."Alert Channel" = Setup."Alert Channel"::Off THEN
+        EXIT('');
+      Picked := Journal.PickAlerting(Pending,Setup."Alert Threshold (ms)",Parse.MaxAlertsPerPass);
+      // Чистка тревог идёт тем же сроком и той же порцией, что и чистка эпизодов, но
+      // ВНЕ условия "нашлось кого тревожить": иначе на тихом сервере старые тревоги
+      // лежали бы вечно ровно потому, что новых нет.
+      AlertMgt.TrimOldEntries(Setup."Retention (Days)",TrimRowsPerPass);
+      IF Picked = 0 THEN
+        EXIT('');
+      AlertMgt.BeginPass;
+      Pending.RESET;
+      IF Pending.FINDSET THEN
+        REPEAT
+          AlertMgt.Raise(Pending,Setup."Alert Threshold (ms)",
+                         Setup."Alert Channel" = Setup."Alert Channel"::EventLog,
+                         Setup."Alert Event Source");
+        UNTIL Pending.NEXT = 0;
+      AlertMgt.PassCounts(Raised,Latched);
+      IF (Raised > 0) OR (Latched > 0) THEN
+        EXIT(' ' + STRSUBSTNO(AlertsTxt,Raised,Latched));
+      EXIT('');
     END;
 
     LOCAL PROCEDURE CollectCoverage@11(VAR Setup@1000000000 : Record 110230) : Text;

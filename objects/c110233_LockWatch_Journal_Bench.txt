@@ -20,6 +20,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Parse@1000000000 : Codeunit 110230;
       Journal@1000000001 : Codeunit 110232;
       Coverage@1000000028 : Codeunit 110238;
+      Alerts@1000000033 : Codeunit 110240;
       Episode@1000000002 : Record 110231;
       PassedTxt@1000000003 : TextConst 'ENU=PASS;RUS=пройдено';
       FailedTxt@1000000004 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ ';
@@ -49,6 +50,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CoverageTxt@1000000030 : TextConst 'ENU=waits %1 of the expected %2, milliseconds %3 of the expected %4, escalations %5;RUS=ожиданий %1 при ожидаемых %2, миллисекунд %3 при ожидаемых %4, эскалаций %5';
       ChkCoverageResetTxt@1000000031 : TextConst 'ENU=a counter that went backwards is counted as a reset and does not drag the total back;RUS=пошедший назад счётчик считается обнулением и не тянет итог назад';
       CoverageResetTxt@1000000032 : TextConst 'ENU=resets %1, waits %2 of the expected %3, milliseconds %4 of the expected %5;RUS=обнулений %1, ожиданий %2 при ожидаемых %3, миллисекунд %4 при ожидаемых %5';
+      ChkLatchTxt@1000000034 : TextConst 'ENU=the latch keeps one alert per head of a chain, and counts the episodes behind it;RUS=защёлка держит одну тревогу на голову цепочки и считает эпизоды за ней';
+      LatchTxt@1000000035 : TextConst 'ENU=raised %1 of the expected %2, held back %3 of the expected %4, rows %5, episodes behind the first %6;RUS=поднято %1 при ожидаемых %2, придержано %3 при ожидаемых %4, строк %5, эпизодов за первой %6';
+      ChkLatchWindowTxt@1000000036 : TextConst 'ENU=an alert older than the latch window does not hold back the next one;RUS=тревога старше окна защёлки следующую не придерживает';
+      LatchWindowTxt@1000000037 : TextConst 'ENU=rows after the aged alert %1 of the expected %2;RUS=строк после состаренной тревоги %1 при ожидаемых %2';
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -96,6 +101,12 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CovAdded@1000000027 : Integer;
       CovChanged@1000000028 : Integer;
       CovResets@1000000029 : Integer;
+      AlertEp@1000000030 : Record 110231;
+      Alert@1000000031 : Record 110236;
+      AlertRaised@1000000032 : Integer;
+      AlertLatched@1000000033 : Integer;
+      AlertRows@1000000034 : Integer;
+      AlertEpisodes@1000000035 : Integer;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -169,6 +180,42 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             (CovResets = 1) AND (Cov.Resets = 1) AND (Cov.Waits = 60) AND (Cov."Wait (ms)" = 3200),
             STRSUBSTNO(CoverageResetTxt,Cov.Resets,Cov.Waits,60,Cov."Wait (ms)",3200));
       Cov.DELETE;
+
+      // Защёлка тревоги проверяется без базы SQL и без единой блокировки: она работает над
+      // строкой эпизода, а строку можно подать руками. Головы берутся отрицательные - в
+      // настоящем spid отрицательных не бывает, и столкнуться с чужой тревогой нельзя.
+      Alerts.BeginPass;
+      MakeAlertEpisode(AlertEp,AlertHeadA,AlertWaitMs);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      MakeAlertEpisode(AlertEp,AlertHeadB,AlertWaitMs);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      // Ниже порога тревоги нет вовсе, и это тоже часть защёлки: порог, который не
+      // отсекает, превращает тревогу в поток.
+      MakeAlertEpisode(AlertEp,AlertHeadC,AlertThresholdMs - 1);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      Alerts.PassCounts(AlertRaised,AlertLatched);
+      AlertRows := AlertRowCount;
+      Alert.RESET;
+      Alert.SETRANGE("Head SPID",AlertHeadA);
+      IF Alert.FINDFIRST THEN
+        AlertEpisodes := Alert.Episodes;
+      Check(Passed,Total,Report,ChkLatchTxt,
+            (AlertRaised = 2) AND (AlertLatched = 2) AND (AlertRows = 2) AND (AlertEpisodes = 3),
+            STRSUBSTNO(LatchTxt,AlertRaised,2,AlertLatched,2,AlertRows,AlertEpisodes));
+
+      // Окно защёлки проверяется тем, что его СДВИГАЮТ: строка состаривается за окно, и
+      // следующая тревога по той же голове обязана завестись заново. Без этой проверки
+      // защёлка, залипшая навсегда, выглядела бы точно так же.
+      AgeAlerts;
+      MakeAlertEpisode(AlertEp,AlertHeadA,AlertWaitMs);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      AlertRows := AlertRowCount;
+      Check(Passed,Total,Report,ChkLatchWindowTxt,
+            AlertRows = 3,
+            STRSUBSTNO(LatchWindowTxt,AlertRows,3));
+      SweepAlerts;
 
       Backdated := Backdate(BackdateRows,BackdateDays);
       Removed := Journal.TrimOldEntries(RetentionUnderTest,Waiters);
@@ -384,6 +431,79 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Меньше состаривания, но больше суток: чистка обязана убрать состаренные и не
       // тронуть остальные. Проверка на месячном сроке заодно ловит переполнение Integer.
       EXIT(30);
+    END;
+
+    LOCAL PROCEDURE MakeAlertEpisode@25(VAR Episode@1000000000 : Record 110231;HeadSpid@1000000001 : Integer;WaitMs@1000000002 : Integer);
+    BEGIN
+      Episode.INIT;
+      Episode."Entry No." := 0;
+      Episode."Head SPID" := HeadSpid;
+      Episode."Victim SPID" := HeadSpid - 1;
+      Episode."NAV Table Name" := 'Sales Line';
+      Episode."NAV Key No." := 1;
+      Episode."Max Wait (ms)" := WaitMs;
+      Episode.Open := TRUE;
+    END;
+
+    LOCAL PROCEDURE AlertRowCount@26() : Integer;
+    VAR
+      Alert@1000000000 : Record 110236;
+    BEGIN
+      Alert.RESET;
+      Alert.SETFILTER("Head SPID",'<%1',0);
+      EXIT(Alert.COUNT);
+    END;
+
+    LOCAL PROCEDURE AgeAlerts@27();
+    VAR
+      Alert@1000000000 : Record 110236;
+      Back@1000000001 : Duration;
+    BEGIN
+      // Состаривание правкой поля, а не ожиданием пяти минут. Сдвиг берётся с запасом в
+      // одну секунду: ровно на границе окна проверка проверяла бы часы, а не защёлку.
+      Back := Parse.AlertLatchMs + 1000;
+      Alert.RESET;
+      Alert.SETFILTER("Head SPID",'<%1',0);
+      IF Alert.FINDSET(TRUE) THEN
+        REPEAT
+          Alert."Last Seen At" := CURRENTDATETIME - Back;
+          Alert.MODIFY;
+        UNTIL Alert.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SweepAlerts@28();
+    VAR
+      Alert@1000000000 : Record 110236;
+    BEGIN
+      Alert.RESET;
+      Alert.SETFILTER("Head SPID",'<%1',0);
+      Alert.DELETEALL;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE AlertHeadA@29() : Integer;
+    BEGIN
+      EXIT(-101);
+    END;
+
+    LOCAL PROCEDURE AlertHeadB@30() : Integer;
+    BEGIN
+      EXIT(-102);
+    END;
+
+    LOCAL PROCEDURE AlertHeadC@31() : Integer;
+    BEGIN
+      EXIT(-103);
+    END;
+
+    LOCAL PROCEDURE AlertWaitMs@32() : Integer;
+    BEGIN
+      EXIT(9000);
+    END;
+
+    LOCAL PROCEDURE AlertThresholdMs@33() : Integer;
+    BEGIN
+      EXIT(5000);
     END;
 
     LOCAL PROCEDURE MakeCounterReading@22(VAR Reading@1000000000 : TEMPORARY Record 110235;Waits@1000000001 : Integer;WaitMs@1000000002 : Integer;Escalations@1000000003 : Integer);
