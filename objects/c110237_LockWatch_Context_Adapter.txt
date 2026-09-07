@@ -1,0 +1,172 @@
+OBJECT Codeunit 110237 LockWatch Context Adapter
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      ContextTableNo@1000000000 : Integer;
+      NoMarkErr@1000000001 : TextConst 'ENU=The adapter did not put a mark down. Without it the document column stays empty, and an empty column reads as no locks by document.;RUS=Переходник отметку не поставил. Без неё колонка документа остаётся пустой, а пустая колонка читается как "блокировок по документам не было".';
+      WrongDocErr@1000000002 : TextConst 'ENU=The mark holds the document %1 while %2 was written.;RUS=В отметке документ %1, а записан был %2.';
+      OkMsg@1000000003 : TextConst 'ENU=passed 1 of 1 - the adapter marks the session with the document %1;RUS=пройдено 1 из 1 - переходник отмечает сеанс документом %1';
+
+    [EventSubscriber(Table,37,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnContextInsert@1(VAR Rec@1000000000 : Record 37;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      Remember(Rec);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnContextModify@2(VAR Rec@1000000000 : Record 37;VAR xRec@1000000002 : Record 37;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      Remember(Rec);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE OnContextDelete@3(VAR Rec@1000000000 : Record 37;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      Remember(Rec);
+    END;
+
+    LOCAL PROCEDURE Remember@4(VAR Rec@1000000000 : Record 37);
+    VAR
+      Mark@1000000001 : Record 110233;
+      ContextTable@1000000002 : Record 110232;
+    BEGIN
+      // Временная запись живёт в памяти сеанса и никакой блокировки не создаёт: отмечать
+      // по ней документ значит называть виновником того, кто ещё ничего не записал.
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+      // Строка настройки решает, участвует ли эта таблица. Выключить переходник, не
+      // выкладывая объектов, - единственный способ снять его цену на бою в один щелчок.
+      IF NOT ContextTable.GET(TableNo) THEN
+        EXIT;
+      IF NOT ContextTable.Enabled THEN
+        EXIT;
+      Mark.Mark(TableNo,DocumentNo(Rec));
+    END;
+
+    LOCAL PROCEDURE TableNo@5() : Integer;
+    BEGIN
+      // Номер таблицы у подписки - КОНСТАНТА времени компиляции, настройкой он не
+      // задаётся вовсе (FINDINGS, раздел 10). Отсюда и устройство: на каждую таблицу
+      // контекста - свой переходник, а настройка отвечает только за разбор.
+      EXIT(DATABASE::"Sales Line");
+    END;
+
+    LOCAL PROCEDURE DocumentNo@6(VAR Rec@1000000000 : Record 37) : Code[20];
+    BEGIN
+      // Поле берётся ПО ИМЕНИ, а не по номеру из настройки: номер поля в настройке нужен
+      // разбору и экрану, а здесь имя известно на этапе компиляции - как и номер таблицы.
+      EXIT(Rec."Document No.");
+    END;
+
+    [External]
+    PROCEDURE SelfTest@7();
+    VAR
+      SalesLine@1000000000 : Record 37;
+      Mark@1000000001 : Record 110233;
+      ContextTable@1000000002 : Record 110232;
+      DocNo@1000000003 : Code[20];
+      Existed@1000000004 : Boolean;
+    BEGIN
+      // Переходник, который ни разу не сработал, ничем не отличается от отсутствующего.
+      // Поэтому он проверяет себя сам: пишет строку в таблицу контекста и смотрит, легла
+      // ли отметка. Убирает за собой и то, и другое.
+      DocNo := TestDocumentNo;
+      Existed := ContextTable.GET(TableNo);
+      IF NOT Existed THEN BEGIN
+        ContextTable.INIT;
+        ContextTable.VALIDATE("Table No.",TableNo);
+        ContextTable."Document Field No." := 3;
+        ContextTable.Enabled := TRUE;
+        ContextTable.INSERT;
+      END ELSE
+        IF NOT ContextTable.Enabled THEN BEGIN
+          ContextTable.Enabled := TRUE;
+          ContextTable.MODIFY;
+        END;
+
+      Mark.Release;
+      SalesLine.INIT;
+      SalesLine."Document Type" := SalesLine."Document Type"::Order;
+      SalesLine."Document No." := DocNo;
+      SalesLine."Line No." := TestLineNo;
+      SalesLine.INSERT;
+
+      IF NOT Mark.GET(SERVICEINSTANCEID,SESSIONID) THEN BEGIN
+        SalesLine.DELETE;
+        CleanUp(Existed);
+        ERROR(NoMarkErr);
+      END;
+      IF Mark."Document No." <> DocNo THEN BEGIN
+        SalesLine.DELETE;
+        CleanUp(Existed);
+        ERROR(WrongDocErr,Mark."Document No.",DocNo);
+      END;
+
+      SalesLine.DELETE;
+      Mark.Release;
+      CleanUp(Existed);
+      MESSAGE(OkMsg,DocNo);
+    END;
+
+    LOCAL PROCEDURE CleanUp@8(KeepContextRow@1000000000 : Boolean);
+    VAR
+      ContextTable@1000000001 : Record 110232;
+    BEGIN
+      IF KeepContextRow THEN
+        EXIT;
+      IF ContextTable.GET(TableNo) THEN
+        ContextTable.DELETE;
+    END;
+
+    LOCAL PROCEDURE TestDocumentNo@9() : Code[20];
+    BEGIN
+      // Номер заведомо не встречающийся: обкатка пишет в ЖИВУЮ таблицу заказчика, и
+      // столкнуться с настоящим документом ей нельзя ни при каких обстоятельствах.
+      EXIT('LOCKWATCH-SELFTEST');
+    END;
+
+    LOCAL PROCEDURE TestLineNo@10() : Integer;
+    BEGIN
+      EXIT(2147483647);
+    END;
+
+    BEGIN
+    {
+      Переходник-подписчик: ОБРАЗЕЦ, а не готовый объект установки.
+
+      Подписка стоит на штатной Table 37 "Sales Line" нарочно - репозиторий считаем
+      публичным, и номеров доработанных объектов заказчика в коде быть не может. На
+      установке этот объект копируют, меняют в нём три места (номер таблицы в трёх
+      подписках, тип записи и поле с номером документа) и выкладывают под своим номером.
+      Копий столько, сколько таблиц контекста: номер таблицы в подписке - константа
+      времени компиляции, и одним объектом на все таблицы обойтись нельзя (FINDINGS,
+      раздел 10).
+
+      Почему переходник вообще нужен. Отметка ставится ВНУТРИ транзакции пишущего, и
+      этим она ценна: транзакция виновника держит на ней монопольную блокировку, а по
+      номеру транзакции её находит съём со стороны SQL. Это не совпадение по времени,
+      а факт - и он проверен на живой блокировке (FINDINGS, раздел 17).
+
+      Три оговорки, каждая записана нарочно:
+
+      1. Временную запись пропускаем. Она живёт в памяти сеанса, блокировки не создаёт,
+         и отмечать по ней документ значит называть виновником того, кто ничего не писал.
+      2. Выключатель живёт в СТРОКЕ НАСТРОЙКИ таблицы контекста. Снять цену переходника
+         на бою можно щелчком, не выкладывая объектов.
+      3. Читающий, пусть даже с LOCKTABLE, отметки не оставит вовсе. Для него остаётся
+         дорога через хэш самой блокировки, и это ещё одна причина строить обе.
+    }
+    END.
+  }
+}

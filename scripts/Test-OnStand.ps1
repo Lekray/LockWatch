@@ -45,6 +45,7 @@ param(
     [int]    $MgmtPort       = 7145,
     [int]    $TestCodeunitId = 110231,
     [int]    $BenchCodeunitId = 110233,
+    [int]    $AdapterCodeunitId = 110237,
     [int]    $TimeoutMinutes = 3,
     [switch] $Run,
     [switch] $StopInstance
@@ -186,7 +187,11 @@ foreach ($group in $declared | Group-Object Letter) {
     # Координаты службы нужны и компиляции, а не только импорту: таблицу компилятор
     # синхронизирует со схемой SQL через ту же службу, и без них падает с
     # "Management Port: 0" - при этом ИМПОРТ уже прошёл, и отказ выглядит внезапным.
-    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=$($typeNm[$group.Name]);ID=$ids`"$navServerArgs" "compile-$($group.Name)-$stamp.log"
+    # Схему таблиц синхронизирует компиляция, и разрушительные изменения (удалённое поле,
+    # сузившийся тип) она по умолчанию ОТКАЗЫВАЕТСЯ проводить - и правильно делает.
+    # На стенде это разрешено явно: данные здесь свои и одноразовые. В пакет для установки
+    # такой ключ не попадает - там удаление поля это решение человека, а не скрипта.
+    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=$($typeNm[$group.Name]);ID=$ids`",SynchronizeSchemaChanges=Force$navServerArgs" "compile-$($group.Name)-$stamp.log"
 }
 
 Write-Host 'Вердикт по базе, а не по логу'
@@ -237,6 +242,7 @@ $body = @"
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TestCodeunitId -MethodName SelfTest -ErrorAction Stop
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $BenchCodeunitId -MethodName Bench -ErrorAction Stop
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $AdapterCodeunitId -MethodName SelfTest -ErrorAction Stop
 "@
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 

@@ -174,6 +174,196 @@ OBJECT Codeunit 110234 LockWatch Sql
       SqlConn.Close;
     END;
 
+    [External]
+    PROCEDURE ResolveDocuments@30(VAR Buffer@1000000000 : TEMPORARY Record 110231) : Boolean;
+    BEGIN
+      LastError := '';
+      IF TryResolveDocuments(Buffer) THEN
+        EXIT(TRUE);
+      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      EXIT(FALSE);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryResolveDocuments@31(VAR Buffer@1000000000 : TEMPORARY Record 110231);
+    VAR
+      SqlConn@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlCmd@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlReader@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      TranId@1000000004 : ARRAY [10] OF BigInteger;
+      ObjectName@1000000005 : ARRAY [10] OF Text;
+      IndexName@1000000006 : ARRAY [10] OF Text;
+      LockHash@1000000007 : ARRAY [10] OF Text;
+      Found@1000000008 : Integer;
+      Index@1000000009 : Integer;
+      TranList@1000000010 : Text;
+      DocumentNo@1000000011 : Text;
+      UserId@1000000012 : Text;
+    BEGIN
+      // Мост от SQL к документу - не совпадение по времени, а факт. Подписчик на событие
+      // таблицы контекста кладёт отметку В ТОЙ ЖЕ транзакции, что и запись виновника,
+      // поэтому транзакция виновника держит на отметке монопольную блокировку. Зная её
+      // номер (он и так в журнале), берём эту блокировку и разрешаем хэш обратно в строку.
+      //
+      // Чтение dm_tran_locks здесь ОДНО на весь проход, а не одно на эпизод: сотня жертв
+      // за одним виновником даёт один номер транзакции, и скан по шестидесяти тысячам
+      // блокировок платится единожды. На тихом сервере он не платится вовсе - разбирать
+      // нечего, и запрос не идёт.
+      BuildTranList(Buffer,TranList);
+      IF TranList = '' THEN
+        EXIT;
+
+      SqlConn := SqlConn.SqlConnection(ConnString);
+      SqlConn.Open;
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText := MarkLockSql(TranList);
+      SqlReader := SqlCmd.ExecuteReader;
+      WHILE SqlReader.Read AND (Found < MaxDocuments) DO BEGIN
+        Found := Found + 1;
+        TranId[Found] := SqlReader.GetInt64(0);
+        ObjectName[Found] := ReaderText(SqlReader,1);
+        IndexName[Found] := ReaderText(SqlReader,2);
+        LockHash[Found] := Parse.TrimLockHash(ReaderText(SqlReader,3));
+      END;
+      SqlReader.Close;
+
+      // Второй запрос идёт по тому же соединению и по КОНКРЕТНОМУ индексу: хэш считается
+      // по индексу, и поиск по чужому вернёт пустой набор без всякой ошибки. Читается
+      // строка под чужой открытой транзакцией, поэтому только NOLOCK - иначе наблюдатель
+      // встанет в ту самую очередь, которую наблюдает.
+      FOR Index := 1 TO Found DO
+        IF LockHash[Index] <> '' THEN BEGIN
+          SqlCmd := SqlConn.CreateCommand;
+          SqlCmd.CommandTimeout := ReadTimeoutSec;
+          SqlCmd.CommandText := MarkRowSql(ObjectName[Index],IndexName[Index],LockHash[Index]);
+          SqlReader := SqlCmd.ExecuteReader;
+          DocumentNo := '';
+          UserId := '';
+          IF SqlReader.Read THEN BEGIN
+            DocumentNo := ReaderText(SqlReader,0);
+            UserId := ReaderText(SqlReader,1);
+          END;
+          SqlReader.Close;
+          ApplyDocument(Buffer,TranId[Index],DocumentNo,UserId);
+        END;
+      SqlConn.Close;
+    END;
+
+    LOCAL PROCEDURE ApplyDocument@32(VAR Buffer@1000000000 : TEMPORARY Record 110231;TranId@1000000001 : BigInteger;DocumentNo@1000000002 : Text;UserId@1000000003 : Text);
+    BEGIN
+      // Один виновник - сто жертв, и документ у них у всех один и тот же. Разбирать его
+      // сто раз значило бы сто раз прочитать dm_tran_locks ради одного и того же ответа.
+      IF DocumentNo = '' THEN
+        EXIT;
+      Buffer.RESET;
+      Buffer.SETRANGE("Blocker Transaction Id",TranId);
+      IF Buffer.FINDSET(TRUE) THEN
+        REPEAT
+          Buffer."Document No." := COPYSTR(DocumentNo,1,MAXSTRLEN(Buffer."Document No."));
+          Buffer."User Name" := COPYSTR(UserId,1,MAXSTRLEN(Buffer."User Name"));
+          Buffer.MODIFY;
+        UNTIL Buffer.NEXT = 0;
+      Buffer.RESET;
+    END;
+
+    LOCAL PROCEDURE BuildTranList@33(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR TranList@1000000001 : Text);
+    VAR
+      Seen@1000000002 : Integer;
+    BEGIN
+      TranList := '';
+      Buffer.RESET;
+      IF Buffer.FINDSET THEN
+        REPEAT
+          IF Buffer."Blocker Transaction Id" <> 0 THEN BEGIN
+            TranList := AppendId(TranList,FORMAT(Buffer."Blocker Transaction Id"));
+            Seen := Seen + 1;
+          END;
+        UNTIL (Seen >= MaxDocuments) OR (Buffer.NEXT = 0);
+      Buffer.RESET;
+    END;
+
+    LOCAL PROCEDURE MarkLockSql@34(TranList@1000000000 : Text) : Text;
+    VAR
+      Sql@1000000001 : Text;
+    BEGIN
+      // Своя таблица отметок ищется ПО ИМЕНИ с любым префиксом компании: имя компании в
+      // SQL получается из имени NAV заменой знаков, и повторять эту замену в коде значило
+      // бы завести второе правило имени, которое никто ни с чем не сверяет. Строка отметки
+      // сама несёт имя компании, и по ней всё и различается.
+      Sql :=
+        'SELECT DISTINCT CONVERT(bigint,l.request_owner_id), o.name, i.name,' +
+        ' RTRIM(l.resource_description)' +
+        ' FROM sys.dm_tran_locks l' +
+        ' JOIN sys.partitions p ON p.hobt_id ' + Eq + ' l.resource_associated_entity_id' +
+        ' JOIN sys.objects o ON o.object_id ' + Eq + ' p.object_id' +
+        ' JOIN sys.indexes i ON i.object_id ' + Eq + ' p.object_id' +
+        ' AND i.index_id ' + Eq + ' p.index_id' +
+        ' WHERE l.request_owner_type ' + Eq + ' ' + Q + 'TRANSACTION' + Q +
+        ' AND l.resource_type ' + Eq + ' ' + Q + 'KEY' + Q +
+        ' AND o.name LIKE ' + Q + Wildcard + MarkTableSuffix + Q +
+        ' AND l.request_owner_id IN (' + TranList + ');';
+      EXIT(Sql);
+    END;
+
+    LOCAL PROCEDURE MarkRowSql@35(ObjectName@1000000000 : Text;IndexName@1000000001 : Text;LockHash@1000000002 : Text) : Text;
+    VAR
+      Sql@1000000003 : Text;
+    BEGIN
+      Sql :=
+        'SELECT TOP 1 [Document No_], [User Id] FROM ' + Bracket(ObjectName) +
+        ' WITH (INDEX(' + Bracket(IndexName) + '), NOLOCK)' +
+        ' WHERE ' + LockResColumn + ' ' + Eq + ' ' + Q + LockHash + Q + ';';
+      EXIT(Sql);
+    END;
+
+    LOCAL PROCEDURE Bracket@36(Name@1000000000 : Text) : Text;
+    BEGIN
+      // Имя приходит из системных представлений, но в текст запроса едет экранированным:
+      // закрывающая скобка внутри имени превратила бы имя в код.
+      EXIT('[' + DELCHR(Name,'=',']') + ']');
+    END;
+
+    LOCAL PROCEDURE LockResColumn@37() : Text;
+    VAR
+      Percent@1000000000 : Char;
+      Sign@1000000001 : Text[2];
+    BEGIN
+      // Псевдостолбец обратного поиска. Собирается из знаков, а не пишется литералом:
+      // процент в тексте, попавшем в STRSUBSTNO, читается как подстановка.
+      Percent := 37;
+      Sign := FORMAT(Percent) + FORMAT(Percent);
+      EXIT(Sign + 'lockres' + Sign);
+    END;
+
+    LOCAL PROCEDURE Wildcard@41() : Text[1];
+    VAR
+      Percent@1000000000 : Char;
+    BEGIN
+      Percent := 37;
+      EXIT(FORMAT(Percent));
+    END;
+
+    LOCAL PROCEDURE MarkTableSuffix@38() : Text;
+    BEGIN
+      EXIT('LockWatch Context Mark');
+    END;
+
+    LOCAL PROCEDURE MaxDocuments@39() : Integer;
+    BEGIN
+      EXIT(Parse.MaxDocumentsPerPass);
+    END;
+
+    LOCAL PROCEDURE Eq@40() : Text[1];
+    VAR
+      Sign@1000000000 : Char;
+    BEGIN
+      // Знак равенства собирается из кода. В тексте объекта C/SIDE он внутри строковых
+      // свойств начинает новый язык, и держать его в одном месте дешевле, чем помнить.
+      Sign := 61;
+      EXIT(FORMAT(Sign));
+    END;
+
     LOCAL PROCEDURE ApplyName@6(VAR Observed@1000000000 : TEMPORARY Record 110231;Source@1000000001 : Integer;Id@1000000002 : BigInteger;ObjectName@1000000003 : Text;IndexName@1000000004 : Text);
     VAR
       CompanyName@1000000005 : Text;

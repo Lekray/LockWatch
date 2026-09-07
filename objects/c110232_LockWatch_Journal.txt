@@ -97,6 +97,56 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
+    PROCEDURE PickUnresolved@12(VAR Buffer@1000000000 : TEMPORARY Record 110231;MaxRows@1000000001 : Integer) : Integer;
+    VAR
+      Picked@1000000002 : Integer;
+    BEGIN
+      // Кого разбирать до номера документа. Отбор строгий нарочно: только ИДУЩИЕ эпизоды,
+      // потому что мост к документу - это блокировка, которую виновник держит ПРЯМО СЕЙЧАС.
+      // На закрытом эпизоде разбирать уже нечего: ожидание кончилось ровно потому, что
+      // блокировку отпустили, и в dm_tran_locks её больше нет.
+      //
+      // "Причина не заполнена" - это отметка "ещё не пробовали". Без неё эпизод, у которого
+      // документа нет и не будет, разбирался бы заново каждый проход, и разбор из редкого
+      // стал бы постоянным.
+      Buffer.RESET;
+      Buffer.DELETEALL;
+      Journal.RESET;
+      Journal.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Journal.SETRANGE(Open,TRUE);
+      Journal.SETFILTER("Blocker Transaction Id",'<>%1',0);
+      Journal.SETRANGE("Document Source",Journal."Document Source"::None);
+      Journal.SETRANGE("No Document Reason",'');
+      IF Journal.FINDSET THEN
+        REPEAT
+          Buffer := Journal;
+          Buffer.INSERT;
+          Picked := Picked + 1;
+        UNTIL (Picked >= MaxRows) OR (Journal.NEXT = 0);
+      Journal.RESET;
+      EXIT(Picked);
+    END;
+
+    [External]
+    PROCEDURE SetDocument@13(EntryNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20];UserName@1000000002 : Code[50];Source@1000000003 : Integer;Reason@1000000004 : Text);
+    BEGIN
+      Journal.RESET;
+      IF NOT Journal.GET(EntryNo) THEN
+        EXIT;
+      Journal."Document No." := DocumentNo;
+      Journal."Document Source" := Source;
+      Journal."No Document Reason" := COPYSTR(Reason,1,MAXSTRLEN(Journal."No Document Reason"));
+      IF UserName <> '' THEN BEGIN
+        // Имя приходит из отметки контекста, то есть от самой транзакции виновника, а не
+        // от платформы. Это НЕ то имя, которое обещано в разделе про EnableDeadlockMonitoring:
+        // здесь оно про виновника и получено без единого нового права.
+        Journal."User Name" := UserName;
+        Journal."User Source" := Journal."User Source"::FromMark;
+      END;
+      Journal.MODIFY;
+    END;
+
+    [External]
     PROCEDURE TrimOldEntries@5(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
     VAR
       Threshold@1000000002 : DateTime;

@@ -48,6 +48,34 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
+    PROCEDURE MaxDocumentsPerPass@30() : Integer;
+    BEGIN
+      // Сколько эпизодов за проход разбираются до номера документа. Разбор стоит чтения
+      // dm_tran_locks - 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не
+      // помогает вовсе. Десяток за проход - это один такой скан на проход и только тогда,
+      // когда есть что разбирать: на тихом сервере чтения не происходит вовсе.
+      EXIT(10);
+    END;
+
+    [External]
+    PROCEDURE DocSourceNone@31() : Integer;
+    BEGIN
+      EXIT(0);
+    END;
+
+    [External]
+    PROCEDURE DocSourceFromHash@32() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE DocSourceFromMark@33() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    [External]
     PROCEDURE UnknownKeyNo@14() : Integer;
     BEGIN
       // "Номер ключа не опознан". Строку с ним НЕ выбрасывать: показывать сырым именем

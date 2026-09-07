@@ -186,11 +186,14 @@ SELECT TOP 1
   CONVERT(varchar(30),[Hobt Id]) + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
   [NAV Table Name] + '|' + CONVERT(varchar(11),[Resource Unresolved]) + '|' +
   CONVERT(varchar(11),[Victim Is NAV]) + '|' + CONVERT(varchar(11),[Open]) + '|' +
-  CONVERT(varchar(11),[Max Wait (ms)]) + '|' + [Wait Type]
+  CONVERT(varchar(11),[Max Wait (ms)]) + '|' + [Wait Type] + '|' +
+  [Document No_] + '|' + CONVERT(varchar(11),[Document Source]) + '|' +
+  [User Name] + '|' + CONVERT(varchar(11),[User Source]) + '|' + [No Document Reason]
 FROM $episode ORDER BY [Entry No_] DESC;
 "@
     if (-not $row) { Fail 'в журнале пусто - дальше проверять нечего' }
     $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
+    if ($f.Count -lt 19) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
 
     Check 'жертва и виновник те самые' ((([int]$f[0]) -eq $waiterSpid) -and (([int]$f[2]) -eq $blockerSpid)) `
         "жертва $($f[0]) при ожидаемой $waiterSpid, виновник $($f[2]) при ожидаемом $blockerSpid"
@@ -203,6 +206,14 @@ FROM $episode ORDER BY [Entry No_] DESC;
     Check 'чужая сессия названа чужой' ($f[10] -eq '2') "признак сессии NAV $($f[10]) при ожидаемом 2 (нет)"
     Check 'эпизод открыт и длительность растёт' (($f[11] -eq '1') -and (([int]$f[12]) -gt 0)) `
         "открыт $($f[11]), длительность $($f[12]) мс"
+
+    # Виновник держит блокировку на строке отметки контекста и своим же UPDATE поставил
+    # ей номер документа. Мост обязан пройти: транзакция -> её блокировка -> хэш ключа ->
+    # обратный поиск -> строка -> документ и учётная запись. Ни одного нового права.
+    Check 'документ назван по отметке контекста' (($f[14] -eq 'HELD') -and ($f[15] -eq '2')) `
+        "документ [$($f[14])], откуда $($f[15]) при ожидаемом 2 (по отметке), причина [$($f[18])]"
+    Check 'виновник назван по имени, без права платформы' (($f[16] -eq 'STAND') -and ($f[17] -eq '1')) `
+        "учётная запись [$($f[16])], откуда $($f[17]) при ожидаемом 1 (по отметке)"
 
     Write-Host 'Отпускаю блокировку и делаю второй проход'
     Stop-Sqlcmd $blocker

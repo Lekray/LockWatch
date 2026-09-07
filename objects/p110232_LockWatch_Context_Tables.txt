@@ -78,12 +78,12 @@ OBJECT Page 110232 LockWatch Context Tables
                 SourceExpr=Enabled }
 
     { 8   ;2   ;Field     ;
-                Name=AdapterPresent;
-                ToolTipML=[ENU=Specifies whether the subscriber adapter for this table exists. Without it the row is good for parsing but collects nothing, and the document column stays empty - which reads as no locks by document, and that is the worst possible answer.;
-                           RUS=Определяет, заведён ли переходник-подписчик для этой таблицы. Без него строка годится для разбора, но съёма не даёт, и колонка документа остаётся пустой - а это читается как "блокировок по документам не было", худший из возможных ответов.];
+                Name=MarksSeen;
+                ToolTipML=[ENU=Specifies whether marks for this table have actually arrived. It is evidence, not a declaration: an adapter that never fired is no different from one that does not exist, and a tick put here by hand would lie with more confidence than an empty field.;
+                           RUS=Определяет, приходят ли отметки по этой таблице на самом деле. Это улика, а не заявление: переходник, который ни разу не сработал, ничем не отличается от отсутствующего, а галка, поставленная рукой, врала бы увереннее, чем пустое поле.];
                 ApplicationArea=#All;
                 Editable=FALSE;
-                SourceExpr="Adapter Present" }
+                SourceExpr="Marks Seen" }
 
   }
   CODE
@@ -95,10 +95,10 @@ OBJECT Page 110232 LockWatch Context Tables
       доработанных объектов заказчика вообще появляются, - и появляются они в ДАННЫХ, а не
       в коде: код уезжает в публичный репозиторий, данные остаются на контуре.
 
-      Колонка "переходник заведён" заполняется не человеком, а сторожем, и смотреть на неё
-      надо в первую очередь: номер таблицы в подписке на событие - константа времени
-      компиляции, поэтому на каждую таблицу нужен свой маленький объект-переходник. Строка
-      без него выглядит рабочей и молчит.
+      Колонка "отметки приходят" - улика, а не заявление, и смотреть на неё надо в первую
+      очередь: номер таблицы в подписке на событие - константа времени компиляции, поэтому
+      на каждую таблицу нужен свой маленький объект-переходник. Строка без него выглядит
+      рабочей и молчит.
     }
     END.
   }
