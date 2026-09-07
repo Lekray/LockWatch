@@ -1,0 +1,160 @@
+OBJECT Table 110230 LockWatch Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Setup;
+               RUS=Настройка LockWatch];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Primary Key         ;Code10        ;CaptionML=[ENU=Primary Key;
+                                                              RUS=Первичный ключ] }
+    { 10  ;   ;Enabled             ;Boolean       ;CaptionML=[ENU=Enabled;
+                                                              RUS=Включён] }
+    { 11  ;   ;Poll Period (ms)    ;Integer       ;OnValidate=BEGIN
+                                                                CheckPollPeriod;
+                                                              END;
+
+                                                   CaptionML=[ENU=Poll Period (ms);
+                                                              RUS=Период опроса, мс];
+                                                   MinValue=1 }
+    { 12  ;   ;Max Rows per Pass   ;Integer       ;CaptionML=[ENU=Max Rows per Pass;
+                                                              RUS=Потолок строк за проход];
+                                                   MinValue=1 }
+    { 13  ;   ;Max Pass (ms)       ;Integer       ;CaptionML=[ENU=Max Pass (ms);
+                                                              RUS=Потолок прохода, мс];
+                                                   MinValue=1 }
+    { 14  ;   ;Retention (Days)    ;Integer       ;CaptionML=[ENU=Retention (Days);
+                                                              RUS=Срок хранения, дней];
+                                                   MinValue=1 }
+    { 20  ;   ;Collect Statement Values;Boolean   ;CaptionML=[ENU=Collect Statement Values;
+                                                              RUS=Собирать значения в операторах] }
+    { 21  ;   ;Alert Threshold (ms);Integer       ;CaptionML=[ENU=Alert Threshold (ms);
+                                                              RUS=Порог тревоги, мс];
+                                                   MinValue=0 }
+    { 30  ;   ;Deadlocks Enabled   ;Boolean       ;CaptionML=[ENU=Deadlocks Enabled;
+                                                              RUS=Собирать взаимоблокировки] }
+    { 31  ;   ;Deadlocks Read Until;DateTime      ;CaptionML=[ENU=Deadlocks Read Until;
+                                                              RUS=Взаимоблокировки прочитаны до];
+                                                   Editable=No }
+    { 40  ;   ;Last Pass At        ;DateTime      ;CaptionML=[ENU=Last Pass At;
+                                                              RUS=Последний проход];
+                                                   Editable=No }
+    { 41  ;   ;Last Pass (ms)      ;Integer       ;CaptionML=[ENU=Last Pass (ms);
+                                                              RUS=Последний проход, мс];
+                                                   Editable=No }
+    { 42  ;   ;Last Pass Rows      ;Integer       ;CaptionML=[ENU=Last Pass Rows;
+                                                              RUS=Строк в последнем проходе];
+                                                   Editable=No }
+    { 43  ;   ;Last Pass Truncated ;Boolean       ;CaptionML=[ENU=Last Pass Truncated;
+                                                              RUS=Последний проход усечён];
+                                                   Editable=No }
+    { 50  ;   ;Watchdog Message    ;Text250       ;CaptionML=[ENU=Watchdog Message;
+                                                              RUS=Сообщение сторожа];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Primary Key                             ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      PeriodTooLongErr@1000000000 : TextConst 'ENU=The poll period must be shorter than the NAV lock timeout of %1 ms. An episode fits entirely inside that window, and a longer period would miss whole episodes without saying so.;RUS=Период опроса должен быть короче предела ожидания блокировки NAV в %1 мс. Эпизод целиком укладывается в это окно, и период длиннее терял бы эпизоды целиком, ничего об этом не сообщая.';
+
+    [External]
+    PROCEDURE FetchOnce@1();
+    BEGIN
+      // Настройка одна на базу. Заводится сама и с осмысленными значениями: пустая
+      // запись превратила бы ловимое "записи нет" в TESTFIELD посреди фоновой задачи.
+      IF GET THEN
+        EXIT;
+      INIT;
+      "Primary Key" := '';
+      Enabled := FALSE;
+      "Poll Period (ms)" := DefaultPollPeriodMs;
+      "Max Rows per Pass" := DefaultMaxRows;
+      "Max Pass (ms)" := DefaultMaxPassMs;
+      "Retention (Days)" := DefaultRetentionDays;
+      "Alert Threshold (ms)" := DefaultAlertMs;
+      "Collect Statement Values" := FALSE;
+      "Deadlocks Enabled" := TRUE;
+      INSERT;
+    END;
+
+    LOCAL PROCEDURE CheckPollPeriod@2();
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+    BEGIN
+      // Предел ожидания у NAV - 10 000 мс, и эпизод целиком укладывается в это окно.
+      // Период, равный пределу или больше, означает журнал, который честно пуст на
+      // сломанной системе. Это не настройка среды, это смысловая граница - в коде.
+      IF "Poll Period (ms)" >= Parse.NavLockTimeoutMs THEN
+        ERROR(PeriodTooLongErr,Parse.NavLockTimeoutMs);
+    END;
+
+    LOCAL PROCEDURE DefaultPollPeriodMs@3() : Integer;
+    BEGIN
+      // Три секунды. Заметно меньше предела в 10 000 мс, чтобы эпизод был увиден
+      // хотя бы дважды, и заметно больше цены прохода (12 мс при двухстах ждущих),
+      // чтобы наблюдение не стоило заметной доли ядра.
+      EXIT(3000);
+    END;
+
+    LOCAL PROCEDURE DefaultMaxRows@4() : Integer;
+    BEGIN
+      // Совпадает с размерностью массивов разматывания цепочки в Codeunit 110230.
+      // Больше пятисот ждущих - это не разбор, а шторм; проход метится "усечён".
+      EXIT(500);
+    END;
+
+    LOCAL PROCEDURE DefaultMaxPassMs@5() : Integer;
+    BEGIN
+      // Проход обязан кончиться заведомо раньше следующего. Треть периода оставляет
+      // запас и на NAV-половину, которая в шторм и есть самая дорогая часть.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE DefaultRetentionDays@6() : Integer;
+    BEGIN
+      // Срок объявленный, а не "сколько накопится": инструмент показывает чужие
+      // учётные записи, и бессрочное хранение - отдельный разговор со службой
+      // безопасности, которого мы не выиграем.
+      EXIT(30);
+    END;
+
+    LOCAL PROCEDURE DefaultAlertMs@7() : Integer;
+    BEGIN
+      // Половина предела NAV. Эпизод, переваливший за пять секунд, уже заметен
+      // человеку, но ещё не кончился отказом - тревога успевает быть полезной.
+      EXIT(5000);
+    END;
+
+    BEGIN
+    {
+      Настройка. Здесь живёт только то, что зависит от СРЕДЫ: период, потолки, срок
+      хранения, порог тревоги, выключатели. Смысловые границы - в коде функциями с
+      доводом рядом, и предел ожидания NAV (10 000 мс) - одна из них: сюда он не
+      попадает и настройкой не задаётся.
+
+      Умолчания заведены не нулями. Пустая запись настройки переводит ловимое "записи
+      нет" в TESTFIELD посреди фоновой задачи, а необработанное исключение на старте
+      сессии роняет клиент насмерть, без окна с текстом.
+
+      Галка сбора значений в операторах выключена нарочно и по умолчанию: для службы
+      безопасности это выгрузка данных, а не структура, и согласование проходится
+      один раз.
+    }
+    END.
+  }
+}

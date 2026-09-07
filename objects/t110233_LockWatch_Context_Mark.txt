@@ -1,0 +1,113 @@
+OBJECT Table 110233 LockWatch Context Mark
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Context Mark;
+               RUS=Отметка контекста LockWatch];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Server Instance Id  ;Integer       ;CaptionML=[ENU=Server Instance Id;
+                                                              RUS=Экземпляр службы] }
+    { 2   ;   ;Session Id          ;Integer       ;CaptionML=[ENU=Session Id;
+                                                              RUS=Сеанс NAV] }
+    { 10  ;   ;User Id             ;Code50        ;CaptionML=[ENU=User Id;
+                                                              RUS=Учётная запись] }
+    { 11  ;   ;Company Name        ;Text30        ;CaptionML=[ENU=Company Name;
+                                                              RUS=Компания] }
+    { 12  ;   ;Table No.           ;Integer       ;CaptionML=[ENU=Table No.;
+                                                              RUS=Таблица контекста] }
+    { 13  ;   ;Document No.        ;Code20        ;CaptionML=[ENU=Document No.;
+                                                              RUS=Документ] }
+    { 14  ;   ;Marked At           ;DateTime      ;CaptionML=[ENU=Marked At;
+                                                              RUS=Отмечено] }
+  }
+  KEYS
+  {
+    {    ;Server Instance Id,Session Id           ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE Mark@1(ContextTableNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20]);
+    BEGIN
+      // Отметка ставится подписчиком на событие таблицы контекста, то есть ВНУТРИ
+      // транзакции пишущего. Этим она и ценна: транзакция виновника держит на этой
+      // строке монопольную блокировку, и по номеру транзакции её можно найти со
+      // стороны SQL. Это не корреляция по времени, а факт.
+      //
+      // Строка СВОЯ у каждого сеанса. Поэтому сама отметка ни с кем не конкурирует и
+      // чужой блокировки не создаёт, а вставки в конец индекса, за который дрались бы
+      // все сессии сразу, здесь не возникает вовсе: после первого раза это MODIFY.
+      IF GET(SERVICEINSTANCEID,SESSIONID) THEN BEGIN
+        FillFrom(ContextTableNo,DocumentNo);
+        MODIFY;
+      END ELSE BEGIN
+        INIT;
+        "Server Instance Id" := SERVICEINSTANCEID;
+        "Session Id" := SESSIONID;
+        FillFrom(ContextTableNo,DocumentNo);
+        INSERT;
+      END;
+    END;
+
+    [External]
+    PROCEDURE Release@2();
+    BEGIN
+      // Снимать отметку после каждой операции не нужно: она всё равно перезапишется
+      // следующей записью того же сеанса, а лишняя запись стоит чужой транзакции.
+      // А вот при выходе сеанса убрать её стоит - иначе журнал назовёт документ по
+      // отметке, оставшейся от работы, которая давно кончилась.
+      IF GET(SERVICEINSTANCEID,SESSIONID) THEN
+        DELETE;
+    END;
+
+    LOCAL PROCEDURE FillFrom@3(ContextTableNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20]);
+    BEGIN
+      "User Id" := COPYSTR(USERID,1,MAXSTRLEN("User Id"));
+      "Company Name" := COPYSTR(COMPANYNAME,1,MAXSTRLEN("Company Name"));
+      "Table No." := ContextTableNo;
+      "Document No." := DocumentNo;
+      "Marked At" := CURRENTDATETIME;
+    END;
+
+    BEGIN
+    {
+      Отметка "этот сеанс работает вот с этим документом". Единственное место во всём
+      инструменте, куда пишут ЧУЖИЕ сессии, а не фоновая задача, - и потому единственное,
+      где цена записи ложится на прикладную работу заказчика.
+
+      Ключ составной, и это не украшение: SESSIONID уникален только ВНУТРИ экземпляра
+      службы. На контуре с двумя экземплярами два разных человека получили бы один и тот
+      же номер сеанса, и отметка одного молча перетирала бы отметку другого - а журнал
+      с уверенностью называл бы чужой документ. Отсюда SERVICEINSTANCEID в ключе; он же,
+      кстати, число, а не имя: имени экземпляра C/AL не отдаёт вовсе, оно лежит в
+      Table 2000000110 "Active Session".
+
+      Три ограничения, каждое вписано нарочно:
+
+      1. Строка своя у каждого сеанса. Ни спора за строку, ни спора за последнюю
+         страницу индекса, которая была бы одна на всю систему при сквозном номере.
+      2. Ни одного SumIndexFields и ни одного вторичного ключа: каждый лишний индекс -
+         это ещё одна запись в чужой транзакции.
+      3. Отметка добавляет ОДНУ запись в транзакцию, которая и так пишет в таблицу
+         контекста. Меряется это до включения на бою, а не после.
+
+      COMMIT внутри прикладной операции закрывает транзакцию и рвёт мост к SQL. Здесь
+      это лечится само: подписчик срабатывает на КАЖДОЙ записи, поэтому первая же запись
+      после COMMIT кладёт отметку в новую транзакцию.
+    }
+    END.
+  }
+}

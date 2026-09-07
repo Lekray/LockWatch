@@ -1,0 +1,155 @@
+OBJECT Table 110231 LockWatch Episode
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Episode;
+               RUS=Эпизод блокировки];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;CaptionML=[ENU=Entry No.;
+                                                              RUS=Номер записи] }
+    { 10  ;   ;Victim SPID         ;Integer       ;CaptionML=[ENU=Victim SPID;
+                                                              RUS=Жертва, spid] }
+    { 11  ;   ;Victim Transaction Id;BigInteger   ;CaptionML=[ENU=Victim Transaction Id;
+                                                              RUS=Жертва, транзакция] }
+    { 12  ;   ;Victim Is NAV       ;Option        ;CaptionML=[ENU=Victim Is NAV;
+                                                              RUS=Жертва - сессия NAV];
+                                                   OptionCaptionML=[ENU=Unknown,Yes,No;
+                                                                    RUS=Не опознана,Да,Нет];
+                                                   OptionString=Unknown,Yes,No }
+    { 13  ;   ;Victim Host         ;Text80        ;CaptionML=[ENU=Victim Host;
+                                                              RUS=Жертва, машина] }
+    { 14  ;   ;Victim Process Id   ;Integer       ;CaptionML=[ENU=Victim Process Id;
+                                                              RUS=Жертва, процесс] }
+    { 20  ;   ;Blocker SPID        ;Integer       ;CaptionML=[ENU=Blocker SPID;
+                                                              RUS=Непосредственный блокирующий, spid] }
+    { 21  ;   ;Blocker Transaction Id;BigInteger  ;CaptionML=[ENU=Blocker Transaction Id;
+                                                              RUS=Блокирующий, транзакция] }
+    { 22  ;   ;Head SPID           ;Integer       ;CaptionML=[ENU=Head SPID;
+                                                              RUS=Голова цепочки, spid] }
+    { 23  ;   ;Chain Depth         ;Integer       ;CaptionML=[ENU=Chain Depth;
+                                                              RUS=Глубина цепочки] }
+    { 24  ;   ;Victims Behind Head ;Integer       ;CaptionML=[ENU=Victims Behind Head;
+                                                              RUS=Жертв за головой] }
+    { 25  ;   ;Chain Ring          ;Boolean       ;CaptionML=[ENU=Chain Ring;
+                                                              RUS=Цепочка замкнулась в кольцо] }
+    { 26  ;   ;Head Is Foreign     ;Boolean       ;CaptionML=[ENU=Head Is Foreign;
+                                                              RUS=Голова не наша] }
+    { 30  ;   ;Resource Kind       ;Code20        ;CaptionML=[ENU=Resource Kind;
+                                                              RUS=Род ресурса] }
+    { 31  ;   ;Hobt Id             ;BigInteger    ;CaptionML=[ENU=Hobt Id;
+                                                              RUS=Hobt] }
+    { 32  ;   ;Database Id         ;Integer       ;CaptionML=[ENU=Database Id;
+                                                              RUS=Номер базы] }
+    { 33  ;   ;Held Mode           ;Code10        ;CaptionML=[ENU=Held Mode;
+                                                              RUS=Режим держимой блокировки] }
+    { 34  ;   ;Wait Type           ;Code30        ;CaptionML=[ENU=Wait Type;
+                                                              RUS=Чего ждёт жертва] }
+    { 35  ;   ;SQL Object Name     ;Text250       ;CaptionML=[ENU=SQL Object Name;
+                                                              RUS=Имя объекта SQL] }
+    { 36  ;   ;NAV Table Name      ;Text250       ;CaptionML=[ENU=NAV Table Name;
+                                                              RUS=Таблица NAV] }
+    { 37  ;   ;NAV Key No.         ;Integer       ;CaptionML=[ENU=NAV Key No.;
+                                                              RUS=Ключ NAV];
+                                                   BlankNumbers=DontBlank }
+    { 38  ;   ;On SIFT             ;Boolean       ;CaptionML=[ENU=On SIFT;
+                                                              RUS=На SIFT-агрегате] }
+    { 39  ;   ;Resource Unresolved ;Boolean       ;CaptionML=[ENU=Resource Unresolved;
+                                                              RUS=Ресурс не опознан] }
+    { 40  ;   ;Started At          ;DateTime      ;CaptionML=[ENU=Started At;
+                                                              RUS=Начало] }
+    { 41  ;   ;Ended At            ;DateTime      ;CaptionML=[ENU=Ended At;
+                                                              RUS=Конец] }
+    { 42  ;   ;Last Seen At        ;DateTime      ;CaptionML=[ENU=Last Seen At;
+                                                              RUS=Последнее наблюдение] }
+    { 43  ;   ;Max Wait (ms)       ;Integer       ;CaptionML=[ENU=Max Wait (ms);
+                                                              RUS=Длительность, мс] }
+    { 44  ;   ;Last Wait (ms)      ;Integer       ;CaptionML=[ENU=Last Wait (ms);
+                                                              RUS=Последняя наблюдённая, мс] }
+    { 45  ;   ;Blocker Tran Began At;DateTime     ;CaptionML=[ENU=Blocker Tran Began At;
+                                                              RUS=Транзакция виновника начата] }
+    { 46  ;   ;Open                ;Boolean       ;CaptionML=[ENU=Open;
+                                                              RUS=Эпизод открыт] }
+    { 47  ;   ;Outcome             ;Option        ;CaptionML=[ENU=Outcome;
+                                                              RUS=Исход];
+                                                   OptionCaptionML=[ENU=Undetermined,Granted,Timed out;
+                                                                    RUS=Не определён,Дождался,Отказ по пределу];
+                                                   OptionString=Undetermined,Granted,TimedOut }
+    { 48  ;   ;Class               ;Option        ;CaptionML=[ENU=Class;
+                                                              RUS=Класс];
+                                                   OptionCaptionML=[ENU=Plain,Escalation,Sleeping transaction,Deadlock;
+                                                                    RUS=Спор за строку,Эскалация,Спит в транзакции,Взаимоблокировка];
+                                                   OptionString=Plain,Escalation,SleepingTran,Deadlock }
+    { 50  ;   ;Document No.        ;Code20        ;CaptionML=[ENU=Document No.;
+                                                              RUS=Документ] }
+    { 51  ;   ;Document Source     ;Option        ;CaptionML=[ENU=Document Source;
+                                                              RUS=Откуда документ];
+                                                   OptionCaptionML=[ENU=None,From lock hash,From context mark,Sources disagree;
+                                                                    RUS=Нет,По хэшу блокировки,По отметке контекста,Ответы разошлись];
+                                                   OptionString=None,FromHash,FromMark,Disagree }
+    { 52  ;   ;No Document Reason  ;Text100       ;CaptionML=[ENU=No Document Reason;
+                                                              RUS=Почему документа нет] }
+    { 60  ;   ;User Name           ;Code50        ;CaptionML=[ENU=User Name;
+                                                              RUS=Пользователь] }
+    { 61  ;   ;User Source         ;Option        ;CaptionML=[ENU=User Source;
+                                                              RUS=Откуда имя];
+                                                   OptionCaptionML=[ENU=None,From context mark,From platform;
+                                                                    RUS=Нет,По отметке контекста,От платформы];
+                                                   OptionString=None,FromMark,FromPlatform }
+    { 70  ;   ;Blocker Statement   ;Text250       ;CaptionML=[ENU=Blocker Statement;
+                                                              RUS=Последний оператор виновника] }
+    { 71  ;   ;NAV Object No.      ;Integer       ;CaptionML=[ENU=NAV Object No.;
+                                                              RUS=Номер объекта NAV] }
+    { 80  ;   ;Advice              ;Text250       ;CaptionML=[ENU=Advice;
+                                                              RUS=Совет] }
+    { 81  ;   ;Advice Evidence     ;Text250       ;CaptionML=[ENU=Advice Evidence;
+                                                              RUS=Улика, по которой совет выдан] }
+  }
+  KEYS
+  {
+    {    ;Entry No.                               ;Clustered=Yes }
+    {    ;Open,Victim SPID,Victim Transaction Id,Hobt Id }
+    {    ;Started At                               }
+    {    ;Head SPID,Open                           }
+    {    ;NAV Table Name,Started At                }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    BEGIN
+    {
+      Эпизод - непрерывное ожидание ОДНОЙ жертвы на ОДНОМ ресурсе, одной строкой,
+      которая обновляется, а не плодится снимками. В шторм это единственное, что
+      удерживает NAV-половину прохода в разумной цене.
+
+      Ни одного SumIndexFields здесь нет и быть не должно: наблюдатель, заведший себе
+      SIFT-агрегат, сам станет тем, за что дерутся. По той же причине здесь нет
+      FlowField'ов со счётом по журналу.
+
+      Ключ "Entry No." сквозной, и это осознанно: в эту таблицу пишет ОДНА фоновая
+      задача, поэтому спора за последнюю страницу индекса не возникает. У таблицы
+      отметки контекста (110233), куда пишут все сессии сразу, ключ другой - по сеансу,
+      и там строка своя у каждого.
+
+      Три поля названы честно и потому длинно:
+        "Непосредственный блокирующий" - кого назвал SQL, а не кто виноват;
+        "Голова цепочки" - кто не ждёт сам, то есть настоящий виновник;
+        "Последняя наблюдённая, мс" - по ней видно, насколько твёрд вывод об исходе.
+
+      "Ресурс не опознан" - не повод выбросить строку. Показывается сырым именем и
+      считается счётчиком: молчаливый пропуск и есть ложь.
+    }
+    END.
+  }
+}

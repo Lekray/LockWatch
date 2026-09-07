@@ -41,6 +41,7 @@ param(
     [string] $Database       = $env:LW_DATABASE,
     [string] $Instance       = $env:LW_INSTANCE,
     [string] $Company        = $env:LW_COMPANY,
+    [int]    $MgmtPort       = 7145,
     [int]    $TestCodeunitId = 110231,
     [int]    $TimeoutMinutes = 3,
     [switch] $Run,
@@ -65,6 +66,28 @@ $typeOrder = @{ 't' = 1; 'c' = 2; 'r' = 3; 'p' = 4; 'x' = 5; 'q' = 6; 'm' = 7 }
 $files = Get-ChildItem (Join-Path $objects '*.txt') |
     Sort-Object @{ Expression = { $order = $typeOrder[$_.Name.Substring(0,1)]; if ($order) { $order } else { 99 } } }, Name
 if (-not $files) { Fail "в $objects нет ни одного объекта" }
+
+function Ensure-Instance([string]$why) {
+    if (-not $Instance) { Fail "нужен экземпляр службы ($why): переменная LW_INSTANCE или параметр -Instance" }
+    $svc = "MicrosoftDynamicsNavServer`$$Instance"
+    if ((Get-Service $svc).Status -eq 'Running') { return $false }
+    Write-Host "  поднимаю службу $Instance ($why)"
+    Start-Service $svc
+    $deadline = (Get-Date).AddMinutes(5)
+    while ((Get-Service $svc).Status -ne 'Running' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+    if ((Get-Service $svc).Status -ne 'Running') { Fail "служба $Instance не поднялась" }
+    return $true
+}
+
+# Схему таблиц синхронизирует СЛУЖБА, а не finsql. Без поднятого экземпляра импорт с
+# SynchronizeSchemaChanges=Force даёт "Unable to process table changes ... Management Port: 0",
+# и отказ этот тянет за собой всю пачку - она откатывается целиком.
+$hasTables = @($files | Where-Object { $_.Name.Substring(0,1) -eq 't' }).Count -gt 0
+$navServerArgs = ''
+if ($hasTables) {
+    Ensure-Instance 'в пакете есть таблицы' | Out-Null
+    $navServerArgs = ",NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort"
+}
 
 function Invoke-Sql([string]$query) {
     $answer = & sqlcmd -S $Server -d $Database -E -l 30 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
@@ -116,7 +139,7 @@ Write-Host "  несобранных в базе до выкладки: $uncompi
 
 Write-Host 'Импорт и компиляция'
 $stamp = Get-Date -Format 'HHmmss'
-Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,SynchronizeSchemaChanges=Force" "import-$stamp.log"
+Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,SynchronizeSchemaChanges=Force$navServerArgs" "import-$stamp.log"
 
 $typeNo = @{ 't' = 1; 'c' = 5; 'r' = 3; 'p' = 8; 'x' = 6; 'q' = 9; 'm' = 4 }
 $typeNm = @{ 't' = 'Table'; 'c' = 'Codeunit'; 'r' = 'Report'; 'p' = 'Page'; 'x' = 'XMLport'; 'q' = 'Query'; 'm' = 'MenuSuite' }
@@ -132,7 +155,10 @@ $declared = foreach ($file in $files) {
 
 foreach ($group in $declared | Group-Object Letter) {
     $ids = ($group.Group.Id | Sort-Object) -join '|'
-    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=$($typeNm[$group.Name]);ID=$ids`"" "compile-$($group.Name)-$stamp.log"
+    # Координаты службы нужны и компиляции, а не только импорту: таблицу компилятор
+    # синхронизирует со схемой SQL через ту же службу, и без них падает с
+    # "Management Port: 0" - при этом ИМПОРТ уже прошёл, и отказ выглядит внезапным.
+    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=$($typeNm[$group.Name]);ID=$ids`"$navServerArgs" "compile-$($group.Name)-$stamp.log"
 }
 
 Write-Host 'Вердикт по базе, а не по логу'

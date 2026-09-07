@@ -1,0 +1,77 @@
+OBJECT Table 110232 LockWatch Context Table
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Context Table;
+               RUS=Таблица контекста LockWatch];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Table No.           ;Integer       ;OnValidate=BEGIN
+                                                                SetNameFromTable;
+                                                              END;
+
+                                                   CaptionML=[ENU=Table No.;
+                                                              RUS=Номер таблицы];
+                                                   MinValue=1 }
+    { 10  ;   ;Table Name          ;Text80        ;CaptionML=[ENU=Table Name;
+                                                              RUS=Имя таблицы];
+                                                   Editable=No }
+    { 11  ;   ;Document Field No.  ;Integer       ;CaptionML=[ENU=Document Field No.;
+                                                              RUS=Поле с номером документа];
+                                                   MinValue=1 }
+    { 12  ;   ;Document Caption    ;Text50        ;CaptionML=[ENU=Document Caption;
+                                                              RUS=Подпись документа для экрана] }
+    { 20  ;   ;Enabled             ;Boolean       ;CaptionML=[ENU=Enabled;
+                                                              RUS=Включена] }
+    { 21  ;   ;Adapter Present     ;Boolean       ;CaptionML=[ENU=Adapter Present;
+                                                              RUS=Переходник-подписчик заведён];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Table No.                               ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    LOCAL PROCEDURE SetNameFromTable@1();
+    VAR
+      AllObjWithCaption@1000000000 : Record 2000000058;
+    BEGIN
+      // Имя подставляем сами: строка настройки, в которой стоит один номер, читается
+      // как "неизвестно что" и проверить её глазами нельзя.
+      "Table Name" := '';
+      IF "Table No." = 0 THEN
+        EXIT;
+      IF AllObjWithCaption.GET(AllObjWithCaption."Object Type"::Table,"Table No.") THEN
+        "Table Name" := COPYSTR(AllObjWithCaption."Object Caption",1,MAXSTRLEN("Table Name"));
+    END;
+
+    BEGIN
+    {
+      Список "таблица плюс поле, несущее номер документа". Инструмент не знает, что за
+      документ у заказчика; он знает, что у таблицы T поле F - это его номер. Поэтому
+      номера доработанных объектов заказчика живут ЗДЕСЬ, в данных, а не в коде: код
+      уезжает в публичный репозиторий, данные - нет.
+
+      Поле "Переходник заведён" заполняет не человек, а сторож. Номер таблицы в подписке
+      на событие - константа времени компиляции (см. FINDINGS, раздел 10), поэтому на
+      каждую таблицу контекста нужен свой маленький объект-переходник. Строка настройки
+      без переходника отвечает за РАЗБОР, но съёма не даёт, и колонка документа окажется
+      пустой. Сторож обязан на это ругаться: пустая колонка без объяснения - худшее из
+      возможного, потому что выглядит как "блокировок по документам не было".
+    }
+    END.
+  }
+}
