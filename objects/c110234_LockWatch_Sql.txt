@@ -1,0 +1,485 @@
+OBJECT Codeunit 110234 LockWatch Sql
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+      LastError@1000000001 : Text;
+      NoServerErr@1000000002 : TextConst 'ENU=The SQL server name is not filled in the LockWatch setup. The platform does not tell it to C/AL: Active Session carries the NAV server, not the database one.;RUS=В настройке LockWatch не заполнено имя сервера SQL. Платформа его коду не отдаёт: в Active Session записан сервер NAV, а не сервер базы.';
+      NoClockErr@1000000004 : TextConst 'ENU=The server did not return the observation moment. Substituting the NAV clock here would silently shift every episode start.;RUS=Сервер не отдал момент наблюдения. Подставить сюда часы NAV значило бы молча сдвинуть начало каждого эпизода.';
+      NoDatabaseErr@1000000003 : TextConst 'ENU=The database name is not known: the current session is missing from Active Session.;RUS=Имя базы неизвестно: текущего сеанса нет в Active Session.';
+
+    [External]
+    PROCEDURE ReadQueue@1(MaxRows@1000000000 : Integer;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer) : Boolean;
+    BEGIN
+      // Один запрос на проход, и он же приносит ЧАСЫ. Часы нужны серверные: NAV и SQL
+      // могут стоять на разных машинах, а в журнале рядом лежат начало эпизода (считанное
+      // назад от наблюдения) и начало транзакции виновника (взятое у SQL). Смешать две
+      // шкалы значит получить эпизод, начавшийся раньше собственной причины.
+      LastError := '';
+      RowCount := 0;
+      OtherDatabase := 0;
+      CLEAR(Waiter);
+      CLEAR(Blocker);
+      CLEAR(BlockerIsNav);
+      Observed.RESET;
+      Observed.DELETEALL;
+      IF MaxRows <= 0 THEN
+        MaxRows := Parse.MaxWaitersPerPass;
+      IF MaxRows > Parse.MaxWaitersPerPass THEN
+        MaxRows := Parse.MaxWaitersPerPass;
+      IF TryReadQueue(MaxRows,Observed,Waiter,Blocker,BlockerIsNav,RowCount,ObservedAt,OtherDatabase) THEN
+        EXIT(TRUE);
+      // Отказ съёма не роняет фоновую задачу: прав может не быть, сервер может быть занят,
+      // и в обоих случаях правильный ответ - записать причину и жить дальше. Молча
+      // проглоченная ошибка тут страшнее отказа: журнал выглядел бы просто пустым.
+      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ResolveNames@2(VAR Observed@1000000000 : TEMPORARY Record 110231) : Boolean;
+    BEGIN
+      LastError := '';
+      IF TryResolveNames(Observed) THEN
+        EXIT(TRUE);
+      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE LastErrorText@3() : Text;
+    BEGIN
+      EXIT(LastError);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryReadQueue@4(MaxRows@1000000000 : Integer;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer);
+    VAR
+      SqlConn@1000000008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlCmd@1000000009 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlReader@1000000010 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      OurDatabaseId@1000000011 : Integer;
+      Kind@1000000012 : Text;
+      HobtId@1000000013 : BigInteger;
+      ObjectId@1000000014 : Integer;
+      DatabaseId@1000000015 : Integer;
+      HeldMode@1000000016 : Text;
+      ResourceText@1000000017 : Text;
+      Parsed@1000000018 : Boolean;
+    BEGIN
+      SqlConn := SqlConn.SqlConnection(ConnString);
+      SqlConn.Open;
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText := QueueSql(MaxRows);
+      SqlReader := SqlCmd.ExecuteReader;
+
+      // Первый набор - часы и номер базы. Он приходит ДАЖЕ когда ждущих нет: без него
+      // проход, заставший тишину, не знал бы, каким моментом закрывать вчерашние эпизоды.
+      IF NOT SqlReader.Read THEN
+        ERROR(NoClockErr);
+      ObservedAt := SqlMoment(SqlReader.GetInt32(0),SqlReader.GetInt32(1));
+      OurDatabaseId := SqlReader.GetInt32(2);
+      SqlReader.NextResult;
+
+      WHILE SqlReader.Read DO BEGIN
+        ResourceText := ReaderText(SqlReader,4);
+        Parsed := Parse.ParseWaitResource(ResourceText,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+        // Чужая база на том же сервере - не наша беда и не наш журнал. Считается
+        // отдельно: пустая колонка без объяснения читается как "блокировок не было".
+        IF Parsed AND (DatabaseId <> OurDatabaseId) AND (OurDatabaseId <> 0) THEN
+          OtherDatabase := OtherDatabase + 1
+        ELSE BEGIN
+          RowCount := RowCount + 1;
+          Waiter[RowCount] := SqlReader.GetInt32(0);
+          Blocker[RowCount] := ReaderInt(SqlReader,1);
+          BlockerIsNav[RowCount] := IsNavProgram(ReaderText(SqlReader,11));
+
+          Observed.INIT;
+          Observed."Entry No." := RowCount;
+          Observed."Victim SPID" := Waiter[RowCount];
+          Observed."Victim Transaction Id" := ReaderBigInt(SqlReader,8);
+          Observed."Victim Is NAV" := NavFlag(ReaderText(SqlReader,7));
+          Observed."Victim Host" := COPYSTR(ReaderText(SqlReader,5),1,MAXSTRLEN(Observed."Victim Host"));
+          Observed."Victim Process Id" := ReaderInt(SqlReader,6);
+          Observed."Blocker SPID" := Blocker[RowCount];
+          Observed."Blocker Transaction Id" := ReaderBigInt(SqlReader,9);
+          Observed."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,14),ReaderInt(SqlReader,15));
+          Observed."Wait Type" := COPYSTR(ReaderText(SqlReader,3),1,MAXSTRLEN(Observed."Wait Type"));
+          Observed."Last Wait (ms)" := SqlReader.GetInt32(2);
+          Observed."Resource Kind" := COPYSTR(UPPERCASE(Kind),1,MAXSTRLEN(Observed."Resource Kind"));
+          Observed."Held Mode" := COPYSTR(HeldMode,1,MAXSTRLEN(Observed."Held Mode"));
+          Observed."Hobt Id" := HobtId;
+          Observed."Database Id" := DatabaseId;
+          Observed."SQL Object Id" := ObjectId;
+          Observed."NAV Key No." := Parse.UnknownKeyNo;
+          Observed."Resource Unresolved" := NOT Parsed;
+          IF NOT Parsed THEN
+            // Ресурс, который мы не поняли, показывается СЫРЫМ. Выбросить строку значило
+            // бы соврать тишиной, а показать пустую - соврать дважды.
+            Observed."SQL Object Name" := COPYSTR(ResourceText,1,MAXSTRLEN(Observed."SQL Object Name"));
+          Observed.Class := EpisodeClassOf(SqlReader);
+          Observed.INSERT;
+        END;
+      END;
+      SqlReader.Close;
+      SqlConn.Close;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryResolveNames@5(VAR Observed@1000000000 : TEMPORARY Record 110231);
+    VAR
+      SqlConn@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlCmd@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlReader@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      HobtList@1000000004 : Text;
+      ObjectList@1000000005 : Text;
+      Source@1000000006 : Integer;
+      Id@1000000007 : BigInteger;
+      ObjectName@1000000008 : Text;
+      IndexName@1000000009 : Text;
+    BEGIN
+      // Имя таблицы и номер ключа - вторым запросом, а не подзапросом в первом: разбор
+      // описания ресурса живёт в C/AL и проверен прогоном, а повторять его на T-SQL
+      // значило бы завести вторые правила разбора, которые никто не сверяет с первыми.
+      BuildLists(Observed,HobtList,ObjectList);
+      IF (HobtList = '') AND (ObjectList = '') THEN
+        EXIT;
+
+      SqlConn := SqlConn.SqlConnection(ConnString);
+      SqlConn.Open;
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText := NameSql(HobtList,ObjectList);
+      SqlReader := SqlCmd.ExecuteReader;
+      WHILE SqlReader.Read DO BEGIN
+        Source := SqlReader.GetInt32(0);
+        Id := SqlReader.GetInt64(1);
+        ObjectName := ReaderText(SqlReader,2);
+        IndexName := ReaderText(SqlReader,3);
+        ApplyName(Observed,Source,Id,ObjectName,IndexName);
+      END;
+      SqlReader.Close;
+      SqlConn.Close;
+    END;
+
+    LOCAL PROCEDURE ApplyName@6(VAR Observed@1000000000 : TEMPORARY Record 110231;Source@1000000001 : Integer;Id@1000000002 : BigInteger;ObjectName@1000000003 : Text;IndexName@1000000004 : Text);
+    VAR
+      CompanyName@1000000005 : Text;
+      TableName@1000000006 : Text;
+      SiftKeyNo@1000000007 : Integer;
+      KeyNo@1000000008 : Integer;
+      SqlObjectId@1000000009 : Integer;
+    BEGIN
+      IF NOT Parse.SplitSqlObjectName(ObjectName,CompanyName,TableName,SiftKeyNo) THEN
+        EXIT;
+      // Правил два, и одно теряет самый частый случай блокировок NAV молча: у таблицы
+      // номер ключа несёт имя ИНДЕКСА, у SIFT-представления - имя самого объекта.
+      IF SiftKeyNo <> Parse.UnknownKeyNo THEN
+        KeyNo := SiftKeyNo
+      ELSE
+        KeyNo := Parse.KeyNoFromIndexName(IndexName);
+
+      Observed.RESET;
+      IF Source = SourceHobt THEN
+        Observed.SETRANGE("Hobt Id",Id)
+      ELSE BEGIN
+        SqlObjectId := Id;
+        Observed.SETRANGE("Hobt Id",0);
+        Observed.SETRANGE("SQL Object Id",SqlObjectId);
+      END;
+      IF Observed.FINDSET(TRUE) THEN
+        REPEAT
+          Observed."SQL Object Name" := COPYSTR(ObjectName,1,MAXSTRLEN(Observed."SQL Object Name"));
+          Observed."NAV Table Name" := COPYSTR(TableName,1,MAXSTRLEN(Observed."NAV Table Name"));
+          Observed."NAV Key No." := KeyNo;
+          Observed."On SIFT" := SiftKeyNo <> Parse.UnknownKeyNo;
+          Observed.MODIFY;
+        UNTIL Observed.NEXT = 0;
+      Observed.RESET;
+    END;
+
+    LOCAL PROCEDURE BuildLists@7(VAR Observed@1000000000 : TEMPORARY Record 110231;VAR HobtList@1000000001 : Text;VAR ObjectList@1000000002 : Text);
+    BEGIN
+      // Повторы в списке не убираем: в наборе SQL одному hobt отвечает одна строка, и
+      // ответ приходит различённым сам собой. Отдельный проход ради уникальности стоил бы
+      // дороже, чем лишние знаки в тексте запроса.
+      HobtList := '';
+      ObjectList := '';
+      Observed.RESET;
+      IF Observed.FINDSET THEN
+        REPEAT
+          IF Observed."Hobt Id" <> 0 THEN
+            HobtList := AppendId(HobtList,FORMAT(Observed."Hobt Id"))
+          ELSE
+            IF Observed."SQL Object Id" <> 0 THEN
+              ObjectList := AppendId(ObjectList,FORMAT(Observed."SQL Object Id"));
+        UNTIL Observed.NEXT = 0;
+      Observed.RESET;
+    END;
+
+    LOCAL PROCEDURE AppendId@8(List@1000000000 : Text;Value@1000000001 : Text) : Text;
+    BEGIN
+      IF List = '' THEN
+        EXIT(Value);
+      EXIT(List + ',' + Value);
+    END;
+
+    LOCAL PROCEDURE QueueSql@9(MaxRows@1000000000 : Integer) : Text;
+    VAR
+      Sql@1000000001 : Text;
+    BEGIN
+      // Каждое целое приведено к int нарочно, и это не перестраховка: номер сеанса и
+      // номер базы в системных представлениях - smallint, а GetInt32 на smallint падает
+      // с "Specified cast is not valid". Отказ приходит на ПЕРВОЙ строке очереди, то есть
+      // ровно тогда, когда блокировка наконец случилась, - и выглядит как "инструмент не
+      // видит блокировок". Тип столбца в DMV проверять раньше, чем себя.
+      //
+      // Порядок по убыванию длительности не украшение: при усечении в журнал попадают
+      // САМЫЕ ДОЛГИЕ ожидания, а не первые попавшиеся. Усечённый проход честнее метится
+      // отдельно, но и то, что в него попало, должно быть тем, за чем пришли.
+      Sql :=
+        'DECLARE @now datetime2 = SYSDATETIME();' +
+        'SELECT DATEDIFF(day,CONVERT(datetime,0),@now),' +
+        ' DATEDIFF(ms,CONVERT(date,@now),@now), CONVERT(int,DB_ID());' +
+        'SELECT TOP (' + FORMAT(MaxRows) + ')' +
+        ' CONVERT(int,wt.session_id), CONVERT(int,wt.blocking_session_id),' +
+        ' CONVERT(int,CASE WHEN wt.wait_duration_ms > 2147483647' +
+        ' THEN 2147483647 ELSE wt.wait_duration_ms END),' +
+        ' wt.wait_type, wt.resource_description,' +
+        ' vs.host_name, vs.host_process_id, vs.program_name,' +
+        ' vt.transaction_id, bt.transaction_id,' +
+        ' bs.status, bs.program_name,' +
+        ' CASE WHEN bs.last_request_end_time IS NULL THEN 0' +
+        ' WHEN DATEDIFF(day,bs.last_request_end_time,@now) > 20 THEN 2147483647' +
+        ' ELSE DATEDIFF(ms,bs.last_request_end_time,@now) END,' +
+        ' CASE WHEN bs.open_transaction_count IS NULL THEN 0' +
+        ' ELSE bs.open_transaction_count END,' +
+        ' CASE WHEN EXISTS (SELECT 1 FROM sys.dm_exec_requests r' +
+        ' WHERE r.session_id = wt.blocking_session_id) THEN 1 ELSE 0 END,' +
+        ' CASE WHEN ba.transaction_begin_time IS NULL THEN 0' +
+        ' ELSE DATEDIFF(day,CONVERT(datetime,0),ba.transaction_begin_time) END,' +
+        ' CASE WHEN ba.transaction_begin_time IS NULL THEN 0' +
+        ' ELSE DATEDIFF(ms,CONVERT(date,ba.transaction_begin_time),' +
+        ' ba.transaction_begin_time) END' +
+        ' FROM sys.dm_os_waiting_tasks wt' +
+        ' JOIN sys.dm_exec_sessions vs ON vs.session_id = wt.session_id' +
+        ' LEFT JOIN sys.dm_tran_session_transactions vt ON vt.session_id = wt.session_id' +
+        ' LEFT JOIN sys.dm_exec_sessions bs ON bs.session_id = wt.blocking_session_id' +
+        ' LEFT JOIN sys.dm_tran_session_transactions bt' +
+        ' ON bt.session_id = wt.blocking_session_id' +
+        ' LEFT JOIN sys.dm_tran_active_transactions ba' +
+        ' ON ba.transaction_id = bt.transaction_id' +
+        ' WHERE wt.wait_type LIKE ' + Q + 'LCK[_]%' + Q +
+        ' AND wt.session_id <> @@SPID' +
+        ' ORDER BY wt.wait_duration_ms DESC;';
+      EXIT(Sql);
+    END;
+
+    LOCAL PROCEDURE NameSql@10(HobtList@1000000000 : Text;ObjectList@1000000001 : Text) : Text;
+    VAR
+      Sql@1000000002 : Text;
+    BEGIN
+      // Пустой список пришлось бы отдавать как IN (), а это уже синтаксическая ошибка.
+      // Заведомо несуществующий номер дешевле ветвления на четыре случая.
+      IF HobtList = '' THEN
+        HobtList := '-1';
+      IF ObjectList = '' THEN
+        ObjectList := '-1';
+      Sql :=
+        'SELECT ' + FORMAT(SourceHobt) + ', p.hobt_id, o.name, i.name' +
+        ' FROM sys.partitions p' +
+        ' JOIN sys.objects o ON o.object_id = p.object_id' +
+        ' LEFT JOIN sys.indexes i ON i.object_id = p.object_id' +
+        ' AND i.index_id = p.index_id' +
+        ' WHERE p.hobt_id IN (' + HobtList + ')' +
+        ' UNION ALL' +
+        ' SELECT ' + FORMAT(SourceObject) + ', CONVERT(bigint,o.object_id), o.name, NULL' +
+        ' FROM sys.objects o WHERE o.object_id IN (' + ObjectList + ');';
+      EXIT(Sql);
+    END;
+
+    LOCAL PROCEDURE EpisodeClassOf@11(VAR SqlReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader") : Integer;
+    VAR
+      Status@1000000001 : Text;
+      IdleMs@1000000002 : Integer;
+      OpenTrans@1000000003 : Integer;
+      Sleeping@1000000004 : Boolean;
+    BEGIN
+      // Спящая транзакция - это не медленный запрос, а забытое модальное окно: виновник
+      // НЕ исполняет ничего, но транзакцию держит. Лечится звонком, а не правкой кода,
+      // и потому подписывается отдельным классом. Эскалацию сюда не заводим: она видна
+      // не по сессии, а по счётчикам, и приходит другим слоем.
+      //
+      // Спящий БЕЗ открытой транзакции не держит ничего и виновником быть не может -
+      // такую сессию называть "уснувшей в транзакции" значит обвинять невиновного.
+      // Наличие запроса спрашивается у dm_exec_requests, а не выводится из статуса:
+      // вывод из статуса был бы пересказом первого признака вторыми словами.
+      Status := LOWERCASE(ReaderText(SqlReader,10));
+      IdleMs := ReaderInt(SqlReader,12);
+      OpenTrans := ReaderInt(SqlReader,13);
+      Sleeping := (Status = SleepingStatus) AND (OpenTrans > 0);
+      EXIT(Parse.EpisodeClass(Sleeping,ReaderInt(SqlReader,16) = 1,IdleMs,0));
+    END;
+
+    LOCAL PROCEDURE NavFlag@12(ProgramName@1000000000 : Text) : Integer;
+    BEGIN
+      // Три значения, а не два. Пустое имя программы - это "не знаю", и врать про такую
+      // сессию нельзя: от ответа зависит, приписывать ли ей предел ожидания NAV.
+      IF ProgramName = '' THEN
+        EXIT(0);
+      IF IsNavProgram(ProgramName) THEN
+        EXIT(1);
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE IsNavProgram@13(ProgramName@1000000000 : Text) : Boolean;
+    BEGIN
+      // Служба NAV представляется одинаково во всех своих соединениях. Проверять по
+      // началу строки, а не по равенству: за именем идёт версия и роль соединения.
+      EXIT(COPYSTR(LOWERCASE(ProgramName),1,STRLEN(NavProgramPrefix)) = NavProgramPrefix);
+    END;
+
+    LOCAL PROCEDURE SqlMoment@14(Days@1000000000 : Integer;Milliseconds@1000000001 : Integer) : DateTime;
+    VAR
+      Offset@1000000002 : Duration;
+    BEGIN
+      // Время приходит ДВУМЯ целыми, а не строкой, и это не причуда: разбор строки даты
+      // зависит от языка сеанса и от языка сервера, и ошибётся он не отказом, а сдвигом.
+      // Сутки от начала отсчёта SQL плюс миллисекунды внутри суток врать не умеют.
+      IF Days <= 0 THEN
+        EXIT(0DT);
+      Offset := Milliseconds;
+      EXIT(CREATEDATETIME(SqlEpoch + Days,0T) + Offset);
+    END;
+
+    LOCAL PROCEDURE ReaderText@15(VAR SqlReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";Index@1000000001 : Integer) : Text;
+    BEGIN
+      IF SqlReader.IsDBNull(Index) THEN
+        EXIT('');
+      EXIT(SqlReader.GetString(Index));
+    END;
+
+    LOCAL PROCEDURE ReaderInt@16(VAR SqlReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";Index@1000000001 : Integer) : Integer;
+    BEGIN
+      IF SqlReader.IsDBNull(Index) THEN
+        EXIT(0);
+      EXIT(SqlReader.GetInt32(Index));
+    END;
+
+    LOCAL PROCEDURE ReaderBigInt@17(VAR SqlReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";Index@1000000001 : Integer) : BigInteger;
+    BEGIN
+      IF SqlReader.IsDBNull(Index) THEN
+        EXIT(0);
+      EXIT(SqlReader.GetInt64(Index));
+    END;
+
+    LOCAL PROCEDURE ConnString@18() : Text;
+    VAR
+      Setup@1000000000 : Record 110230;
+      Pattern@1000000001 : Text;
+    BEGIN
+      Setup.FetchOnce;
+      IF Setup."SQL Server" = '' THEN
+        ERROR(NoServerErr);
+      Pattern := 'Server=%1;Database=%2;Trusted_Connection=True;Connect Timeout=%3;';
+      EXIT(STRSUBSTNO(Pattern,Setup."SQL Server",DatabaseName,ConnectTimeoutSec));
+    END;
+
+    LOCAL PROCEDURE DatabaseName@19() : Text;
+    VAR
+      ActiveSession@1000000000 : Record 2000000110;
+    BEGIN
+      // Имя базы берём у платформы, а не из настройки: ошибиться здесь значит наблюдать
+      // не за той базой и не заметить этого. Сервер рядом лежит НАВовский, не серверный, -
+      // его и приходится спрашивать у человека.
+      IF NOT ActiveSession.GET(SERVICEINSTANCEID,SESSIONID) THEN
+        ERROR(NoDatabaseErr);
+      EXIT(ActiveSession."Database Name");
+    END;
+
+    LOCAL PROCEDURE ConnectTimeoutSec@20() : Integer;
+    BEGIN
+      // Подключение обязано отказать заведомо раньше, чем кончится потолок прохода:
+      // висящее соединение остановило бы наблюдение молча.
+      EXIT(5);
+    END;
+
+    LOCAL PROCEDURE ReadTimeoutSec@21() : Integer;
+    BEGIN
+      // Съём при двухстах ждущих стоит 12 мс. Пять секунд - это не запас на медленный
+      // запрос, а признак того, что сервер стоит совсем: ждать дольше бессмысленно.
+      EXIT(5);
+    END;
+
+    LOCAL PROCEDURE SqlEpoch@22() : Date;
+    BEGIN
+      // Начало отсчёта DATEDIFF в SQL Server: CONVERT(datetime,0) - это 01.01.1900.
+      // Число здесь не настройка, а свойство сервера, и меняться оно не может.
+      EXIT(DMY2DATE(1,1,1900));
+    END;
+
+    LOCAL PROCEDURE NavProgramPrefix@23() : Text;
+    BEGIN
+      EXIT('microsoft dynamics nav');
+    END;
+
+    LOCAL PROCEDURE SleepingStatus@24() : Text;
+    BEGIN
+      EXIT('sleeping');
+    END;
+
+    LOCAL PROCEDURE SourceHobt@25() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE SourceObject@26() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE Q@27() : Text[1];
+    BEGIN
+      EXIT('''');
+    END;
+
+    BEGIN
+    {
+      Съём с SQL. Единственное место инструмента, которое разговаривает с сервером, и
+      потому единственное, которому нужны права: VIEW SERVER STATE и ничего сверх того.
+
+      Соединение своё, а не NAVовское, и через штатную System.Data из фреймворка: сборки
+      в Add-ins нет вовсе, и это снимает четыре строки из семи в таблице прав. Идиома
+      взята у родственного инструмента, где она уже прошла согласование.
+
+      Имя базы спрашивается у платформы (Active Session), имя сервера - у человека: в
+      Active Session записан сервер NAV, а не сервер базы, и подставить одно вместо
+      другого значит наблюдать не за той базой, ничего об этом не узнав.
+
+      Запросов два, и второй не подзапрос первого нарочно. Разбор описания ресурса живёт
+      в C/AL и проверен прогоном без базы; повторить его на T-SQL значило бы завести
+      вторые правила разбора, которые никто ни с чем не сверяет.
+
+      Часы берутся серверные и приходят ДВУМЯ ЦЕЛЫМИ - сутками от начала отсчёта и
+      миллисекундами внутри суток. Строку с датой пришлось бы разбирать по языку сеанса,
+      и ошибка вышла бы не отказом, а сдвигом на часы - самая незаметная из возможных.
+
+      Отказ съёма не роняет фоновую задачу: причина запоминается текстом и показывается
+      сторожем. Пустой журнал без объяснения читается как "блокировок не было" - это
+      худшая ложь, на которую инструмент способен.
+    }
+    END.
+  }
+}

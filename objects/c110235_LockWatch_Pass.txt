@@ -1,0 +1,192 @@
+OBJECT Codeunit 110235 LockWatch Pass
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+      Sql@1000000001 : Codeunit 110234;
+      Journal@1000000002 : Codeunit 110232;
+      NamesFailedTxt@1000000003 : TextConst 'ENU=Episodes are logged, but table and key names are missing: %1;RUS=Эпизоды записаны, но имена таблиц и ключей не получены: %1';
+      OtherDbTxt@1000000004 : TextConst 'ENU=Skipped %1 waits belonging to another database on the same server.;RUS=Пропущено %1 ожиданий, относящихся к другой базе на том же сервере.';
+      QuietTxt@1000000005 : TextConst 'ENU=Pass went through, the queue is empty.;RUS=Проход прошёл, очередь пуста.';
+      BusyTxt@1000000006 : TextConst 'ENU=Pass went through, waiters %1.;RUS=Проход прошёл, ждущих %1.';
+      TruncatedTxt@1000000007 : TextConst 'ENU=The pass hit the ceiling of %1 rows: the longest waits are kept, the rest of the queue is not in the journal.;RUS=Проход упёрся в потолок %1 строк: оставлены самые долгие ожидания, остаток очереди в журнал не попал.';
+      CountsTxt@1000000009 : TextConst 'ENU=Opened %1, updated %2, closed %3, restarted %4.;RUS=Открыто %1, обновлено %2, закрыто %3, начато заново %4.';
+      ReadFailedTxt@1000000008 : TextConst 'ENU=The queue could not be read: %1;RUS=Очередь прочитать не удалось: %1';
+
+    [External]
+    PROCEDURE RunPass@1() : Boolean;
+    VAR
+      Setup@1000000009 : Record 110230;
+      Observed@1000000010 : TEMPORARY Record 110231;
+      Waiter@1000000011 : ARRAY [500] OF Integer;
+      Blocker@1000000012 : ARRAY [500] OF Integer;
+      BlockerIsNav@1000000013 : ARRAY [500] OF Boolean;
+      Head@1000000014 : ARRAY [500] OF Integer;
+      Depth@1000000015 : ARRAY [500] OF Integer;
+      Ring@1000000016 : ARRAY [500] OF Boolean;
+      Behind@1000000017 : ARRAY [500] OF Integer;
+      RowCount@1000000018 : Integer;
+      OtherDatabase@1000000019 : Integer;
+      ObservedAt@1000000020 : DateTime;
+      StartedAt@1000000021 : DateTime;
+      Elapsed@1000000022 : Duration;
+      Index@1000000023 : Integer;
+      Opened@1000000024 : Integer;
+      Updated@1000000025 : Integer;
+      Closed@1000000026 : Integer;
+      Restarted@1000000027 : Integer;
+      Note@1000000028 : Text;
+      Truncated@1000000029 : Boolean;
+    BEGIN
+      // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
+      // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
+      // предыдущего, а самый дорогой - запись - должен получить всё, что о нём известно,
+      // с первого раза: обновлять строку журнала дважды за проход дороже вдвое.
+      Setup.FetchOnce;
+      StartedAt := CURRENTDATETIME;
+
+      IF NOT Sql.ReadQueue(Setup."Max Rows per Pass",Observed,Waiter,Blocker,BlockerIsNav,
+                           RowCount,ObservedAt,OtherDatabase)
+      THEN BEGIN
+        // Отказ съёма журнал НЕ трогает. Закрыть эпизоды моментом, которого мы не знаем,
+        // значило бы объявить их законченными, ничего об этом не выяснив.
+        SaveWatchdog(Setup,STRSUBSTNO(ReadFailedTxt,Sql.LastErrorText),StartedAt,NoTime,0,FALSE);
+        EXIT(FALSE);
+      END;
+
+      IF RowCount > 0 THEN
+        IF NOT Sql.ResolveNames(Observed) THEN
+          // Имена - не эпизоды. Без них строка беднее, но она есть и она правдива;
+          // выбросить проход из-за имён значило бы потерять сам факт блокировки.
+          Note := ' ' + STRSUBSTNO(NamesFailedTxt,Sql.LastErrorText);
+
+      Parse.Chains(Waiter,Blocker,RowCount,Head,Depth,Ring,Behind);
+
+      Journal.BeginPass(ObservedAt,Setup."Poll Period (ms)");
+      Observed.RESET;
+      IF Observed.FINDSET THEN
+        REPEAT
+          Index := Observed."Entry No.";
+          Observed."Head SPID" := Head[Index];
+          Observed."Chain Depth" := Depth[Index];
+          Observed."Chain Ring" := Ring[Index];
+          Observed."Victims Behind Head" := Behind[Index];
+          Observed."Head Is Foreign" := HeadIsForeign(Blocker,BlockerIsNav,RowCount,Head[Index]);
+          Journal.Observe(Observed);
+        UNTIL Observed.NEXT = 0;
+      Journal.FinishPass;
+      Journal.PassCounts(Opened,Updated,Closed,Restarted);
+
+      // Чистка порционная и внутри того же прохода: отдельное задание уборки - это ещё
+      // один объект, который забудут включить, и журнал будет расти молча.
+      Journal.TrimOldEntries(Setup."Retention (Days)",TrimRowsPerPass);
+
+      Truncated := (Setup."Max Rows per Pass" > 0) AND (RowCount >= Setup."Max Rows per Pass");
+      Elapsed := CURRENTDATETIME - StartedAt;
+      Note := STRSUBSTNO(CountsTxt,Opened,Updated,Closed,Restarted) + Note;
+      SaveWatchdog(Setup,PassNote(RowCount,OtherDatabase,Truncated,Setup."Max Rows per Pass",Note),
+             ObservedAt,Elapsed,RowCount,Truncated);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE SaveWatchdog@2(VAR Setup@1000000000 : Record 110230;Msg@1000000001 : Text;At@1000000002 : DateTime;Elapsed@1000000003 : Duration;Rows@1000000006 : Integer;Truncated@1000000004 : Boolean);
+    VAR
+      Milliseconds@1000000005 : Integer;
+    BEGIN
+      // Сторож пишет ВСЕГДА, и на удачном проходе тоже. Пустое сообщение читается как
+      // "всё хорошо", а на деле означает "не знаю": последний проход мог не случиться
+      // вовсе, и отличить одно от другого можно только по отметке времени рядом.
+      Milliseconds := Elapsed;
+      Setup."Last Pass At" := At;
+      Setup."Last Pass (ms)" := Milliseconds;
+      Setup."Last Pass Rows" := Rows;
+      Setup."Last Pass Truncated" := Truncated;
+      Setup."Watchdog Message" := COPYSTR(Msg,1,MAXSTRLEN(Setup."Watchdog Message"));
+      Setup.MODIFY;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE PassNote@3(RowCount@1000000000 : Integer;OtherDatabase@1000000001 : Integer;Truncated@1000000002 : Boolean;Ceiling@1000000003 : Integer;Note@1000000004 : Text) : Text;
+    VAR
+      Msg@1000000005 : Text;
+    BEGIN
+      IF RowCount = 0 THEN
+        Msg := QuietTxt
+      ELSE
+        Msg := STRSUBSTNO(BusyTxt,RowCount);
+      IF Truncated THEN
+        Msg := Msg + ' ' + STRSUBSTNO(TruncatedTxt,Ceiling);
+      IF OtherDatabase > 0 THEN
+        Msg := Msg + ' ' + STRSUBSTNO(OtherDbTxt,OtherDatabase);
+      IF Note <> '' THEN
+        Msg := Msg + ' ' + Note;
+      EXIT(Msg);
+    END;
+
+    LOCAL PROCEDURE NoTime@6() : Duration;
+    BEGIN
+      // Отказавший проход длительности не имеет: время до отказа - это не время прохода,
+      // и записать его в "последний проход, мс" значило бы показать цену того, чего не было.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE HeadIsForeign@4(VAR Blocker@1000000000 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000001 : ARRAY [500] OF Boolean;Count@1000000002 : Integer;HeadSpid@1000000003 : Integer) : Boolean;
+    VAR
+      Index@1000000004 : Integer;
+    BEGIN
+      // Голова цепочки сама не ждёт, поэтому среди ждущих её нет - зато она обязательно
+      // чей-то непосредственный блокирующий, и оттуда о ней и известно, наша она или нет.
+      //
+      // Не нашли - отвечаем "наша", то есть НЕ обвиняем. Пометить незнакомую сессию чужой
+      // значит подсказать заказчику искать виноватого снаружи, а искать надо у себя.
+      IF (Count <= 0) OR (HeadSpid = 0) THEN
+        EXIT(FALSE);
+      FOR Index := 1 TO Count DO
+        IF Blocker[Index] = HeadSpid THEN
+          EXIT(NOT BlockerIsNav[Index]);
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE TrimRowsPerPass@5() : Integer;
+    BEGIN
+      // Потолок уборки за проход. Месяц журнала за один COMMIT - это блокировка
+      // собственной таблицы посреди наблюдения, то есть ровно то, что мы ловим.
+      // Двести строк за проход разбирают суточный завал за минуты и никому не мешают.
+      EXIT(200);
+    END;
+
+    BEGIN
+    {
+      Проход целиком - от очереди SQL до строки в журнале. Здесь нет ни разбора (он в
+      Codeunit 110230), ни SQL (он в 110234), ни записи (она в 110232): здесь только
+      порядок, в котором они складываются, и решения о том, что делать при отказе.
+
+      Решений об отказе три, и все три - о том, чтобы не соврать молчанием:
+
+      1. Съём не удался - журнал НЕ трогаем вовсе. Закрыть эпизоды моментом, которого мы
+         не знаем, значит объявить их законченными без единого основания.
+      2. Имена не получены - эпизоды всё равно записываются. Строка без имени таблицы
+         беднее, но правдива; потерять из-за имён сам ФАКТ блокировки нельзя.
+      3. Сторож пишет сообщение и на удачном проходе. Пустое сообщение читается как
+         "всё хорошо", а означает "не знаю".
+
+      Цепочки считаются ОДНИМ вызовом на проход. Голова каждой строки стоит прохода по
+      всем ждущим, и посчитать "жертв за головой" отдельно для каждой строки значило бы
+      получить куб от числа ждущих: на пятистах это сотни миллионов сравнений.
+
+      COMMIT здесь ровно один на проход - тот самый, чью цену меряет Codeunit 110233.
+    }
+    END.
+  }
+}

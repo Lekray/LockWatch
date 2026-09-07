@@ -326,15 +326,21 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     VAR
       Waiter@1000000003 : ARRAY [500] OF Integer;
       Blocker@1000000004 : ARRAY [500] OF Integer;
-      Behind@1000000005 : Integer;
+      Head@1000000005 : ARRAY [500] OF Integer;
+      Depth@1000000006 : ARRAY [500] OF Integer;
+      Ring@1000000007 : ARRAY [500] OF Boolean;
+      Behind@1000000008 : ARRAY [500] OF Integer;
     BEGIN
       // Три ждущих, одна голова. Отчёт, считающий это тремя бедами, отправит чинить три
-      // операции вместо одной.
+      // операции вместо одной. Считается всё разом: головы, глубины, кольца и жертвы за
+      // головой - один проход на пачку, а не по проходу на строку.
       Waiter[1] := 3; Blocker[1] := 2;
       Waiter[2] := 2; Blocker[2] := 1;
       Waiter[3] := 4; Blocker[3] := 1;
-      Behind := Parse.VictimsBehindHead(Waiter,Blocker,3,1);
-      Check(Passed,Total,Report,ChkVictimsTxt,Behind = 3,STRSUBSTNO(VictimsTxt,Behind,3));
+      Parse.Chains(Waiter,Blocker,3,Head,Depth,Ring,Behind);
+      Check(Passed,Total,Report,ChkVictimsTxt,
+        (Head[1] = 1) AND (Behind[1] = 3) AND (Behind[3] = 3),
+        STRSUBSTNO(VictimsTxt,Behind[1],3));
     END;
 
     LOCAL PROCEDURE CheckClass@26(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);

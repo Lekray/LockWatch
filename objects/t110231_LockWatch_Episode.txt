@@ -43,6 +43,8 @@ OBJECT Table 110231 LockWatch Episode
                                                               RUS=Цепочка замкнулась в кольцо] }
     { 26  ;   ;Head Is Foreign     ;Boolean       ;CaptionML=[ENU=Head Is Foreign;
                                                               RUS=Голова не наша] }
+    { 29  ;   ;SQL Object Id       ;Integer       ;CaptionML=[ENU=SQL Object Id;
+                                                              RUS=Номер объекта SQL] }
     { 30  ;   ;Resource Kind       ;Code20        ;CaptionML=[ENU=Resource Kind;
                                                               RUS=Род ресурса] }
     { 31  ;   ;Hobt Id             ;BigInteger    ;CaptionML=[ENU=Hobt Id;

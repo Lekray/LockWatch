@@ -309,21 +309,35 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
-    PROCEDURE VictimsBehindHead@9(VAR Waiter@1000 : ARRAY [500] OF Integer;VAR Blocker@1001 : ARRAY [500] OF Integer;Count@1002 : Integer;Head@1003 : Integer) : Integer;
+    PROCEDURE Chains@9(VAR Waiter@1000 : ARRAY [500] OF Integer;VAR Blocker@1001 : ARRAY [500] OF Integer;Count@1002 : Integer;VAR Head@1003 : ARRAY [500] OF Integer;VAR Depth@1004 : ARRAY [500] OF Integer;VAR Ring@1005 : ARRAY [500] OF Boolean;VAR Behind@1006 : ARRAY [500] OF Integer);
     VAR
-      Index@1004 : Integer;
-      Depth@1005 : Integer;
-      Cycle@1006 : Boolean;
-      Behind@1007 : Integer;
+      Index@1007 : Integer;
+      Other@1008 : Integer;
+      StepDepth@1009 : Integer;
+      Cycle@1010 : Boolean;
     BEGIN
-      // Одна голова с сорока жертвами - это не сорок бед, а одна. Это число и есть
-      // честный ответ на "кто пострадал", и по нему решают, что чинить первым.
+      // Одна голова с сорока жертвами - это не сорок бед, а одна. Это число и есть честный
+      // ответ на "кто пострадал", и по нему решают, что чинить первым.
+      //
+      // Считается ОДИН раз на проход, а не на строку, и это не вкусовщина. Голова каждой
+      // строки стоит прохода по всем ждущим; посчитать "жертв за головой" отдельно для
+      // каждой строки значило бы получить КУБ от числа ждущих - на пятистах это сотни
+      // миллионов сравнений, то есть наблюдатель встал бы ровно тогда, когда он нужен.
+      CLEAR(Head);
+      CLEAR(Depth);
+      CLEAR(Ring);
+      CLEAR(Behind);
       IF (Count <= 0) OR (Count > MaxWaitersPerPass) THEN
-        EXIT(0);
+        EXIT;
+      FOR Index := 1 TO Count DO BEGIN
+        Head[Index] := ChainHead(Waiter,Blocker,Count,Waiter[Index],StepDepth,Cycle);
+        Depth[Index] := StepDepth;
+        Ring[Index] := Cycle;
+      END;
       FOR Index := 1 TO Count DO
-        IF ChainHead(Waiter,Blocker,Count,Waiter[Index],Depth,Cycle) = Head THEN
-          Behind := Behind + 1;
-      EXIT(Behind);
+        FOR Other := 1 TO Count DO
+          IF Head[Other] = Head[Index] THEN
+            Behind[Index] := Behind[Index] + 1;
     END;
 
     [External]
