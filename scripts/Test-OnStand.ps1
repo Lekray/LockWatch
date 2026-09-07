@@ -206,7 +206,9 @@ Write-Host 'Импорт и компиляция'
 $stamp = Get-Date -Format 'HHmmss'
 Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,SynchronizeSchemaChanges=Force$navServerArgs" "import-$stamp.log"
 
-$typeNo = @{ 't' = 1; 'c' = 5; 'r' = 3; 'p' = 8; 'x' = 6; 'q' = 9; 'm' = 4 }
+# MenuSuite - это тип 7, а не 4: четвёркой в NAV нумеровался дataport, которого в 2018
+# нет вовсе. Ошибка здесь не роняет выкладку, а МОЛЧА проверяет не тот объект.
+$typeNo = @{ 't' = 1; 'c' = 5; 'r' = 3; 'p' = 8; 'x' = 6; 'q' = 9; 'm' = 7 }
 $typeNm = @{ 't' = 'Table'; 'c' = 'Codeunit'; 'r' = 'Report'; 'p' = 'Page'; 'x' = 'XMLport'; 'q' = 'Query'; 'm' = 'MenuSuite' }
 $declared = foreach ($file in $files) {
     $head = (Get-Content $file.FullName -TotalCount 12) -join "`n"

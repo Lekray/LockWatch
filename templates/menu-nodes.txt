@@ -1,0 +1,90 @@
+# Узлы меню LockWatch для врезки в MenuSuite установки.
+#
+# Своего уровня MenuSuite инструменту не досталось: лицензия стенда отказала во ВСЕХ
+# партнёрских уровнях - 1020, 1040, 1050, 1060, 1070, 1080 (измерено 08.09.2026, отказ
+# "You do not have permission to create the ... MenuSuite"). Остаётся уровень Company,
+# 1090, а он на установке уже есть и принадлежит заказчику.
+#
+# Поэтому объект не выкладывается, а СЛИВАЕТСЯ: scripts/Merge-MenuSuite.ps1 выгружает
+# существующий MenuSuite, дописывает в него эти узлы и кладёт результат в out/. Слитый
+# объект в git не попадает: там чужое меню.
+#
+# GUID узлов постоянны нарочно. Смена GUID при повторном слиянии дала бы ВТОРОЙ комплект
+# пунктов рядом с первым, и убрать его можно было бы только руками.
+    { Menu           ;[{E7B801BA-33D6-4F3A-B984-0937536E2F21}] ;Name=LockWatch;
+                                                                CaptionML=[ENU=LockWatch;
+                                                                           RUS=LockWatch];
+                                                                ParentNodeID=[{00000000-0000-0000-0000-000000000000}];
+                                                                Image=1;
+                                                                IsShortcut=No;
+                                                                Visible=Yes;
+                                                                Enabled=Yes;
+                                                                NextNodeID=[{00000000-0000-0000-0000-000000000000}];
+                                                                FirstChild=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}] }
+    { MenuGroup      ;[{B81160DE-A6C3-47AF-99E4-C95154E2A094}] ;Name=Locks;
+                                                                CaptionML=[ENU=Locks;
+                                                                           RUS=Блокировки];
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                ParentNodeID=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                Visible=Yes;
+                                                                FirstChild=[{16B81D87-708C-4023-B324-DFC933620878}] }
+    { MenuItem       ;[{16B81D87-708C-4023-B324-DFC933620878}] ;Name=Episodes;
+                                                                CaptionML=[ENU=Episodes;
+                                                                           RUS=Эпизоды блокировок];
+                                                                ApplicationArea=#All;
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                RunObjectType=Page;
+                                                                RunObjectID=110231;
+                                                                ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
+                                                                Visible=Yes;
+                                                                NextNodeID=[{DF665592-1103-478C-9D45-0DEE7DF1574D}] }
+    { MenuItem       ;[{DF665592-1103-478C-9D45-0DEE7DF1574D}] ;Name=Summary;
+                                                                CaptionML=[ENU=Summary;
+                                                                           RUS=Сводка блокировок];
+                                                                ApplicationArea=#All;
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                RunObjectType=Page;
+                                                                RunObjectID=110233;
+                                                                ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
+                                                                Visible=Yes;
+                                                                NextNodeID=[{09E55B83-8AC5-4E00-AB86-679CBF05716D}] }
+    { MenuItem       ;[{09E55B83-8AC5-4E00-AB86-679CBF05716D}] ;Name=Alerts;
+                                                                CaptionML=[ENU=Alerts;
+                                                                           RUS=Тревоги];
+                                                                ApplicationArea=#All;
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                RunObjectType=Page;
+                                                                RunObjectID=110235;
+                                                                ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
+                                                                Visible=Yes;
+                                                                NextNodeID=[{33FC0586-F734-4E86-875A-83EADE7959A2}] }
+    { MenuItem       ;[{33FC0586-F734-4E86-875A-83EADE7959A2}] ;Name=Coverage;
+                                                                CaptionML=[ENU=Coverage;
+                                                                           RUS=Охват наблюдения];
+                                                                ApplicationArea=#All;
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                RunObjectType=Page;
+                                                                RunObjectID=110234;
+                                                                ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
+                                                                Visible=Yes;
+                                                                NextNodeID=[{E907AE99-44C7-42AD-9145-2393593F3EA8}] }
+    { MenuItem       ;[{E907AE99-44C7-42AD-9145-2393593F3EA8}] ;Name=Context Tables;
+                                                                CaptionML=[ENU=Context Tables;
+                                                                           RUS=Таблицы контекста];
+                                                                ApplicationArea=#All;
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                RunObjectType=Page;
+                                                                RunObjectID=110232;
+                                                                ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
+                                                                Visible=Yes;
+                                                                NextNodeID=[{3F625FC4-CF59-4F1C-B1B5-DC4BB77B507C}] }
+    { MenuItem       ;[{3F625FC4-CF59-4F1C-B1B5-DC4BB77B507C}] ;Name=Setup;
+                                                                CaptionML=[ENU=Setup;
+                                                                           RUS=Настройка LockWatch];
+                                                                ApplicationArea=#All;
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                RunObjectType=Page;
+                                                                RunObjectID=110230;
+                                                                ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
+                                                                Visible=Yes;
+                                                                NextNodeID=[{00000000-0000-0000-0000-000000000000}] }
