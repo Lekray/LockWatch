@@ -1,0 +1,389 @@
+OBJECT Codeunit 110233 LockWatch Journal Bench
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Bench;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+      Journal@1000000001 : Codeunit 110232;
+      Episode@1000000002 : Record 110231;
+      PassedTxt@1000000003 : TextConst 'ENU=PASS;RUS=пройдено';
+      FailedTxt@1000000004 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ ';
+      VerdictTxt@1000000005 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
+      DirtyErr@1000000006 : TextConst 'ENU=The journal is not empty (%1 rows from real observation). The bench opens and closes episodes of its own and trims by retention, so it runs on a stand with an empty journal - never beside a live watch.;RUS=Журнал не пуст (%1 строк настоящего наблюдения). Мерный прогон открывает и закрывает СВОИ эпизоды и чистит по сроку, поэтому идёт на стенде с пустым журналом, а не рядом с работающим сторожем.';
+      EnabledErr@1000000007 : TextConst 'ENU=The watch is switched on in the setup. A pass of the bench would close the episodes of the real one.;RUS=Сторож включён в настройке. Проход мерного прогона закрыл бы эпизоды настоящего.';
+      ChkOpenTxt@1000000008 : TextConst 'ENU=the first pass opens exactly one episode per waiter;RUS=первый проход открывает ровно по эпизоду на ждущего';
+      OpenTxt@1000000009 : TextConst 'ENU=opened %1 of %2 waiters, updated %3, closed %4;RUS=открыто %1 из %2 ждущих, обновлено %3, закрыто %4';
+      ChkUpdateTxt@1000000010 : TextConst 'ENU=the second pass updates the same rows instead of breeding new ones;RUS=второй проход обновляет те же строки, а не плодит новые';
+      UpdateTxt@1000000011 : TextConst 'ENU=updated %1, opened %2, rows in the journal %3;RUS=обновлено %1, открыто %2, строк в журнале %3';
+      ChkCloseTxt@1000000012 : TextConst 'ENU=a waiter gone from the queue closes the episode, and the outcome is judged;RUS=ушедший из очереди закрывает эпизод, и исход при этом судится';
+      CloseTxt@1000000013 : TextConst 'ENU=closed %1 of %2, of them granted %3, still open %4;RUS=закрыто %1 из %2, из них дождалось %3, осталось открытых %4';
+      ChkTrimTxt@1000000014 : TextConst 'ENU=retention removes what is older than the term and does not overflow on a month;RUS=срок хранения убирает то, что старше срока, и на месяце не переполняется';
+      TrimTxt@1000000015 : TextConst 'ENU=removed %1 of the %2 backdated, left %3 of %4;RUS=убрано %1 из %2 состаренных, осталось %3 из %4';
+      ChkCostTxt@1000000016 : TextConst 'ENU=the NAV half of a pass fits into the declared ceiling;RUS=NAV-половина прохода укладывается в объявленный потолок';
+      CostTxt@1000000017 : TextConst 'ENU=worst pass %1 ms against the ceiling %2;RUS=худший проход %1 мс против потолка %2';
+      TimingTxt@1000000018 : TextConst 'ENU=%1: %2 ms for %3 rows, %4 us per row;RUS=%1: %2 мс на %3 строк, %4 мкс на строку';
+      OpenPhaseTxt@1000000019 : TextConst 'ENU=opening;RUS=открытие';
+      UpdatePhaseTxt@1000000020 : TextConst 'ENU=updating;RUS=обновление';
+      ClosePhaseTxt@1000000021 : TextConst 'ENU=closing;RUS=закрытие';
+      SweepPhaseTxt@1000000022 : TextConst 'ENU=cleanup;RUS=уборка';
+      FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
+
+    [External]
+    PROCEDURE Bench@1();
+    VAR
+      Passed@1000000000 : Integer;
+      Total@1000000001 : Integer;
+      Report@1000000002 : Text;
+    BEGIN
+      // Мерный прогон судит сам, как и обкатка: цена, которую никто не сравнил с
+      // объявленным потолком, - это не замер, а число в отчёте.
+      RunBench(Passed,Total,Report);
+      Report := STRSUBSTNO(VerdictTxt,Passed,Total) + CrLf + CrLf + Report;
+      IF Passed < Total THEN
+        ERROR(FailedRunErr,Report);
+      MESSAGE(Report);
+    END;
+
+    LOCAL PROCEDURE RunBench@2(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Setup@1000000003 : Record 110230;
+      Waiters@1000000004 : Integer;
+      Opened@1000000005 : Integer;
+      Updated@1000000006 : Integer;
+      Closed@1000000007 : Integer;
+      Restarted@1000000008 : Integer;
+      OpenMs@1000000009 : Integer;
+      UpdateMs@1000000010 : Integer;
+      CloseMs@1000000011 : Integer;
+      SweepMs@1000000012 : Integer;
+      Granted@1000000013 : Integer;
+      StillOpen@1000000014 : Integer;
+      Backdated@1000000015 : Integer;
+      Removed@1000000016 : Integer;
+      Worst@1000000017 : Integer;
+    BEGIN
+      Setup.FetchOnce;
+      IF Setup.Enabled THEN
+        ERROR(EnabledErr);
+      RefuseIfJournalUsed;
+
+      Waiters := Parse.MaxWaitersPerPass;
+
+      OpenMs := PassOfWaiters(Waiters,FirstWaitMs,Opened,Updated,Closed,Restarted);
+      Check(Passed,Total,Report,ChkOpenTxt,
+            (Opened = Waiters) AND (Updated = 0) AND (Closed = 0),
+            STRSUBSTNO(OpenTxt,Opened,Waiters,Updated,Closed));
+
+      UpdateMs := PassOfWaiters(Waiters,SecondWaitMs,Opened,Updated,Closed,Restarted);
+      Check(Passed,Total,Report,ChkUpdateTxt,
+            (Updated = Waiters) AND (Opened = 0) AND (Restarted = 0) AND (BenchRowCount = Waiters),
+            STRSUBSTNO(UpdateTxt,Updated,Opened,BenchRowCount));
+
+      CloseMs := PassOfWaiters(0,0,Opened,Updated,Closed,Restarted);
+      CountOutcomes(Granted,StillOpen);
+      Check(Passed,Total,Report,ChkCloseTxt,
+            (Closed = Waiters) AND (Granted = Waiters) AND (StillOpen = 0),
+            STRSUBSTNO(CloseTxt,Closed,Waiters,Granted,StillOpen));
+
+      Backdated := Backdate(BackdateRows,BackdateDays);
+      Removed := Journal.TrimOldEntries(RetentionUnderTest,Waiters);
+      Check(Passed,Total,Report,ChkTrimTxt,
+            (Removed = Backdated) AND (Backdated = BackdateRows) AND (BenchRowCount = Waiters - BackdateRows),
+            STRSUBSTNO(TrimTxt,Removed,Backdated,BenchRowCount,Waiters));
+
+      SweepMs := Sweep;
+
+      Worst := OpenMs;
+      IF UpdateMs > Worst THEN
+        Worst := UpdateMs;
+      IF CloseMs > Worst THEN
+        Worst := CloseMs;
+      Check(Passed,Total,Report,ChkCostTxt,Worst <= CeilingMs,STRSUBSTNO(CostTxt,Worst,CeilingMs));
+
+      Report := Report + CrLf +
+        Timing(OpenPhaseTxt,OpenMs,Waiters) +
+        Timing(UpdatePhaseTxt,UpdateMs,Waiters) +
+        Timing(ClosePhaseTxt,CloseMs,Waiters) +
+        Timing(SweepPhaseTxt,SweepMs,Waiters - BackdateRows);
+    END;
+
+    LOCAL PROCEDURE PassOfWaiters@3(Waiters@1000000000 : Integer;WaitMs@1000000001 : Integer;VAR Opened@1000000002 : Integer;VAR Updated@1000000003 : Integer;VAR Closed@1000000004 : Integer;VAR Restarted@1000000005 : Integer) : Integer;
+    VAR
+      Observed@1000000006 : Record 110231;
+      Started@1000000007 : DateTime;
+      Elapsed@1000000008 : Duration;
+      Index@1000000009 : Integer;
+      Milliseconds@1000000010 : Integer;
+    BEGIN
+      // Меряется ровно то, что делает фоновая задача после съёма: проход целиком, вместе
+      // с COMMIT. Без COMMIT замер был бы вдвое красивее и вдвое бесполезнее - запись в
+      // журнал транзакций и есть то, чем проход платит.
+      Started := CURRENTDATETIME;
+      Journal.BeginPass(Started,PeriodMs);
+      FOR Index := 1 TO Waiters DO BEGIN
+        MakeObserved(Observed,Index,WaitMs);
+        Journal.Observe(Observed);
+      END;
+      Journal.FinishPass;
+      COMMIT;
+      Elapsed := CURRENTDATETIME - Started;
+      Milliseconds := Elapsed;
+      Journal.PassCounts(Opened,Updated,Closed,Restarted);
+      EXIT(Milliseconds);
+    END;
+
+    LOCAL PROCEDURE MakeObserved@4(VAR Observed@1000000000 : Record 110231;Index@1000000001 : Integer;WaitMs@1000000002 : Integer);
+    BEGIN
+      // Строка сделана похожей на настоящую не для красоты: цена записи зависит от того,
+      // сколько байт уезжает в SQL, а строковые поля здесь - самые широкие в таблице.
+      // Замер на пустой строке был бы вдвое бодрее того, что случится на бою.
+      Observed.INIT;
+      Observed."Victim SPID" := -Index;
+      Observed."Victim Transaction Id" := 4000000000 + Index;
+      Observed."Victim Is NAV" := Observed."Victim Is NAV"::Yes;
+      Observed."Victim Host" := 'STAND-HOST';
+      Observed."Victim Process Id" := 4000 + Index;
+      Observed."Blocker SPID" := -Index - 1;
+      Observed."Blocker Transaction Id" := 5000000000 + Index;
+      Observed."Head SPID" := -1;
+      Observed."Chain Depth" := 2;
+      Observed."Victims Behind Head" := Index;
+      Observed."Resource Kind" := 'KEYLOCK';
+      Observed."Hobt Id" := SampleHobt + Index;
+      Observed."Database Id" := 7;
+      Observed."Held Mode" := 'X';
+      Observed."Wait Type" := 'LCK_M_U';
+      Observed."SQL Object Name" := 'Company Name$Sales Line';
+      Observed."NAV Table Name" := 'Sales Line';
+      Observed."NAV Key No." := 1;
+      Observed."Last Wait (ms)" := WaitMs;
+      Observed."Blocker Tran Began At" := CURRENTDATETIME;
+      Observed."Blocker Statement" := 'UPDATE "Company Name$Sales Line" SET "Quantity" ' +
+        'WHERE "Document Type" AND "Document No_" AND "Line No_"';
+    END;
+
+    LOCAL PROCEDURE SampleHobt@20() : BigInteger;
+    VAR
+      Value@1000000000 : BigInteger;
+    BEGIN
+      // Числовой литерал в C/AL - это Decimal, а Decimal не переваривает больше
+      // 999 999 999 999 999,99. Настоящий hobt длиннее, и написанный литералом он не
+      // компилируется вовсе. Единственный способ внести его в код - через EVALUATE.
+      EVALUATE(Value,'72057594261667840');
+      EXIT(Value);
+    END;
+
+    LOCAL PROCEDURE Backdate@5(Rows@1000000000 : Integer;Days@1000000001 : Integer) : Integer;
+    VAR
+      Moved@1000000002 : Integer;
+      Back@1000000003 : Duration;
+    BEGIN
+      // Состаривание идёт правкой поля, а не ожиданием месяца.
+      Back := Days * MsPerDay;
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      IF Episode.FINDSET(TRUE) THEN
+        REPEAT
+          Episode."Started At" := CURRENTDATETIME - Back;
+          Episode.MODIFY;
+          Moved := Moved + 1;
+        UNTIL (Moved >= Rows) OR (Episode.NEXT = 0);
+      COMMIT;
+      EXIT(Moved);
+    END;
+
+    LOCAL PROCEDURE MsPerDay@21() : Decimal;
+    BEGIN
+      // Дробный тип, а не целый: сорок пять суток в миллисекундах не помещаются в Integer.
+      EXIT(86400000);
+    END;
+
+    LOCAL PROCEDURE Sweep@6() : Integer;
+    VAR
+      Started@1000000000 : DateTime;
+      Elapsed@1000000001 : Duration;
+      Milliseconds@1000000002 : Integer;
+    BEGIN
+      // Уборка за собой обязательна и делается по СВОЕЙ метке: у строк мерного прогона
+      // номер сессии отрицательный, а настоящий spid отрицательным не бывает. Строка,
+      // оставшаяся в журнале после замера, - это ложь в отчёте заказчику.
+      Started := CURRENTDATETIME;
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      Episode.DELETEALL;
+      COMMIT;
+      Elapsed := CURRENTDATETIME - Started;
+      Milliseconds := Elapsed;
+      EXIT(Milliseconds);
+    END;
+
+    LOCAL PROCEDURE RefuseIfJournalUsed@7();
+    VAR
+      Foreign@1000000000 : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'>=%1',0);
+      Foreign := Episode.COUNT;
+      IF Foreign > 0 THEN
+        ERROR(DirtyErr,Foreign);
+      // Свои строки от прошлого прогона, не дожившего до уборки, - не отказ, а мусор.
+      Sweep;
+    END;
+
+    LOCAL PROCEDURE BenchRowCount@8() : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE CountOutcomes@9(VAR Granted@1000000000 : Integer;VAR StillOpen@1000000001 : Integer);
+    BEGIN
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      Episode.SETRANGE(Outcome,Episode.Outcome::Granted);
+      Granted := Episode.COUNT;
+      Episode.SETRANGE(Outcome);
+      Episode.SETRANGE(Open,TRUE);
+      StillOpen := Episode.COUNT;
+    END;
+
+    LOCAL PROCEDURE Check@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text;What@1000000003 : Text;Ok@1000000004 : Boolean;Detail@1000000005 : Text);
+    VAR
+      Mark@1000000006 : Text;
+    BEGIN
+      Total := Total + 1;
+      IF Ok THEN BEGIN
+        Passed := Passed + 1;
+        Mark := PassedTxt;
+      END ELSE
+        Mark := FailedTxt;
+      Report := Report + Mark + ' ' + What + CrLf + '       ' + Detail + CrLf;
+    END;
+
+    LOCAL PROCEDURE Timing@11(Phase@1000000000 : Text;Milliseconds@1000000001 : Integer;Rows@1000000002 : Integer) : Text;
+    VAR
+      PerRow@1000000003 : Integer;
+    BEGIN
+      IF Rows > 0 THEN
+        PerRow := ROUND(Milliseconds * 1000 / Rows,1);
+      EXIT(STRSUBSTNO(TimingTxt,Phase,Milliseconds,Rows,PerRow) + CrLf);
+    END;
+
+    LOCAL PROCEDURE PeriodMs@12() : Integer;
+    BEGIN
+      // Тот же период, что и в умолчании настройки: от него зависит суждение об исходе,
+      // и мерить проход при другом значило бы мерить не тот проход.
+      EXIT(3000);
+    END;
+
+    LOCAL PROCEDURE FirstWaitMs@13() : Integer;
+    BEGIN
+      EXIT(1200);
+    END;
+
+    LOCAL PROCEDURE SecondWaitMs@14() : Integer;
+    BEGIN
+      // Больше первого - иначе счётчик ожидания пойдёт назад, и проход честно решит, что
+      // это второй эпизод. Меньше предела NAV на целый период - чтобы исход был "дождался"
+      // и его можно было проверить, а не принять на веру.
+      EXIT(4200);
+    END;
+
+    LOCAL PROCEDURE BackdateRows@15() : Integer;
+    BEGIN
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE BackdateDays@16() : Integer;
+    BEGIN
+      EXIT(45);
+    END;
+
+    LOCAL PROCEDURE RetentionUnderTest@17() : Integer;
+    BEGIN
+      // Меньше состаривания, но больше суток: чистка обязана убрать состаренные и не
+      // тронуть остальные. Проверка на месячном сроке заодно ловит переполнение Integer.
+      EXIT(30);
+    END;
+
+    LOCAL PROCEDURE CeilingMs@18() : Integer;
+    BEGIN
+      // Потолок прохода из умолчаний настройки. Съём с DMV стоит 12 мс при двухстах
+      // ждущих, значит потолок принадлежит NAV-половине почти целиком. Число берётся
+      // здесь, а не из настройки: поднятая на стенде настройка обесценила бы проверку.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE CrLf@19() : Text[2];
+    VAR
+      Cr@1000000000 : Char;
+      Lf@1000000001 : Char;
+    BEGIN
+      Cr := 13;
+      Lf := 10;
+      EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
+    BEGIN
+    {
+      Мерный прогон NAV-половины прохода - той самой, что дольше всех жила на обещании
+      "не тормозит". Ожиданий на стенде он не устраивает вовсе: на вход журналу подаются
+      разобранные строки очереди, поэтому мерить можно сколько угодно и когда угодно.
+
+      Меряются три прохода по 500 строк - ровно потолок, объявленный в разборе:
+      все открываются, все обновляются, все закрываются. Каждый - с COMMIT, потому что
+      без него замер вдвое красивее и вдвое бесполезнее.
+
+      Проверки при этом не декоративные, и каждая ловит свою ошибку:
+        открытие  - что эпизод заводится на ждущего, а не на наблюдение;
+        обновление - что второй проход НЕ плодит строки (иначе в шторм журнал растёт
+                     на полтысячи строк каждые три секунды, и это заметят по диску);
+        закрытие  - что ушедший из очереди закрывается и получает исход, а не остаётся
+                    открытым навсегда;
+        срок      - что чистка убирает состаренные и не переполняется на месяце: 30 суток
+                    в миллисекундах больше предельного Integer, и в целых числах здесь
+                    было бы отрицательное время.
+
+      Мерный прогон работает только на пустом журнале и только при выключенном стороже:
+      его собственный проход закрыл бы чужие открытые эпизоды, а чистка по сроку удалила
+      бы чужие старые. Обе беды тихие, поэтому прогон на них не надеется, а отказывается.
+
+      Свои строки метятся отрицательным номером сессии - настоящий spid отрицательным не
+      бывает. По этой же метке идёт уборка, и она идёт всегда, даже если прогон падал.
+
+      Замерено на стенде 07.09.2026, четыре прогона, по 500 строк на проход:
+        открытие   338-408 мс (0,7-0,8 мс на строку),
+        обновление 242-299 мс,
+        закрытие    94-126 мс,
+        уборка       2-15 мс.
+      Худший проход - 408 мс при потолке 1000. Это и есть цена NAV-половины в шторм: при
+      периоде 3000 мс она занимает около седьмой части времени, и потолок держится с
+      запасом вдвое с лишним. Дороже всего открытие - вставка с полной шириной строки.
+      Разброс между прогонами до пятой части: стенд делит машину с SQL, и точнее здесь не
+      бывает. Обещать "не тормозит" можно, обещать конкретные миллисекунды - нет.
+
+      Проверено поломкой 07.09.2026, обе поломки красят ровно то, что должны:
+        снятый отбор по сроку в чистке журнала - 4 из 5, "убрано 500 из 10 состаренных,
+          осталось 0 из 500", то есть чистка вынесла бы месяц наблюдений за один проход;
+        опознание эпизода ВМЕСТЕ с длительностью (лишний отбор по последней наблюдённой) -
+          2 из 5, "обновлено 0, открыто 500, строк в журнале 1000": второй проход не
+          находит свою же строку и заводит ещё полтысячи. На целом коде 5 из 5.
+    }
+    END.
+  }
+}

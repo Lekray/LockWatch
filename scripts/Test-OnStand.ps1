@@ -1,4 +1,4 @@
-#requires -Version 7
+﻿#requires -Version 7
 <#
 .SYNOPSIS
     Сборка пакета из objects/, выкладка на стенд настоящим компилятором и прогон обкатки.
@@ -23,8 +23,9 @@
     LW_DATABASE, LW_INSTANCE, LW_COMPANY либо из параметров.
 
 .PARAMETER Run
-    После выкладки поднять службу и выполнить обкатку. Модуль NAV грузится только в
-    Windows PowerShell 5.1 - скрипт вызывает её сам, сам этот файл идёт под pwsh 7.
+    После выкладки поднять службу, выполнить обкатку разбора и мерный прогон журнала.
+    Модуль NAV грузится только в Windows PowerShell 5.1 - скрипт вызывает его сам,
+    сам этот файл идёт под pwsh 7.
 
 .PARAMETER StopInstance
     Остановить экземпляр службы после прогона. Полезно на стенде, где память в обрез:
@@ -43,6 +44,7 @@ param(
     [string] $Company        = $env:LW_COMPANY,
     [int]    $MgmtPort       = 7145,
     [int]    $TestCodeunitId = 110231,
+    [int]    $BenchCodeunitId = 110233,
     [int]    $TimeoutMinutes = 3,
     [switch] $Run,
     [switch] $StopInstance
@@ -67,16 +69,40 @@ $files = Get-ChildItem (Join-Path $objects '*.txt') |
     Sort-Object @{ Expression = { $order = $typeOrder[$_.Name.Substring(0,1)]; if ($order) { $order } else { 99 } } }, Name
 if (-not $files) { Fail "в $objects нет ни одного объекта" }
 
+# "Служба запущена" по мнению SCM и "служба отвечает по порту управления" - разные события,
+# и между ними минуты: первый старт компилирует business assemblies. Проверять ОТКРЫТОСТЬ
+# порта бесполезно - он слушает задолго до готовности, это проверено. Ждать надо ответа с
+# того же конца, каким пользуется finsql: пока порт управления не отвечает, компиляция
+# таблицы падает с пустыми координатами и "Management Port: 0". Выглядит это как
+# потерянные параметры службы, а на деле - гонка со стартом, и на прогретой службе она не
+# воспроизводится вовсе.
+function Wait-ForManagement([int]$minutes = 6) {
+    $probe = Join-Path $outDir 'wait-management.ps1'
+    $body = @"
+Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
+`$deadline = (Get-Date).AddMinutes($minutes)
+while ((Get-Date) -lt `$deadline) {
+    try { Get-NAVServerSession -ServerInstance $Instance -ErrorAction Stop | Out-Null; exit 0 } catch { Start-Sleep -Seconds 5 }
+}
+exit 1
+"@
+    [IO.File]::WriteAllText($probe, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+    Write-Host '  жду ответа порта управления'
+    & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $probe | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "порт управления экземпляра $Instance не отвечает - служба не готова" }
+}
+
 function Ensure-Instance([string]$why) {
     if (-not $Instance) { Fail "нужен экземпляр службы ($why): переменная LW_INSTANCE или параметр -Instance" }
     $svc = "MicrosoftDynamicsNavServer`$$Instance"
-    if ((Get-Service $svc).Status -eq 'Running') { return $false }
-    Write-Host "  поднимаю службу $Instance ($why)"
-    Start-Service $svc
-    $deadline = (Get-Date).AddMinutes(5)
-    while ((Get-Service $svc).Status -ne 'Running' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
-    if ((Get-Service $svc).Status -ne 'Running') { Fail "служба $Instance не поднялась" }
-    return $true
+    if ((Get-Service $svc).Status -ne 'Running') {
+        Write-Host "  поднимаю службу $Instance ($why)"
+        Start-Service $svc
+        $deadline = (Get-Date).AddMinutes(5)
+        while ((Get-Service $svc).Status -ne 'Running' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+        if ((Get-Service $svc).Status -ne 'Running') { Fail "служба $Instance не поднялась" }
+    }
+    Wait-ForManagement
 }
 
 # Схему таблиц синхронизирует СЛУЖБА, а не finsql. Без поднятого экземпляра импорт с
@@ -85,7 +111,7 @@ function Ensure-Instance([string]$why) {
 $hasTables = @($files | Where-Object { $_.Name.Substring(0,1) -eq 't' }).Count -gt 0
 $navServerArgs = ''
 if ($hasTables) {
-    Ensure-Instance 'в пакете есть таблицы' | Out-Null
+    Ensure-Instance 'в пакете есть таблицы'
     $navServerArgs = ",NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort"
 }
 
@@ -200,6 +226,7 @@ Start-Service $service
 $deadline = (Get-Date).AddMinutes(5)
 while ((Get-Service $service).Status -ne 'Running' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
 if ((Get-Service $service).Status -ne 'Running') { Fail "служба $Instance не поднялась" }
+Wait-ForManagement
 
 # Модуль NAV грузится только в Windows PowerShell 5.1 - pwsh 7 падает на RealProxy.
 $runner = Join-Path $outDir 'invoke-selftest.ps1'
@@ -207,10 +234,14 @@ $body = @"
 `$ErrorActionPreference = 'Stop'
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TestCodeunitId -MethodName SelfTest -ErrorAction Stop
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $BenchCodeunitId -MethodName Bench -ErrorAction Stop
 "@
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 
-Write-Host 'Обкатка'
+# Обкатка и мерный прогон идут одной сессией: первая проверяет разбор без базы, второй -
+# NAV-половину прохода на пятистах строках. Второй меряет ЦЕНУ, поэтому и он судит сам:
+# число без сравнения с объявленным потолком - это не замер, а строка в отчёте.
+Write-Host 'Обкатка и мерный прогон'
 $report = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-String
 $testFailed = $LASTEXITCODE -ne 0
 Write-Host $report.Trim()

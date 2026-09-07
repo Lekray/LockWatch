@@ -1,0 +1,259 @@
+OBJECT Codeunit 110232 LockWatch Journal
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+      Journal@1000000001 : Record 110231;
+      PassAt@1000000002 : DateTime;
+      PassPeriodMs@1000000003 : Integer;
+      NextEntryNo@1000000004 : Integer;
+      PassStarted@1000000005 : Boolean;
+      OpenedCount@1000000006 : Integer;
+      UpdatedCount@1000000007 : Integer;
+      ClosedCount@1000000008 : Integer;
+      RestartedCount@1000000009 : Integer;
+      NoPassErr@1000000010 : TextConst 'ENU=LockWatch: an episode was offered outside a pass. A pass is opened by BeginPass and closed by FinishPass.;RUS=LockWatch: эпизод предложен вне прохода. Проход открывается процедурой BeginPass и закрывается FinishPass.';
+
+    [External]
+    PROCEDURE BeginPass@1(ObservedAt@1000000000 : DateTime;PeriodMs@1000000001 : Integer);
+    BEGIN
+      // Момент прохода берётся ОДИН на весь проход и приходит снаружи - часами SQL,
+      // тем же запросом, что отдал очередь. Свои часы здесь не годятся: между съёмом
+      // и записью проходят миллисекунды, и они легли бы в начало каждого эпизода.
+      PassAt := ObservedAt;
+      PassPeriodMs := PeriodMs;
+      OpenedCount := 0;
+      UpdatedCount := 0;
+      ClosedCount := 0;
+      RestartedCount := 0;
+      PassStarted := TRUE;
+    END;
+
+    [External]
+    PROCEDURE Observe@2(VAR Observed@1000000000 : Record 110231);
+    BEGIN
+      // Одна строка очереди. Эпизод ведётся ОДНОЙ строкой журнала, которая обновляется:
+      // снимки на каждый проход дали бы в шторм по полтысячи вставок каждые три секунды,
+      // и наблюдатель стал бы дороже наблюдаемого.
+      IF NOT PassStarted THEN
+        ERROR(NoPassErr);
+      IF FindOpen(Observed) THEN BEGIN
+        IF Parse.IsNewEpisode(Journal."Last Wait (ms)",Observed."Last Wait (ms)") THEN BEGIN
+          // Жертва дождалась и тут же встала снова на тот же ресурс: сессия та же,
+          // транзакция та же, ресурс тот же. По ключу это одна строка, а на деле два
+          // эпизода, и единственная улика - счётчик ожидания пошёл назад.
+          CloseRow;
+          RestartedCount := RestartedCount + 1;
+          OpenRow(Observed);
+        END ELSE
+          UpdateRow(Observed);
+      END ELSE
+        OpenRow(Observed);
+    END;
+
+    [External]
+    PROCEDURE FinishPass@3() : Integer;
+    BEGIN
+      IF NOT PassStarted THEN
+        ERROR(NoPassErr);
+      // Кто был открыт и в этом проходе не встретился - тот из очереди ушёл. Сюда же
+      // попадают эпизоды, оставшиеся открытыми от прошлой жизни задачи: она могла быть
+      // снята посреди прохода, и вечно открытая строка - это утечка, а не наблюдение.
+      //
+      // Идём по СКВОЗНОМУ ключу, хотя отбор - по признаку "открыт". Причина в том, что
+      // закрытие меняет сам признак, а он первое поле того ключа, по которому читать было
+      // бы удобнее: строка ушла бы из-под курсора, и остаток набора либо пропустился бы,
+      // либо прочёлся дважды. Открытых эпизодов единицы, сортировка здесь ничего не стоит.
+      Journal.RESET;
+      Journal.SETCURRENTKEY("Entry No.");
+      Journal.SETRANGE(Open,TRUE);
+      Journal.SETFILTER("Last Seen At",'<%1',PassAt);
+      IF Journal.FINDSET(TRUE) THEN
+        REPEAT
+          CloseRow;
+        UNTIL Journal.NEXT = 0;
+      PassStarted := FALSE;
+      EXIT(ClosedCount);
+    END;
+
+    [External]
+    PROCEDURE PassCounts@4(VAR Opened@1000000000 : Integer;VAR Updated@1000000001 : Integer;VAR Closed@1000000002 : Integer;VAR Restarted@1000000003 : Integer);
+    BEGIN
+      Opened := OpenedCount;
+      Updated := UpdatedCount;
+      Closed := ClosedCount;
+      Restarted := RestartedCount;
+    END;
+
+    [External]
+    PROCEDURE TrimOldEntries@5(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    VAR
+      Threshold@1000000002 : DateTime;
+      Age@1000000003 : Duration;
+      Removed@1000000004 : Integer;
+    BEGIN
+      // Срок хранения объявленный, и чистка порционная: журнал показывает чужие учётные
+      // записи, а разовое DELETEALL на месяц накопленного - это блокировка собственной
+      // таблицы посреди прохода, то есть ровно то, что мы ловим.
+      IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
+        EXIT(0);
+      Age := RetentionDays * MsPerDay;
+      Threshold := CURRENTDATETIME - Age;
+
+      Journal.RESET;
+      Journal.SETCURRENTKEY("Started At");
+      Journal.SETRANGE(Open,FALSE);
+      Journal.SETFILTER("Started At",'<%1',Threshold);
+      IF Journal.FINDSET(TRUE) THEN
+        REPEAT
+          Journal.DELETE;
+          Removed := Removed + 1;
+        UNTIL (Removed >= MaxRows) OR (Journal.NEXT = 0);
+      EXIT(Removed);
+    END;
+
+    LOCAL PROCEDURE FindOpen@6(VAR Observed@1000000000 : Record 110231) : Boolean;
+    BEGIN
+      Journal.RESET;
+      Journal.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Journal.SETRANGE(Open,TRUE);
+      Journal.SETRANGE("Victim SPID",Observed."Victim SPID");
+      Journal.SETRANGE("Victim Transaction Id",Observed."Victim Transaction Id");
+      Journal.SETRANGE("Hobt Id",Observed."Hobt Id");
+      // Ожидание объекта целиком hobt не несёт ВОВСЕ: у всех таких строк он ноль. По одному
+      // ключу два разных ожидания одной сессии слились бы в один эпизод - правдоподобно и
+      // молча. Ресурс дофильтровывается мимо индекса: после ключа тут считанные строки.
+      Journal.SETRANGE("Resource Kind",Observed."Resource Kind");
+      Journal.SETRANGE("SQL Object Name",Observed."SQL Object Name");
+      EXIT(Journal.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE OpenRow@7(VAR Observed@1000000000 : Record 110231);
+    BEGIN
+      Journal := Observed;
+      Journal."Entry No." := NextNo;
+      Journal."Started At" := Parse.EpisodeStart(PassAt,Observed."Last Wait (ms)");
+      Journal."Last Seen At" := PassAt;
+      Journal."Max Wait (ms)" := Observed."Last Wait (ms)";
+      Journal."Ended At" := 0DT;
+      Journal.Outcome := Journal.Outcome::Undetermined;
+      Journal.Open := TRUE;
+      Journal.INSERT;
+      OpenedCount := OpenedCount + 1;
+    END;
+
+    LOCAL PROCEDURE UpdateRow@8(VAR Observed@1000000000 : Record 110231);
+    VAR
+      Keep@1000000001 : Record 110231;
+    BEGIN
+      // Наблюдаемое перекрывает строку ЦЕЛИКОМ, кроме того, что устанавливается один раз.
+      // Так новое поле съёма начинает обновляться само, а не забывается молча; список
+      // "устанавливается один раз" короткий и лежит здесь, на виду.
+      //
+      // Обновлять есть что: голова цепочки за три секунды меняется, глубина растёт, класс
+      // эпизода может смениться с обычного на эскалацию. Строка обязана показывать то, что
+      // есть СЕЙЧАС, а не то, что было в первом наблюдении.
+      Keep := Journal;
+      Journal := Observed;
+      Journal."Entry No." := Keep."Entry No.";
+      Journal."Started At" := Keep."Started At";
+      Journal."Ended At" := Keep."Ended At";
+      Journal.Outcome := Keep.Outcome;
+      Journal."Document No." := Keep."Document No.";
+      Journal."Document Source" := Keep."Document Source";
+      Journal."No Document Reason" := Keep."No Document Reason";
+      Journal."User Name" := Keep."User Name";
+      Journal."User Source" := Keep."User Source";
+      Journal.Advice := Keep.Advice;
+      Journal."Advice Evidence" := Keep."Advice Evidence";
+      Journal.Open := TRUE;
+      Journal."Last Seen At" := PassAt;
+      Journal."Max Wait (ms)" := Keep."Max Wait (ms)";
+      IF Observed."Last Wait (ms)" > Journal."Max Wait (ms)" THEN
+        Journal."Max Wait (ms)" := Observed."Last Wait (ms)";
+      Journal.MODIFY;
+      UpdatedCount := UpdatedCount + 1;
+    END;
+
+    LOCAL PROCEDURE CloseRow@9();
+    VAR
+      Waited@1000000000 : Duration;
+      VictimIsNav@1000000001 : Boolean;
+    BEGIN
+      // Мига конца мы не знаем: жертва исчезла где-то между прошлым наблюдением и этим,
+      // и назвать его точнее нельзя. Зато длительность из DMV точна, поэтому концом
+      // объявляется последний миг, когда ожидание ТОЧНО ещё шло. Насколько твёрд вывод,
+      // говорит исход - у него три значения, и "не определён" честнее правдоподобной цифры.
+      VictimIsNav := Journal."Victim Is NAV" = Journal."Victim Is NAV"::Yes;
+      Waited := Journal."Max Wait (ms)";
+      Journal."Ended At" := Journal."Started At" + Waited;
+      // Значения исхода в разборе - те же числа, что и в списке опций поля, и это не
+      // совпадение: разбор о таблице ничего не знает и знать не должен, а порядок опций
+      // держится проверкой в обкатке.
+      Journal.Outcome := Parse.Outcome(Journal."Last Wait (ms)",PassPeriodMs,VictimIsNav);
+      Journal.Open := FALSE;
+      Journal.MODIFY;
+      ClosedCount := ClosedCount + 1;
+    END;
+
+    LOCAL PROCEDURE MsPerDay@11() : Decimal;
+    BEGIN
+      // Суток в миллисекундах. Тип здесь важнее числа: он ОБЯЗАН быть дробным. Тридцать
+      // суток - это 2 592 000 000, что больше предельного Integer, и та же величина,
+      // объявленная целой, дала бы переполнение на самом обычном значении настройки.
+      EXIT(86400000);
+    END;
+
+    LOCAL PROCEDURE NextNo@10() : Integer;
+    VAR
+      Last@1000000000 : Record 110231;
+    BEGIN
+      // Номер снимается с конца ОДИН раз за жизнь экземпляра кодюнита, а не на каждую
+      // строку: в шторм это полтысячи лишних чтений последней страницы за проход.
+      // Так можно потому, что пишет сюда одна фоновая задача, и спорить за номер не с кем.
+      IF NextEntryNo = 0 THEN BEGIN
+        Last.RESET;
+        IF Last.FINDLAST THEN
+          NextEntryNo := Last."Entry No.";
+      END;
+      NextEntryNo := NextEntryNo + 1;
+      EXIT(NextEntryNo);
+    END;
+
+    BEGIN
+    {
+      NAV-половина прохода: ведение эпизода в журнале. Съёма с SQL здесь нет ни строки -
+      на вход подаётся уже разобранная строка очереди, и потому эта половина меряется и
+      проверяется БЕЗ единого ожидания на стенде (Codeunit 110233).
+
+      Цена именно этой половины и была последним, что жило на обещании. Съём с DMV стоит
+      12 мс при двухстах ждущих и от нас не зависит; а вот поиск эпизода, запись и COMMIT
+      на сотни строк - зависит целиком, и в шторм это самая дорогая часть прохода.
+
+      Три решения, которые эту цену и держат:
+
+      1. Эпизод - строка, которая ОБНОВЛЯЕТСЯ. Полтысячи вставок каждые три секунды
+         превратили бы наблюдателя в причину.
+      2. Номер записи берётся с конца один раз за жизнь задачи, а не на строку.
+      3. COMMIT здесь не делается вовсе. Он один на проход и принадлежит вызывающему:
+         COMMIT на строку - это полтысячи записей в журнал транзакций за проход.
+
+      Закрытие эпизода - единственное место, где легко соврать красиво. Мига конца мы не
+      знаем; знаем последнюю длительность из DMV. Поэтому концом объявляется последний
+      миг, когда ожидание точно ещё шло, а вся неуверенность вынесена в исход отдельным
+      полем с тремя значениями.
+    }
+    END.
+  }
+}
