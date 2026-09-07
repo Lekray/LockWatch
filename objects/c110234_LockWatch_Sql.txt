@@ -195,33 +195,40 @@ OBJECT Codeunit 110234 LockWatch Sql
       LockObject@1000000006 : ARRAY [40] OF Text;
       LockIndex@1000000007 : ARRAY [40] OF Text;
       LockHash@1000000008 : ARRAY [40] OF Text;
+      LockSpid@1000000015 : ARRAY [40] OF Integer;
+      LockKind@1000000016 : ARRAY [40] OF Integer;
       Locks@1000000009 : Integer;
       TranList@1000000010 : Text;
       HobtList@1000000011 : Text;
+      SpidList@1000000017 : Text;
       Slot@1000000012 : Integer;
       Answered@1000000013 : Boolean;
     BEGIN
       // Одно чтение dm_tran_locks на весь проход, и оно приносит блокировки для ОБЕИХ
-      // дорог сразу: и ту, за которую идёт спор, и ту, что держит отметку контекста.
-      // Читать её дважды значило бы платить дважды за один и тот же скан, а он дорог:
-      // 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не помогает вовсе.
-      BuildLockLists(Buffer,TranList,HobtList);
-      IF TranList = '' THEN
+      // дорог сразу, хотя берёт их с РАЗНЫХ сторон: за какую строку идёт спор, знает сама
+      // жертва - её просьба ещё не выполнена; чем занят виновник, видно по тому, что он
+      // держит. Читать представление дважды значило бы платить дважды за один и тот же
+      // скан, а он дорог: 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не
+      // помогает вовсе.
+      BuildLockLists(Buffer,TranList,HobtList,SpidList);
+      IF (TranList = '') AND (SpidList = '') THEN
         EXIT;
 
       SqlConn := SqlConn.SqlConnection(ConnString);
       SqlConn.Open;
       SqlCmd := SqlConn.CreateCommand;
       SqlCmd.CommandTimeout := ReadTimeoutSec;
-      SqlCmd.CommandText := HeldLocksSql(TranList,HobtList);
+      SqlCmd.CommandText := LocksOfInterestSql(TranList,HobtList,SpidList);
       SqlReader := SqlCmd.ExecuteReader;
       WHILE SqlReader.Read AND (Locks < MaxLocks) DO BEGIN
         Locks := Locks + 1;
-        LockTran[Locks] := SqlReader.GetInt64(0);
-        LockHobt[Locks] := SqlReader.GetInt64(1);
-        LockObject[Locks] := ReaderText(SqlReader,2);
-        LockIndex[Locks] := ReaderText(SqlReader,3);
-        LockHash[Locks] := Parse.TrimLockHash(ReaderText(SqlReader,4));
+        LockKind[Locks] := ReaderInt(SqlReader,0);
+        LockSpid[Locks] := ReaderInt(SqlReader,1);
+        LockTran[Locks] := SqlReader.GetInt64(2);
+        LockHobt[Locks] := SqlReader.GetInt64(3);
+        LockObject[Locks] := ReaderText(SqlReader,4);
+        LockIndex[Locks] := ReaderText(SqlReader,5);
+        LockHash[Locks] := Parse.TrimLockHash(ReaderText(SqlReader,6));
       END;
       SqlReader.Close;
 
@@ -233,11 +240,11 @@ OBJECT Codeunit 110234 LockWatch Sql
           // "чем занят виновник", и она нужна там, где первая молчит: у страничной
           // блокировки строки нет вовсе, а читающий виновник отметки не оставляет.
           Answered := FALSE;
-          Slot := FindLock(LockTran,LockHobt,Locks,Buffer."Blocker Transaction Id",Buffer."Hobt Id");
+          Slot := FindWaitedLock(LockKind,LockSpid,LockHobt,Locks,Buffer."Victim SPID",Buffer."Hobt Id");
           IF Slot > 0 THEN
             Answered := ByContendedRow(SqlConn,Buffer,Context,LockObject[Slot],LockIndex[Slot],LockHash[Slot]);
           IF NOT Answered THEN BEGIN
-            Slot := FindMarkLock(LockTran,LockObject,Locks,Buffer."Blocker Transaction Id");
+            Slot := FindMarkLock(LockKind,LockTran,LockObject,Locks,Buffer."Blocker Transaction Id");
             IF Slot > 0 THEN
               ByContextMark(SqlConn,Buffer,LockObject[Slot],LockIndex[Slot],LockHash[Slot]);
           END;
@@ -323,29 +330,39 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(FALSE);
     END;
 
-    LOCAL PROCEDURE FindLock@35(VAR LockTran@1000000000 : ARRAY [40] OF BigInteger;VAR LockHobt@1000000001 : ARRAY [40] OF BigInteger;Locks@1000000002 : Integer;TranId@1000000003 : BigInteger;HobtId@1000000004 : BigInteger) : Integer;
+    LOCAL PROCEDURE FindWaitedLock@35(VAR LockKind@1000000006 : ARRAY [40] OF Integer;VAR LockSpid@1000000007 : ARRAY [40] OF Integer;VAR LockHobt@1000000001 : ARRAY [40] OF BigInteger;Locks@1000000002 : Integer;Spid@1000000003 : Integer;HobtId@1000000004 : BigInteger) : Integer;
     VAR
       Index@1000000005 : Integer;
     BEGIN
-      IF (TranId = 0) OR (HobtId = 0) THEN
+      // Хэш спорной строки берётся у САМОЙ ЖЕРТВЫ, а не у виновника, и это разница между
+      // верным ответом и правдоподобным. Виновник держит столько строк, сколько тронул:
+      // измерено на стенде - две тронутые строки дают на одном hobt две выданные
+      // блокировки, и выбранная из них наугад назвала бы чужой документ уверенным тоном.
+      // Невыполненная просьба жертвы на том же hobt ровно одна, и она называет ту строку,
+      // за которую идёт спор. Ждущая задача в dm_os_waiting_tasks хэша не несёт вовсе -
+      // только hobt, - поэтому спрашивать приходится dm_tran_locks.
+      IF (Spid = 0) OR (HobtId = 0) THEN
         EXIT(0);
       FOR Index := 1 TO Locks DO
-        IF (LockTran[Index] = TranId) AND (LockHobt[Index] = HobtId) THEN
+        IF (LockKind[Index] = KindWaited) AND (LockSpid[Index] = Spid) AND (LockHobt[Index] = HobtId) THEN
           EXIT(Index);
       EXIT(0);
     END;
 
-    LOCAL PROCEDURE FindMarkLock@36(VAR LockTran@1000000000 : ARRAY [40] OF BigInteger;VAR LockObject@1000000001 : ARRAY [40] OF Text;Locks@1000000002 : Integer;TranId@1000000003 : BigInteger) : Integer;
+    LOCAL PROCEDURE FindMarkLock@36(VAR LockKind@1000000007 : ARRAY [40] OF Integer;VAR LockTran@1000000000 : ARRAY [40] OF BigInteger;VAR LockObject@1000000001 : ARRAY [40] OF Text;Locks@1000000002 : Integer;TranId@1000000003 : BigInteger) : Integer;
     VAR
       Index@1000000004 : Integer;
       Name@1000000005 : Text;
       Suffix@1000000006 : Text;
     BEGIN
+      // Отметку виновник ДЕРЖИТ, а не просит: она поставлена его же записью внутри той же
+      // транзакции. Невыполненная просьба на таблице отметок значила бы обратное - что
+      // виновник сам чего-то ждёт, - и документом из неё отвечать нельзя.
       IF TranId = 0 THEN
         EXIT(0);
       Suffix := MarkTableSuffix;
       FOR Index := 1 TO Locks DO
-        IF LockTran[Index] = TranId THEN BEGIN
+        IF (LockKind[Index] = KindGranted) AND (LockTran[Index] = TranId) THEN BEGIN
           Name := LockObject[Index];
           IF STRLEN(Name) >= STRLEN(Suffix) THEN
             IF COPYSTR(Name,STRLEN(Name) - STRLEN(Suffix) + 1) = Suffix THEN
@@ -354,37 +371,58 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(0);
     END;
 
-    LOCAL PROCEDURE BuildLockLists@37(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR TranList@1000000001 : Text;VAR HobtList@1000000002 : Text);
+    LOCAL PROCEDURE BuildLockLists@37(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR TranList@1000000001 : Text;VAR HobtList@1000000002 : Text;VAR SpidList@1000000004 : Text);
     VAR
       Seen@1000000003 : Integer;
     BEGIN
+      // Три списка на один запрос: транзакции виновников - для отметок, номера сеансов
+      // жертв вместе с hobt - для спорных строк. Отбор по номеру сеанса обязателен: без
+      // него в ответ попали бы невыполненные просьбы всей базы.
       TranList := '';
       HobtList := '';
+      SpidList := '';
       Buffer.RESET;
       IF Buffer.FINDSET THEN
         REPEAT
           IF Buffer."Blocker Transaction Id" <> 0 THEN BEGIN
             TranList := AppendId(TranList,FORMAT(Buffer."Blocker Transaction Id"));
-            IF Buffer."Hobt Id" <> 0 THEN
+            IF (Buffer."Hobt Id" <> 0) AND (Buffer."Victim SPID" <> 0) THEN BEGIN
               HobtList := AppendId(HobtList,FORMAT(Buffer."Hobt Id"));
+              SpidList := AppendId(SpidList,FORMAT(Buffer."Victim SPID"));
+            END;
             Seen := Seen + 1;
           END;
         UNTIL (Seen >= Parse.MaxDocumentsPerPass) OR (Buffer.NEXT = 0);
       Buffer.RESET;
     END;
 
-    LOCAL PROCEDURE HeldLocksSql@38(TranList@1000000000 : Text;HobtList@1000000001 : Text) : Text;
+    LOCAL PROCEDURE LocksOfInterestSql@38(TranList@1000000000 : Text;HobtList@1000000001 : Text;SpidList@1000000004 : Text) : Text;
     VAR
       Sql@1000000002 : Text;
       Hobts@1000000003 : Text;
+      Spids@1000000005 : Text;
+      Trans@1000000006 : Text;
     BEGIN
       // Пустой список пришлось бы отдавать как IN (), а это синтаксическая ошибка.
       // Заведомо несуществующий номер дешевле ветвления.
       Hobts := HobtList;
       IF Hobts = '' THEN
         Hobts := '-1';
+      Spids := SpidList;
+      IF Spids = '' THEN
+        Spids := '-1';
+      Trans := TranList;
+      IF Trans = '' THEN
+        Trans := '-1';
+      // Первая половина условия - НЕВЫПОЛНЕННЫЕ просьбы жертв: они называют спорную строку.
+      // Вторая - ВЫДАННЫЕ блокировки виновников на таблице отметок. Знак "не равно" в
+      // тексте запроса собран отрицанием равенства: равенство здесь и без того живёт
+      // функцией, а два способа написать одно и то же в одном запросе - лишний повод
+      // ошибиться.
       Sql :=
-        'SELECT DISTINCT CONVERT(bigint,l.request_owner_id),' +
+        'SELECT DISTINCT CONVERT(int,CASE WHEN l.request_status ' + Eq + ' ' + Q + 'GRANT' + Q +
+        ' THEN ' + FORMAT(KindGranted) + ' ELSE ' + FORMAT(KindWaited) + ' END),' +
+        ' CONVERT(int,l.request_session_id), CONVERT(bigint,l.request_owner_id),' +
         ' CONVERT(bigint,l.resource_associated_entity_id), o.name, i.name,' +
         ' RTRIM(l.resource_description)' +
         ' FROM sys.dm_tran_locks l' +
@@ -392,11 +430,14 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' JOIN sys.objects o ON o.object_id ' + Eq + ' p.object_id' +
         ' JOIN sys.indexes i ON i.object_id ' + Eq + ' p.object_id' +
         ' AND i.index_id ' + Eq + ' p.index_id' +
-        ' WHERE l.request_owner_type ' + Eq + ' ' + Q + 'TRANSACTION' + Q +
-        ' AND l.resource_type ' + Eq + ' ' + Q + 'KEY' + Q +
-        ' AND l.request_owner_id IN (' + TranList + ')' +
-        ' AND (l.resource_associated_entity_id IN (' + Hobts + ')' +
-        ' OR o.name LIKE ' + Q + Wildcard + MarkTableSuffix + Q + ');';
+        ' WHERE l.resource_type ' + Eq + ' ' + Q + 'KEY' + Q +
+        ' AND ((NOT (l.request_status ' + Eq + ' ' + Q + 'GRANT' + Q + ')' +
+        ' AND l.request_session_id IN (' + Spids + ')' +
+        ' AND l.resource_associated_entity_id IN (' + Hobts + '))' +
+        ' OR (l.request_status ' + Eq + ' ' + Q + 'GRANT' + Q +
+        ' AND l.request_owner_type ' + Eq + ' ' + Q + 'TRANSACTION' + Q +
+        ' AND l.request_owner_id IN (' + Trans + ')' +
+        ' AND o.name LIKE ' + Q + Wildcard + MarkTableSuffix + Q + '));';
       EXIT(Sql);
     END;
 
@@ -470,6 +511,18 @@ OBJECT Codeunit 110234 LockWatch Sql
     LOCAL PROCEDURE MarkTableSuffix@44() : Text;
     BEGIN
       EXIT('LockWatch Context Mark');
+    END;
+
+    LOCAL PROCEDURE KindWaited@47() : Integer;
+    BEGIN
+      // Строка ответа, за которой стоит невыполненная просьба жертвы.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE KindGranted@48() : Integer;
+    BEGIN
+      // Строка ответа, за которой стоит выданная блокировка виновника.
+      EXIT(2);
     END;
 
     LOCAL PROCEDURE MaxLocks@45() : Integer;

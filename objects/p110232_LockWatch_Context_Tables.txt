@@ -18,6 +18,24 @@ OBJECT Page 110232 LockWatch Context Tables
       { 40      ;    ;ActionContainer;
                       Name=ContextActions;
                       ActionContainerType=ActionItems }
+      { 42      ;1   ;Action    ;
+                      Name=RefreshNames;
+                      CaptionML=[ENU=Refresh Names;
+                                 RUS=Перечитать имена];
+                      ToolTipML=[ENU=Fills in the table and field names from the object metadata. Needed for rows that arrived past this page, with a transferred setup or an import, and after a table or a field has been renamed.;
+                                 RUS=Подставляет имена таблицы и поля из метаданных объектов. Нужно строкам, приехавшим мимо этого экрана - переносом настройки, импортом, - и после переименования таблицы или поля.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Refresh;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 Task@1000000000 : Codeunit 110236;
+                               BEGIN
+                                 MESSAGE(RefreshedTxt,Task.RefreshContextNames);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+
       { 41      ;1   ;Action    ;
                       Name=OpenSetup;
                       CaptionML=[ENU=Setup;
@@ -96,6 +114,8 @@ OBJECT Page 110232 LockWatch Context Tables
   }
   CODE
   {
+    VAR
+      RefreshedTxt@1000000000 : TextConst 'ENU=Rows whose names changed: %1;RUS=Строк, у которых имена изменились: %1';
 
     BEGIN
     {

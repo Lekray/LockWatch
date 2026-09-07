@@ -49,7 +49,9 @@ $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
 function Invoke-Sql([string]$query) {
-    $answer = & sqlcmd -S $Server -d $Database -E -l 30 -w 500 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
+    # -b обязателен не меньше: без него sqlcmd возвращает НОЛЬ и на ошибке SQL, проверка
+    # кода возврата проходит вхолостую, а запрос не выполнен вовсе.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -w 500 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
     if ($LASTEXITCODE -ne 0) { Fail "SQL не выполнился: $($answer -join ' ')" }
     return ,@($answer | Where-Object { $_ -and ($_ -notmatch '^\(') })
 }

@@ -65,6 +65,30 @@ OBJECT Codeunit 110236 LockWatch Task
     END;
 
     [External]
+    PROCEDURE RefreshContextNames@12() : Integer;
+    VAR
+      ContextTable@1000000000 : Record 110232;
+      Before@1000000001 : Text;
+      Changed@1000000002 : Integer;
+    BEGIN
+      // Перечитать имена таблиц и полей по номерам. Нужно ровно там, где строку завели
+      // мимо экрана, и ещё там, где таблицу или поле переименовали: в настройке осталось
+      // прежнее имя, а съём сверяет его с именем из SQL и после переименования не сойдётся.
+      // Возвращается число ИЗМЕНЁННЫХ строк, а не всех: "перечитано 0" и "перечитано 7" -
+      // разные ответы, и второй значит, что настройка разошлась с базой и это заметили.
+      IF ContextTable.FINDSET(TRUE) THEN
+        REPEAT
+          Before := ContextTable."Table Name" + '|' + ContextTable."Document Field Name";
+          ContextTable.FillNames;
+          IF Before <> ContextTable."Table Name" + '|' + ContextTable."Document Field Name" THEN BEGIN
+            ContextTable.MODIFY;
+            Changed := Changed + 1;
+          END;
+        UNTIL ContextTable.NEXT = 0;
+      EXIT(Changed);
+    END;
+
+    [External]
     PROCEDURE ScheduledCount@4() : Integer;
     VAR
       ScheduledTask@1000000000 : Record 2000000175;
