@@ -16,7 +16,8 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
       ContextTableNo@1000000000 : Integer;
       NoMarkErr@1000000001 : TextConst 'ENU=The adapter did not put a mark down. Without it the document column stays empty, and an empty column reads as no locks by document.;RUS=Переходник отметку не поставил. Без неё колонка документа остаётся пустой, а пустая колонка читается как "блокировок по документам не было".';
       WrongDocErr@1000000002 : TextConst 'ENU=The mark holds the document %1 while %2 was written.;RUS=В отметке документ %1, а записан был %2.';
-      OkMsg@1000000003 : TextConst 'ENU=passed 1 of 1 - the adapter marks the session with the document %1;RUS=пройдено 1 из 1 - переходник отмечает сеанс документом %1';
+      NotSubscribedErr@1000000004 : TextConst 'ENU=The platform does not know this subscription: no active subscriber on table %1. The object compiles and stays silent, which is indistinguishable from there being no documents.;RUS=Платформа не знает этой подписки: активного подписчика на таблицу %1 нет. Объект при этом компилируется и молчит, а молчание неотличимо от "документов не было".';
+      OkMsg@1000000003 : TextConst 'ENU=passed 2 of 2 - the platform knows the subscription, and the adapter marks the session with the document %1;RUS=пройдено 2 из 2 - платформа знает подписку, и переходник отмечает сеанс документом %1';
 
     [EventSubscriber(Table,37,OnAfterInsertEvent)]
     LOCAL PROCEDURE OnContextInsert@1(VAR Rec@1000000000 : Record 37;RunTrigger@1000000001 : Boolean);
@@ -70,6 +71,41 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
     END;
 
     [External]
+    PROCEDURE SubscriptionActive@11() : Boolean;
+    VAR
+      Subscription@1000000000 : Record 2000000140;
+    BEGIN
+      // Единственный способ узнать, что подписка ЖИВАЯ. Объект, не выложенный или
+      // выложенный без компиляции, ничем не отличается от работающего: колонка документа
+      // просто остаётся пустой, а пустая колонка читается как "спорили не за документы".
+      //
+      // Номера ТАБЛИЦЫ у подписки платформа не показывает - в "Event Subscription" такого
+      // поля нет вовсе (измерено 08.09.2026: поля 1-4 и 6-13, пятого нет). Поэтому здесь
+      // проверяется, что подписчик зарегистрирован и активен, а что таблица та самая -
+      // проверяется вторым способом: записью в неё, ниже.
+      Subscription.SETRANGE("Subscriber Codeunit ID",CODEUNIT::"LockWatch Context Adapter");
+      Subscription.SETRANGE(Active,TRUE);
+      EXIT(NOT Subscription.ISEMPTY);
+    END;
+
+    [External]
+    PROCEDURE SubscriptionCalls@12() : Integer;
+    VAR
+      Subscription@1000000000 : Record 2000000140;
+      Calls@1000000001 : Integer;
+    BEGIN
+      // Сколько раз подписка сработала с момента старта службы. Ноль на живой таблице -
+      // это не "тихо", а "не туда": объект собран под другую таблицу, и узнать об этом
+      // иначе нельзя, потому что номера таблицы платформа в списке подписок не держит.
+      Subscription.SETRANGE("Subscriber Codeunit ID",CODEUNIT::"LockWatch Context Adapter");
+      IF Subscription.FINDSET THEN
+        REPEAT
+          Calls := Calls + Subscription."Number of Calls";
+        UNTIL Subscription.NEXT = 0;
+      EXIT(Calls);
+    END;
+
+    [External]
     PROCEDURE SelfTest@7();
     VAR
       SalesLine@1000000000 : Record 37;
@@ -82,6 +118,8 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
       // Поэтому он проверяет себя сам: пишет строку в таблицу контекста и смотрит, легла
       // ли отметка. Убирает за собой и то, и другое.
       DocNo := TestDocumentNo;
+      IF NOT SubscriptionActive THEN
+        ERROR(NotSubscribedErr,TableNo);
       Existed := ContextTable.GET(TableNo);
       IF NOT Existed THEN BEGIN
         ContextTable.INIT;
@@ -147,11 +185,12 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
 
       Подписка стоит на штатной Table 37 "Sales Line" нарочно - репозиторий считаем
       публичным, и номеров доработанных объектов заказчика в коде быть не может. На
-      установке этот объект копируют, меняют в нём три места (номер таблицы в трёх
-      подписках, тип записи и поле с номером документа) и выкладывают под своим номером.
-      Копий столько, сколько таблиц контекста: номер таблицы в подписке - константа
-      времени компиляции, и одним объектом на все таблицы обойтись нельзя (FINDINGS,
-      раздел 10).
+      установке объект под целевую таблицу СОБИРАЕТСЯ ПОДСТАНОВКОЙ, а не правкой руками:
+      `pwsh scripts/New-ContextAdapter.ps1 -TableNo N -ObjectNo M`. Мест для правки пять, и
+      промахнуться в них можно молча - подписка на чужой номер таблицы компилируется и
+      просто никогда не срабатывает. Копий столько, сколько таблиц контекста: номер таблицы
+      в подписке - константа времени компиляции, и одним объектом на все таблицы обойтись
+      нельзя (FINDINGS, раздел 10).
 
       Почему переходник вообще нужен. Отметка ставится ВНУТРИ транзакции пишущего, и
       этим она ценна: транзакция виновника держит на ней монопольную блокировку, а по

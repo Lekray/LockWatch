@@ -1,0 +1,120 @@
+OBJECT Codeunit 110239 LockWatch Adapter Bench
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Bench;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      // Знака равенства в тексте константы быть не должно: разбор языковых кусков в
+      // C/SIDE спотыкается о него при импорте и жалуется на "'' is not an option",
+      // указывая на строку константы, а не на причину.
+      ResultTxt@1000000000 : TextConst 'ENU=ADAPTERBENCH ms %1 rows %2 us %3 marked %4;RUS=ADAPTERBENCH ms %1 rows %2 us %3 marked %4';
+      DirtyErr@1000000001 : TextConst 'ENU=The bench document %1 already has %2 lines. A previous run did not clean up after itself, and measuring on top of them would measure the wrong thing.;RUS=У мерного документа %1 уже есть %2 строк. Прошлый прогон за собой не убрал, и мерить поверх них значило бы мерить не то.';
+
+    [External]
+    PROCEDURE Bench@1();
+    VAR
+      SalesLine@1000000000 : Record 37;
+      Mark@1000000001 : Record 110233;
+      Started@1000000002 : DateTime;
+      Elapsed@1000000003 : Duration;
+      Milliseconds@1000000004 : Integer;
+      Index@1000000005 : Integer;
+      Rows@1000000006 : Integer;
+      PerRow@1000000007 : Integer;
+      Marked@1000000008 : Integer;
+    BEGIN
+      // Цена подписки меряется на ШТАТНОЙ таблице, а не на таблице заказчика, и это
+      // осознанно. На целевой таблице установки уже стоят чужие подписки, и вставка в неё
+      // подняла бы ИХ работу - числа вышли бы про чужой код, а не про наш. Своя подписка
+      // стоит одинаково вне зависимости от того, сколько соседей у неё в списке.
+      Rows := BenchRows;
+      SalesLine.RESET;
+      SalesLine.SETRANGE("Document No.",BenchDocumentNo);
+      IF NOT SalesLine.ISEMPTY THEN
+        ERROR(DirtyErr,BenchDocumentNo,SalesLine.COUNT);
+
+      // Отметку снимаем ДО замера: она и есть улика того, что подписка сработала, и
+      // отличить "подписки нет" от "подписка есть, но выключена" можно только по ней.
+      Mark.Release;
+
+      Started := CURRENTDATETIME;
+      FOR Index := 1 TO Rows DO BEGIN
+        SalesLine.INIT;
+        SalesLine."Document Type" := SalesLine."Document Type"::Order;
+        SalesLine."Document No." := BenchDocumentNo;
+        SalesLine."Line No." := Index;
+        SalesLine.INSERT;
+      END;
+      COMMIT;
+      Elapsed := CURRENTDATETIME - Started;
+      Milliseconds := Elapsed;
+
+      IF Mark.GET(SERVICEINSTANCEID,SESSIONID) THEN
+        Marked := 1;
+
+      SalesLine.RESET;
+      SalesLine.SETRANGE("Document No.",BenchDocumentNo);
+      SalesLine.DELETEALL;
+      Mark.Release;
+      COMMIT;
+
+      IF Rows > 0 THEN
+        PerRow := ROUND(Milliseconds * 1000 / Rows,1);
+      MESSAGE(ResultTxt,Milliseconds,Rows,PerRow,Marked);
+    END;
+
+    LOCAL PROCEDURE BenchRows@2() : Integer;
+    BEGIN
+      // Две тысячи строк. Меньше - и разница между вариантами утонет в разбросе самого
+      // замера: одна вставка стоит доли миллисекунды, а часы C/AL считают миллисекундами.
+      // Больше - и прогон начнёт мешать всему остальному на стенде.
+      EXIT(2000);
+    END;
+
+    LOCAL PROCEDURE BenchDocumentNo@3() : Code[20];
+    BEGIN
+      // Номер заведомо не встречающийся: прогон пишет в ЖИВУЮ таблицу, и столкнуться с
+      // настоящим документом ему нельзя ни при каких обстоятельствах.
+      EXIT('LOCKWATCH-BENCH');
+    END;
+
+    BEGIN
+    {
+      Во что обходится СВОЯ подписка на каждой записи. Вопрос этот заказчику задан не зря:
+      переходник вешается на таблицу, куда пишут постоянно, и цена его - не ноль.
+
+      Меряется он тремя вариантами, и переключает их не этот объект, а прогон
+      scripts/Test-Adapter.ps1:
+
+        1. подписчика нет вовсе - объект удалён из базы;
+        2. подписчик есть, строка таблицы контекста выключена - он выходит на первой же
+           строке;
+        3. подписчик есть и работает - он ставит отметку внутри той же транзакции.
+
+      Второй вариант отвечает на вопрос, который задают первым: "а если выключить?".
+      Третий - на вопрос "а если оставить?". Первый нужен, чтобы было с чем сравнивать:
+      два числа без базового - это не замер.
+
+      Улика того, что варианты РАЗНЫЕ, - поле marked в ответе. Без него прогон, в котором
+      подписка молча не сработала, дал бы три одинаковых числа и был бы объявлен успехом.
+
+      Замер идёт на штатной Table 37 нарочно. На целевой таблице установки уже стоят чужие
+      подписки, и вставка в неё меряла бы их работу, а не нашу. Своя подписка стоит
+      одинаково вне зависимости от того, сколько соседей у неё в списке.
+    }
+    END.
+  }
+}
