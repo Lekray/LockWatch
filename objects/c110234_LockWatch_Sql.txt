@@ -58,6 +58,21 @@ OBJECT Codeunit 110234 LockWatch Sql
     END;
 
     [External]
+    PROCEDURE ReadCounters@58(MaxRows@1000000000 : Integer;VAR Reading@1000000001 : TEMPORARY Record 110235;VAR Rows@1000000002 : Integer) : Boolean;
+    BEGIN
+      LastError := '';
+      Rows := 0;
+      Reading.RESET;
+      Reading.DELETEALL;
+      IF (MaxRows <= 0) OR (MaxRows > Parse.MaxCoverageRows) THEN
+        MaxRows := Parse.MaxCoverageRows;
+      IF TryReadCounters(MaxRows,Reading,Rows) THEN
+        EXIT(TRUE);
+      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      EXIT(FALSE);
+    END;
+
+    [External]
     PROCEDURE LastErrorText@3() : Text;
     BEGIN
       EXIT(LastError);
@@ -1007,6 +1022,97 @@ OBJECT Codeunit 110234 LockWatch Sql
         EXIT(0DT);
       Offset := Milliseconds;
       EXIT(CREATEDATETIME(SqlEpoch + Days,0T) + Offset);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryReadCounters@59(MaxRows@1000000000 : Integer;VAR Reading@1000000001 : TEMPORARY Record 110235;VAR Rows@1000000002 : Integer);
+    VAR
+      SqlConn@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlCmd@1000000004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlReader@1000000005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      ObjectName@1000000006 : Text;
+      IndexName@1000000007 : Text;
+      CompanyName@1000000008 : Text;
+      TableName@1000000009 : Text;
+      SiftKeyNo@1000000010 : Integer;
+      KeyNo@1000000011 : Integer;
+    BEGIN
+      // Съём накопительного слоя. Он не о том, кто кого ждёт СЕЙЧАС - тут ответа нет и
+      // быть не может, счётчик прирастает только в момент конца ожидания, - а о том,
+      // сколько ожиданий было ВСЕГО. В том числе тех, что короче периода опроса, и потому
+      // опросу не видны вовсе.
+      SqlConn := SqlConn.SqlConnection(ConnString);
+      SqlConn.Open;
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText := CountersSql(MaxRows);
+      SqlReader := SqlCmd.ExecuteReader;
+      WHILE SqlReader.Read DO BEGIN
+        Rows := Rows + 1;
+        ObjectName := ReaderText(SqlReader,5);
+        IndexName := ReaderText(SqlReader,6);
+        Reading.INIT;
+        Reading."SQL Object Id" := ReaderInt(SqlReader,0);
+        Reading."Index Id" := ReaderInt(SqlReader,1);
+        // В буфер едут СЫРЫЕ значения счётчика, и лежат они в полях "последнее чтение":
+        // приростом они станут только в накопителе, где есть с чем сравнивать.
+        Reading."Last Waits" := ReaderBigInt(SqlReader,2);
+        Reading."Last Wait (ms)" := ReaderBigInt(SqlReader,3);
+        Reading."Last Escalations" := ReaderBigInt(SqlReader,4);
+        Reading."SQL Object Name" := COPYSTR(ObjectName,1,MAXSTRLEN(Reading."SQL Object Name"));
+        KeyNo := Parse.UnknownKeyNo;
+        IF Parse.SplitSqlObjectName(ObjectName,CompanyName,TableName,SiftKeyNo) THEN BEGIN
+          IF SiftKeyNo <> Parse.UnknownKeyNo THEN
+            KeyNo := SiftKeyNo
+          ELSE
+            KeyNo := Parse.KeyNoFromIndexName(IndexName);
+          Reading."NAV Table Name" := COPYSTR(TableName,1,MAXSTRLEN(Reading."NAV Table Name"));
+          Reading."On SIFT" := SiftKeyNo <> Parse.UnknownKeyNo;
+        END;
+        Reading."NAV Key No." := KeyNo;
+        Reading.INSERT;
+      END;
+      SqlReader.Close;
+      SqlConn.Close;
+    END;
+
+    LOCAL PROCEDURE CountersSql@60(MaxRows@1000000000 : Integer) : Text;
+    VAR
+      Sql@1000000001 : Text;
+      WaitMs@1000000002 : Text;
+    BEGIN
+      // Ожидания строчные и страничные складываются в одно число нарочно: лечатся они
+      // одинаково, а порознь вторая колонка почти всегда была бы нулём.
+      //
+      // Приведение к bigint стоит ДО сложения. Счётчики объявлены bigint по отдельности,
+      // но сумма по разделам таблицы, сложенная как int, переполнилась бы молча - и на
+      // самой нагруженной таблице первой.
+      //
+      // ОТБОР СТОИТ ДО СОЕДИНЕНИЯ С КАТАЛОГОМ, и это не вкусовщина, а замер: тот же ответ
+      // с соединением снаружи стоил 82,7 мс, а с соединением после отбора - 0,46. Разница
+      // в сто восемьдесят раз, и берётся она из того, что у табличной функции нет
+      // статистики: оптимизатор готовится к огромному набору и соединяет с каталогом всё,
+      // хотя после отбора остаются единицы строк.
+      WaitMs := 'SUM(CONVERT(bigint,s.row_lock_wait_in_ms) + CONVERT(bigint,s.page_lock_wait_in_ms))';
+      Sql :=
+        'SELECT TOP (' + FORMAT(MaxRows) + ') g.object_id, g.index_id, g.waits, g.wait_ms,' +
+        ' g.esc, o.name, i.name' +
+        ' FROM (SELECT s.object_id AS object_id, s.index_id AS index_id,' +
+        ' SUM(CONVERT(bigint,s.row_lock_wait_count) + CONVERT(bigint,s.page_lock_wait_count))' +
+        ' AS waits, ' + WaitMs + ' AS wait_ms,' +
+        ' SUM(CONVERT(bigint,s.index_lock_promotion_count)) AS esc' +
+        ' FROM sys.dm_db_index_operational_stats(DB_ID(),NULL,NULL,NULL) s' +
+        ' GROUP BY s.object_id, s.index_id' +
+        ' HAVING ' + WaitMs + ' > 0) g' +
+        ' JOIN sys.objects o ON o.object_id ' + Eq + ' g.object_id' +
+        ' JOIN sys.indexes i ON i.object_id ' + Eq + ' g.object_id' +
+        ' AND i.index_id ' + Eq + ' g.index_id' +
+        ' WHERE o.is_ms_shipped ' + Eq + ' 0' +
+        // Потолок отсекает ХВОСТ, а не голову: порядок по насчитанным миллисекундам.
+        // Выпавшая из потолка строка счёту не вредит - вернувшись, она отдаст прирост за
+        // всё время отсутствия разом.
+        ' ORDER BY g.wait_ms DESC;';
+      EXIT(Sql);
     END;
 
     LOCAL PROCEDURE ReaderText@15(VAR SqlReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";Index@1000000001 : Integer) : Text;

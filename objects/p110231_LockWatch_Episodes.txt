@@ -78,6 +78,20 @@ OBJECT Page 110231 LockWatch Episodes
                                  PAGE.RUN(PAGE::"LockWatch Summary");
                                END;
                                 }
+      { 45      ;1   ;Action    ;
+                      Name=OpenCoverage;
+                      CaptionML=[ENU=Coverage;
+                                 RUS=Охват];
+                      ToolTipML=[ENU=Open the coverage: how much of the waiting this journal can put a name to at all. A wait shorter than the poll period is invisible here by design.;
+                                 RUS=Открыть охват: какой доле ожидания этот журнал вообще может дать имя. Ожидание короче периода опроса тут не видно по устройству.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Completed;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Coverage");
+                               END;
+                                }
       { 43      ;1   ;Action    ;
                       Name=OpenSetup;
                       CaptionML=[ENU=Setup;

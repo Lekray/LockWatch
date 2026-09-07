@@ -95,6 +95,20 @@ OBJECT Page 110233 LockWatch Summary
                                  ShowEpisodes;
                                END;
                                 }
+      { 26      ;1   ;Action    ;
+                      Name=OpenCoverage;
+                      CaptionML=[ENU=Coverage;
+                                 RUS=Охват];
+                      ToolTipML=[ENU=Open the coverage: how much of the waiting the journal can put a name to at all. This summary does not promise that everything is visible, and that screen says how much is.;
+                                 RUS=Открыть охват: какой доле ожидания журнал вообще может дать имя. Эта сводка не обещает, что видно всё, а тот экран говорит, сколько именно видно.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Completed;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Coverage");
+                               END;
+                                }
       { 25      ;1   ;Action    ;
                       Name=OpenSetup;
                       CaptionML=[ENU=Setup;
@@ -366,6 +380,10 @@ OBJECT Page 110233 LockWatch Summary
       Строка сводки - не ответ, а вопрос: "почему эта таблица столько ждёт". Ответ лежит
       в эпизодах за ней, поэтому кнопка "Эпизоды" переносит туда ТОТ ЖЕ отбор - окно,
       таблицу и ключ, - а не открывает журнал целиком.
+
+      Обещания "видно всё" сводка не даёт, и это принципиально: опрос очереди не видит
+      ожиданий короче своего периода, а таких большинство. Сколько именно видно, говорит
+      отдельный экран охвата, и кнопка туда стоит здесь же.
     }
     END.
   }

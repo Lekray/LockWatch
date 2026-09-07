@@ -1,0 +1,191 @@
+OBJECT Codeunit 110238 LockWatch Coverage
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+      Coverage@1000000001 : Record 110235;
+      AddedRows@1000000002 : Integer;
+      ChangedRows@1000000003 : Integer;
+      ResetRows@1000000004 : Integer;
+
+    [External]
+    PROCEDURE Accumulate@1(VAR Reading@1000000000 : Record 110235) : Integer;
+    VAR
+      DeltaWaits@1000000001 : BigInteger;
+      DeltaMs@1000000002 : BigInteger;
+      DeltaEsc@1000000003 : BigInteger;
+      ResetWaits@1000000004 : Boolean;
+      ResetMs@1000000005 : Boolean;
+      ResetEsc@1000000006 : Boolean;
+      Fresh@1000000007 : Boolean;
+      Changed@1000000008 : Boolean;
+      Renamed@1000000009 : Boolean;
+      Now@1000000010 : DateTime;
+    BEGIN
+      // Один проход по прочитанному, и запись ТОЛЬКО там, где что-то изменилось. Иначе
+      // накопительный слой стал бы тем, чем ему быть запрещено: сотнями записей в базу
+      // каждые три секунды на сервере, где ничего не происходит.
+      AddedRows := 0;
+      ChangedRows := 0;
+      ResetRows := 0;
+      Now := CURRENTDATETIME;
+      Reading.RESET;
+      IF NOT Reading.FINDSET THEN
+        EXIT(0);
+      REPEAT
+        Fresh := NOT Coverage.GET(Reading."SQL Object Id",Reading."Index Id");
+        IF Fresh THEN BEGIN
+          Coverage.INIT;
+          Coverage."SQL Object Id" := Reading."SQL Object Id";
+          Coverage."Index Id" := Reading."Index Id";
+          Coverage.INSERT;
+          AddedRows := AddedRows + 1;
+        END;
+
+        Renamed := (Coverage."SQL Object Name" <> Reading."SQL Object Name") OR
+                   (Coverage."NAV Table Name" <> Reading."NAV Table Name") OR
+                   (Coverage."NAV Key No." <> Reading."NAV Key No.") OR
+                   (Coverage."On SIFT" <> Reading."On SIFT");
+
+        DeltaWaits := 0;
+        DeltaMs := 0;
+        DeltaEsc := 0;
+        IF NOT Fresh THEN BEGIN
+          // Первое чтение даёт только ОТМЕТКУ, а не прирост: счётчик сервера считает от
+          // неизвестного момента, и записать его целиком в "насчитано" значило бы
+          // приписать наблюдению всё, что случилось до его начала.
+          DeltaWaits := Parse.CounterDelta(Coverage."Last Waits",Reading."Last Waits",ResetWaits);
+          DeltaMs := Parse.CounterDelta(Coverage."Last Wait (ms)",Reading."Last Wait (ms)",ResetMs);
+          DeltaEsc := Parse.CounterDelta(Coverage."Last Escalations",Reading."Last Escalations",ResetEsc);
+          IF ResetWaits OR ResetMs OR ResetEsc THEN BEGIN
+            // Обнуление считается отдельно и по ЛЮБОМУ из трёх счётчиков: пойти назад мог
+            // один из них, а причина у всех одна - объект ушёл из кэша метаданных сервера.
+            Coverage.Resets := Coverage.Resets + 1;
+            ResetRows := ResetRows + 1;
+          END;
+        END;
+
+        Changed := (DeltaWaits <> 0) OR (DeltaMs <> 0) OR (DeltaEsc <> 0);
+        IF Fresh OR Changed OR Renamed THEN BEGIN
+          Coverage."SQL Object Name" := Reading."SQL Object Name";
+          Coverage."NAV Table Name" := Reading."NAV Table Name";
+          Coverage."NAV Key No." := Reading."NAV Key No.";
+          Coverage."On SIFT" := Reading."On SIFT";
+          Coverage.Waits := Coverage.Waits + DeltaWaits;
+          Coverage."Wait (ms)" := Coverage."Wait (ms)" + DeltaMs;
+          Coverage.Escalations := Coverage.Escalations + DeltaEsc;
+          Coverage."Last Waits" := Reading."Last Waits";
+          Coverage."Last Wait (ms)" := Reading."Last Wait (ms)";
+          Coverage."Last Escalations" := Reading."Last Escalations";
+          IF Changed THEN
+            Coverage."Last Change At" := Now;
+          Coverage.MODIFY;
+          IF Changed THEN
+            ChangedRows := ChangedRows + 1;
+        END;
+      UNTIL Reading.NEXT = 0;
+      EXIT(ChangedRows);
+    END;
+
+    [External]
+    PROCEDURE PassCounts@2(VAR Added@1000000000 : Integer;VAR Changed@1000000001 : Integer;VAR Resets@1000000002 : Integer);
+    BEGIN
+      Added := AddedRows;
+      Changed := ChangedRows;
+      Resets := ResetRows;
+    END;
+
+    [External]
+    PROCEDURE CounterTotal@3(VAR Waits@1000000000 : BigInteger;VAR WaitMs@1000000001 : BigInteger;VAR Escalations@1000000002 : BigInteger);
+    BEGIN
+      // Итог собирается ПЕРЕБОРОМ, и это то же решение, что и в сводке: SumIndexFields
+      // здесь означал бы агрегат на таблице, в которую пишет фоновая задача. Строк тут
+      // столько, сколько индексов хоть раз ждали, - десятки, а не тысячи.
+      Waits := 0;
+      WaitMs := 0;
+      Escalations := 0;
+      Coverage.RESET;
+      IF Coverage.FINDSET THEN
+        REPEAT
+          Waits := Waits + Coverage.Waits;
+          WaitMs := WaitMs + Coverage."Wait (ms)";
+          Escalations := Escalations + Coverage.Escalations;
+        UNTIL Coverage.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE JournalTotal@4(SinceAt@1000000000 : DateTime;VAR Episodes@1000000001 : Integer;VAR WaitMs@1000000002 : BigInteger);
+    VAR
+      Episode@1000000003 : Record 110231;
+    BEGIN
+      // Журнальная половина охвата считается за ТОТ ЖЕ срок, с которого ведётся счёт
+      // приростов. Сравнивать журнал за сутки со счётчиками за месяц значило бы получить
+      // долю охвата в несколько процентов и напугать ею на ровном месте.
+      Episodes := 0;
+      WaitMs := 0;
+      Episode.RESET;
+      Episode.SETCURRENTKEY("Started At");
+      IF SinceAt <> 0DT THEN
+        Episode.SETFILTER("Started At",'>=%1',SinceAt);
+      IF Episode.FINDSET THEN
+        REPEAT
+          Episodes := Episodes + 1;
+          WaitMs := WaitMs + Episode."Max Wait (ms)";
+        UNTIL Episode.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE Share@5(CounterMs@1000000000 : BigInteger;JournalMs@1000000001 : BigInteger) : Decimal;
+    BEGIN
+      // Доля охвата в процентах. Ноль в знаменателе - это не ноль процентов, а "нечего
+      // делить": счётчики ещё ничего не насчитали, и доля неизвестна. Показывать в этом
+      // случае ноль значило бы сказать "не видно ничего" там, где не было ничего.
+      IF CounterMs <= 0 THEN
+        EXIT(0);
+      EXIT(ROUND(JournalMs * 100 / CounterMs,0.1));
+    END;
+
+    [External]
+    PROCEDURE ResetAll@6();
+    BEGIN
+      // Счёт начинается заново целиком: и приросты, и отметки последнего чтения. Оставить
+      // отметки значило бы получить на следующем проходе прирост за всё время с прошлого
+      // чтения и объявить его случившимся только что.
+      Coverage.RESET;
+      Coverage.DELETEALL;
+    END;
+
+    BEGIN
+    {
+      Накопительный слой: сколько ожиданий насчитал сам сервер против того, сколько назвал
+      журнал. Сторожем этот слой быть не может - счётчик прирастает только в момент КОНЦА
+      ожидания ([FINDINGS.md], раздел 12), - зато он единственный, кто видит ожидания
+      короче периода опроса, а таких на живой базе большинство.
+
+      Отсюда и весь смысл: доля охвата пишется на экран, вместо молчаливого обещания, что
+      видно всё. Число это не украшение - оно говорит, можно ли верить сводке. Охват в
+      девяносто процентов значит "сводка почти полна", охват в пять - "журнал видит хвост,
+      а беда в другом месте".
+
+      Считается всё приростами, а сырые значения счётчика хранятся только затем, чтобы
+      было из чего вычитать. Обнуление счётчика (объект ушёл из кэша метаданных сервера)
+      видно тем, что значение пошло НАЗАД, и считается отдельным полем: сумма, собранная
+      поверх незамеченного обнуления, была бы неотличима от правды.
+
+      Запись идёт только туда, где что-то изменилось. На тихом сервере это ноль строк за
+      проход, и наблюдатель не платит за наблюдение ничем.
+    }
+    END.
+  }
+}

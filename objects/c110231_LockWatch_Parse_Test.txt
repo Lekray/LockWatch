@@ -64,6 +64,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       AdviceEvidenceTxt@1000000051 : TextConst 'ENU=queue [%1], SIFT [%2], long wait [%3];RUS=очередь [%1], SIFT [%2], долгое ожидание [%3]';
       ChkAdviceQuietTxt@1000000052 : TextConst 'ENU=below the threshold the advice is silent, and a zero threshold is not an alert on everything;RUS=ниже порога советчик молчит, а нулевой порог - не тревога на всём';
       AdviceQuietTxt@1000000053 : TextConst 'ENU=quiet %1, zero threshold %2, right on the threshold %3;RUS=тихо %1, нулевой порог %2, ровно на пороге %3';
+      ChkCounterDeltaTxt@1000000054 : TextConst 'ENU=a counter that went backwards is read as a reset, not as a negative gain;RUS=пошедший назад счётчик читается как обнуление, а не как отрицательный прирост';
+      CounterDeltaTxt@1000000055 : TextConst 'ENU=gain %1, no move %2, after a reset %3, reset seen %4;RUS=прирост %1, без движения %2, после обнуления %3, обнуление замечено %4';
       FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -108,6 +110,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckAdviceOrder(Passed,Total,Report);
       CheckAdviceEvidence(Passed,Total,Report);
       CheckAdviceQuiet(Passed,Total,Report);
+      CheckCounterDelta(Passed,Total,Report);
     END;
 
     LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -474,6 +477,27 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Check(Passed,Total,Report,ChkAdviceQuietTxt,
         QuietOk AND (Zero = Parse.AdviceNone) AND (Edge = Parse.AdviceLongWait),
         STRSUBSTNO(AdviceQuietTxt,Quiet,Zero,Edge));
+    END;
+
+    LOCAL PROCEDURE CheckCounterDelta@62(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Grew@1000000003 : BigInteger;
+      Still@1000000004 : BigInteger;
+      AfterReset@1000000005 : BigInteger;
+      GrewFlag@1000000006 : Boolean;
+      StillFlag@1000000007 : Boolean;
+      ResetFlag@1000000008 : Boolean;
+    BEGIN
+      // Обнуление счётчика - единственное место накопительного слоя, где ошибка не видна
+      // глазами: итог просто поедет назад, и объяснить это будет нечем. Три случая:
+      // счётчик вырос, счётчик не двинулся, счётчик обнулился и успел набрать заново.
+      Grew := Parse.CounterDelta(1000,1200,GrewFlag);
+      Still := Parse.CounterDelta(1000,1000,StillFlag);
+      AfterReset := Parse.CounterDelta(1000,7,ResetFlag);
+      Check(Passed,Total,Report,ChkCounterDeltaTxt,
+        (Grew = 200) AND (NOT GrewFlag) AND (Still = 0) AND (NOT StillFlag) AND
+        (AfterReset = 7) AND ResetFlag,
+        STRSUBSTNO(CounterDeltaTxt,Grew,Still,AfterReset,ResetFlag));
     END;
 
     LOCAL PROCEDURE Check@50(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text;CheckName@1000000003 : Text;Ok@1000000004 : Boolean;Detail@1000000005 : Text);

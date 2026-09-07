@@ -49,6 +49,11 @@ OBJECT Table 110230 LockWatch Setup
     { 32  ;   ;Deadlocks Read At   ;DateTime      ;CaptionML=[ENU=Deadlocks Read At;
                                                               RUS=Буфер читали в];
                                                    Editable=No }
+    { 33  ;   ;Coverage Enabled    ;Boolean       ;CaptionML=[ENU=Coverage Enabled;
+                                                              RUS=Считать охват] }
+    { 34  ;   ;Coverage Since      ;DateTime      ;CaptionML=[ENU=Coverage Since;
+                                                              RUS=Охват считается с];
+                                                   Editable=No }
     { 40  ;   ;Last Pass At        ;DateTime      ;CaptionML=[ENU=Last Pass At;
                                                               RUS=Последний проход];
                                                    Editable=No }
@@ -94,6 +99,7 @@ OBJECT Table 110230 LockWatch Setup
       "Alert Threshold (ms)" := DefaultAlertMs;
       "Collect Statement Values" := FALSE;
       "Deadlocks Enabled" := TRUE;
+      "Coverage Enabled" := TRUE;
       INSERT;
     END;
 

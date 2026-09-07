@@ -20,6 +20,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       Parse@1000000000 : Codeunit 110230;
       Sql@1000000001 : Codeunit 110234;
       Journal@1000000002 : Codeunit 110232;
+      Coverage@1000000036 : Codeunit 110238;
       NamesFailedTxt@1000000003 : TextConst 'ENU=Episodes are logged, but table and key names are missing: %1;RUS=Эпизоды записаны, но имена таблиц и ключей не получены: %1';
       OtherDbTxt@1000000004 : TextConst 'ENU=Skipped %1 waits belonging to another database on the same server.;RUS=Пропущено %1 ожиданий, относящихся к другой базе на том же сервере.';
       QuietTxt@1000000005 : TextConst 'ENU=Pass went through, the queue is empty.;RUS=Проход прошёл, очередь пуста.';
@@ -33,6 +34,9 @@ OBJECT Codeunit 110235 LockWatch Pass
       DeadlocksTxt@1000000033 : TextConst 'ENU=Deadlocks added %1.;RUS=Взаимоблокировок добавлено %1.';
       DeadlockLostTxt@1000000034 : TextConst 'ENU=The ring buffer evicted events newer than the mark, some deadlocks are lost.;RUS=Буфер вытеснил события новее отметки, часть взаимоблокировок потеряна.';
       NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
+      CoverageFailedTxt@1000000037 : TextConst 'ENU=Coverage counters are not read: %1;RUS=Счётчики охвата не прочитаны: %1';
+      CoverageTxt@1000000038 : TextConst 'ENU=Coverage: %1 indexes grew.;RUS=Охват: приросло индексов %1.';
+      CoverageResetTxt@1000000039 : TextConst 'ENU=Coverage: %1 counters were zeroed by the server, that much waiting is lost from the total.;RUS=Охват: счётчиков обнулено сервером %1, столько же ожиданий потеряно для итога.';
 
     [External]
     PROCEDURE RunPass@1() : Boolean;
@@ -106,6 +110,12 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Взаимоблокировки собираются ПОСЛЕ очереди и не каждым проходом. Они приходят
       // готовыми эпизодами и ведению не подлежат: сервер уже разорвал круг.
       Note := Note + CollectDeadlocks(Setup);
+
+      // Накопительный слой снимается каждым проходом: он дёшев (доли миллисекунды на всю
+      // базу) и, в отличие от очереди, видит ожидания короче периода опроса. Сторожем ему
+      // не быть - счётчик прирастает только в момент конца ожидания, - зато он единственный,
+      // кто может сказать, какую долю происходящего журнал вообще видит.
+      Note := Note + CollectCoverage(Setup);
 
       // Чистка порционная и внутри того же прохода: отдельное задание уборки - это ещё
       // один объект, который забудут включить, и журнал будет расти молча.
@@ -207,6 +217,34 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF Added > 0 THEN
         Note := Note + ' ' + STRSUBSTNO(DeadlocksTxt,Added);
       EXIT(Note);
+    END;
+
+    LOCAL PROCEDURE CollectCoverage@11(VAR Setup@1000000000 : Record 110230) : Text;
+    VAR
+      Reading@1000000001 : TEMPORARY Record 110235;
+      Rows@1000000002 : Integer;
+      Added@1000000003 : Integer;
+      Changed@1000000004 : Integer;
+      Resets@1000000005 : Integer;
+    BEGIN
+      IF NOT Setup."Coverage Enabled" THEN
+        EXIT('');
+      IF NOT Sql.ReadCounters(Parse.MaxCoverageRows,Reading,Rows) THEN
+        EXIT(' ' + STRSUBSTNO(CoverageFailedTxt,Sql.LastErrorText));
+
+      // Отметка "охват считается с" ставится в тот же проход, что и первое чтение. Без
+      // неё журнальная половина охвата считалась бы за всё время, а счётчики - с этого
+      // мига, и доля вышла бы больше сотни процентов.
+      IF Setup."Coverage Since" = 0DT THEN
+        Setup."Coverage Since" := CURRENTDATETIME;
+
+      Coverage.Accumulate(Reading);
+      Coverage.PassCounts(Added,Changed,Resets);
+      IF Resets > 0 THEN
+        EXIT(' ' + STRSUBSTNO(CoverageResetTxt,Resets));
+      IF Changed > 0 THEN
+        EXIT(' ' + STRSUBSTNO(CoverageTxt,Changed));
+      EXIT('');
     END;
 
     LOCAL PROCEDURE LoadContext@8(VAR Context@1000000000 : TEMPORARY Record 110232);

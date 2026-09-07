@@ -55,6 +55,9 @@ $episode = "[$Company`$LockWatch Episode]"
 $context = "[$Company`$LockWatch Context Table]"
 $setup   = "[$Company`$LockWatch Setup]"
 $mark    = "[$Company`$LockWatch Context Mark]"
+$coverage = "[$Company`$LockWatch Coverage]"
+# Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
+$blankDate = "CONVERT(datetime,'17530101')"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
 function Invoke-Sql([string]$query) {
@@ -138,6 +141,9 @@ try {
     # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
     # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
     Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'', [Deadlocks Enabled] = 0;" | Out-Null
+    # Накопительный слой, наоборот, чистится и остаётся ВКЛЮЧЁННЫМ: без чистки проверка
+    # прошла бы на строках прошлого прогона, то есть не проверяла бы ничего.
+    Invoke-Sql "DELETE FROM $coverage; UPDATE $setup SET [Coverage Enabled] = 1, [Coverage Since] = $blankDate;" | Out-Null
     if (-not $KeepJournal) { Invoke-Sql "DELETE FROM $episode;" | Out-Null }
     # Дорога по хэшу самой блокировки включается ДО перезапуска службы: список таблиц
     # контекста служба держит в кэше, и строка, вставленная запросом при работающей службе,
@@ -267,6 +273,23 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # Предел 10 000 мс - предел NAV, а не сервера. Приписать его соединению sqlcmd значило
     # бы выдумать факт, которого нет, и выдумать правдоподобно.
     Check 'чужой сессии исход не приписан' ($c[1] -eq '0') "исход $($c[1]) при ожидаемом 0 (не определён)"
+
+    # Накопительный слой проверяется здесь ровно на том, чего не может проверить мерный
+    # прогон: что счётчики читаются с НАСТОЯЩЕГО сервера и что имя индекса разбирается в
+    # номер ключа NAV. Арифметика приростов проверена без базы, в мерном прогоне.
+    #
+    # Прироста тут ждать нельзя, и это не недосмотр: индекс, впервые попавший в чтение,
+    # даёт только отметку. Приписать наблюдению всё, что счётчик насчитал до его начала,
+    # значило бы соврать в первом же числе.
+    $covRow = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),[NAV Key No_]) + '|' + CONVERT(varchar(30),[Last Wait (ms)]) + '|' +
+  CONVERT(varchar(11),[On SIFT])
+FROM $coverage WHERE [NAV Table Name] = N'LockWatch Context Mark' ORDER BY [Last Wait (ms)] DESC;
+"@
+    $cv = ($covRow -split '\|') | ForEach-Object { $_.Trim() }
+    Check 'счётчики охвата прочитаны с сервера, и ключ у них разобран' `
+        (($cv.Count -eq 3) -and ($cv[0] -eq '0') -and ([int64]$cv[1] -gt 0) -and ($cv[2] -eq '0')) `
+        "ключ NAV $($cv[0]) при ожидаемом 0, счётчик мс $($cv[1]), на SIFT $($cv[2])"
 }
 finally {
     Stop-Sqlcmd $blocker
@@ -277,6 +300,7 @@ finally {
     # Признак возвращается в исходное - таким он заводится при создании настройки.
     $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $context WHERE [Table No_] = 110233;"
     $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = 1;"
+    $cleanup += " DELETE FROM $coverage; UPDATE $setup SET [Coverage Since] = $blankDate;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
     & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }

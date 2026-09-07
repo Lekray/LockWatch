@@ -19,6 +19,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     VAR
       Parse@1000000000 : Codeunit 110230;
       Journal@1000000001 : Codeunit 110232;
+      Coverage@1000000028 : Codeunit 110238;
       Episode@1000000002 : Record 110231;
       PassedTxt@1000000003 : TextConst 'ENU=PASS;RUS=пройдено';
       FailedTxt@1000000004 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ ';
@@ -44,6 +45,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       SummaryTxt@1000000025 : TextConst 'ENU=lines %1, episodes %2 of %3, total wait %4 ms, longest %5 ms;RUS=строк %1, эпизодов %2 из %3, суммарное ожидание %4 мс, самое долгое %5 мс';
       ChkWindowTxt@1000000026 : TextConst 'ENU=the threshold and the window of the summary are real, not decoration;RUS=порог и окно сводки настоящие, а не украшение';
       WindowTxt@1000000027 : TextConst 'ENU=above a low threshold %1 of %2, above a high one %3, lines in a window past the last episode %4;RUS=выше низкого порога %1 из %2, выше высокого %3, строк в окне позже последнего эпизода %4';
+      ChkCoverageTxt@1000000029 : TextConst 'ENU=the first counter reading is only a mark, and the second one becomes a gain;RUS=первое чтение счётчика - только отметка, а прирастает второе';
+      CoverageTxt@1000000030 : TextConst 'ENU=waits %1 of the expected %2, milliseconds %3 of the expected %4, escalations %5;RUS=ожиданий %1 при ожидаемых %2, миллисекунд %3 при ожидаемых %4, эскалаций %5';
+      ChkCoverageResetTxt@1000000031 : TextConst 'ENU=a counter that went backwards is counted as a reset and does not drag the total back;RUS=пошедший назад счётчик считается обнулением и не тянет итог назад';
+      CoverageResetTxt@1000000032 : TextConst 'ENU=resets %1, waits %2 of the expected %3, milliseconds %4 of the expected %5;RUS=обнулений %1, ожиданий %2 при ожидаемых %3, миллисекунд %4 при ожидаемых %5';
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -86,6 +91,11 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       OverHigh@1000000022 : Integer;
       FutureLines@1000000023 : Integer;
       TotalWait@1000000024 : BigInteger;
+      Reading@1000000025 : TEMPORARY Record 110235;
+      Cov@1000000026 : Record 110235;
+      CovAdded@1000000027 : Integer;
+      CovChanged@1000000028 : Integer;
+      CovResets@1000000029 : Integer;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -135,6 +145,30 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Check(Passed,Total,Report,ChkWindowTxt,
             (OverLow = Waiters) AND (OverHigh = 0) AND (FutureLines = 0) AND (Lines = 0),
             STRSUBSTNO(WindowTxt,OverLow,Waiters,OverHigh,Lines));
+
+      // Накопительный слой проверяется без единого обращения к SQL: съём отдаёт буфер, а
+      // накопитель считает по нему приросты - значит, буфер можно подать руками. Строка
+      // берётся с ОТРИЦАТЕЛЬНЫМ номером объекта: в SQL номера положительны, и столкнуться
+      // с настоящей строкой такая не может.
+      MakeCounterReading(Reading,100,5000,1);
+      Coverage.Accumulate(Reading);
+      MakeCounterReading(Reading,150,8000,1);
+      Coverage.Accumulate(Reading);
+      Cov.GET(BenchObjectId,BenchIndexId);
+      Check(Passed,Total,Report,ChkCoverageTxt,
+            (Cov.Waits = 50) AND (Cov."Wait (ms)" = 3000) AND (Cov.Escalations = 0),
+            STRSUBSTNO(CoverageTxt,Cov.Waits,50,Cov."Wait (ms)",3000,Cov.Escalations));
+
+      // Обнуление счётчика сервером выглядит как значение МЕНЬШЕ прежнего. Разность в этом
+      // случае была бы отрицательной, и итог поехал бы назад - молча и правдоподобно.
+      MakeCounterReading(Reading,10,200,0);
+      Coverage.Accumulate(Reading);
+      Coverage.PassCounts(CovAdded,CovChanged,CovResets);
+      Cov.GET(BenchObjectId,BenchIndexId);
+      Check(Passed,Total,Report,ChkCoverageResetTxt,
+            (CovResets = 1) AND (Cov.Resets = 1) AND (Cov.Waits = 60) AND (Cov."Wait (ms)" = 3200),
+            STRSUBSTNO(CoverageResetTxt,Cov.Resets,Cov.Waits,60,Cov."Wait (ms)",3200));
+      Cov.DELETE;
 
       Backdated := Backdate(BackdateRows,BackdateDays);
       Removed := Journal.TrimOldEntries(RetentionUnderTest,Waiters);
@@ -350,6 +384,36 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Меньше состаривания, но больше суток: чистка обязана убрать состаренные и не
       // тронуть остальные. Проверка на месячном сроке заодно ловит переполнение Integer.
       EXIT(30);
+    END;
+
+    LOCAL PROCEDURE MakeCounterReading@22(VAR Reading@1000000000 : TEMPORARY Record 110235;Waits@1000000001 : Integer;WaitMs@1000000002 : Integer;Escalations@1000000003 : Integer);
+    BEGIN
+      Reading.RESET;
+      Reading.DELETEALL;
+      Reading.INIT;
+      Reading."SQL Object Id" := BenchObjectId;
+      Reading."Index Id" := BenchIndexId;
+      Reading."SQL Object Name" := 'Company Name$Sales Line';
+      Reading."NAV Table Name" := 'Sales Line';
+      Reading."NAV Key No." := 1;
+      // В буфере лежат СЫРЫЕ значения счётчика сервера. Приростом их делает накопитель,
+      // и подавать сюда сразу прирост значило бы проверять не то, что работает на бою.
+      Reading."Last Waits" := Waits;
+      Reading."Last Wait (ms)" := WaitMs;
+      Reading."Last Escalations" := Escalations;
+      Reading.INSERT;
+    END;
+
+    LOCAL PROCEDURE BenchObjectId@23() : Integer;
+    BEGIN
+      // Номера объектов в SQL положительны, поэтому отрицательный не столкнётся с
+      // настоящей строкой охвата никогда. Тот же приём, что и с номером сеанса у эпизодов.
+      EXIT(-1);
+    END;
+
+    LOCAL PROCEDURE BenchIndexId@24() : Integer;
+    BEGIN
+      EXIT(-1);
     END;
 
     LOCAL PROCEDURE AlertUnderTest@21() : Integer;

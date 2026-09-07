@@ -203,6 +203,13 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Deadlocks Enabled" }
 
+    { 37  ;2   ;Field     ;
+                Name=CoverageEnabled;
+                ToolTipML=[ENU=Specifies whether the cumulative counters of the server are read into the coverage. They cost fractions of a millisecond and are the only thing that sees the waits shorter than the poll period. Switching this off does not make the journal fuller, it only makes it impossible to tell how full it is.;
+                           RUS=Определяет, читать ли накопительные счётчики сервера в охват. Стоят они доли миллисекунды и единственные видят ожидания короче периода опроса. Выключение не делает журнал полнее - оно только лишает возможности узнать, насколько он полон.];
+                ApplicationArea=#All;
+                SourceExpr="Coverage Enabled" }
+
     { 12  ;1   ;Group     ;
                 CaptionML=[ENU=Last Pass;
                            RUS=Последний проход];
@@ -251,6 +258,14 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 Editable=FALSE;
                 SourceExpr="Deadlocks Read Until" }
+
+    { 38  ;2   ;Field     ;
+                Name=CoverageSince;
+                ToolTipML=[ENU=Specifies the moment the coverage gains started to be added up. Both halves of the coverage are counted from it, and the Start Over button on the coverage screen moves it.;
+                           RUS=Определяет миг, с которого складываются приросты охвата. Обе половины охвата считаются от него, и сдвигает его кнопка "Начать счёт заново" на экране охвата.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr="Coverage Since" }
 
     { 17  ;2   ;Field     ;
                 Name=WatchdogMessage;

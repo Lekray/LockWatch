@@ -1,0 +1,96 @@
+OBJECT Table 110235 LockWatch Coverage
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Coverage;
+               RUS=Охват LockWatch];
+  }
+  FIELDS
+  {
+    { 1   ;   ;SQL Object Id       ;Integer       ;CaptionML=[ENU=SQL Object Id;
+                                                              RUS=Номер объекта SQL] }
+    { 2   ;   ;Index Id            ;Integer       ;CaptionML=[ENU=Index Id;
+                                                              RUS=Номер индекса];
+                                                   BlankNumbers=DontBlank }
+    { 10  ;   ;SQL Object Name     ;Text250       ;CaptionML=[ENU=SQL Object Name;
+                                                              RUS=Имя объекта SQL] }
+    { 11  ;   ;NAV Table Name      ;Text250       ;CaptionML=[ENU=NAV Table Name;
+                                                              RUS=Таблица NAV] }
+    { 12  ;   ;NAV Key No.         ;Integer       ;CaptionML=[ENU=NAV Key No.;
+                                                              RUS=Ключ NAV];
+                                                   BlankNumbers=DontBlank }
+    { 13  ;   ;On SIFT             ;Boolean       ;CaptionML=[ENU=On SIFT;
+                                                              RUS=На SIFT-агрегате] }
+    { 20  ;   ;Last Waits          ;BigInteger    ;CaptionML=[ENU=Last Waits;
+                                                              RUS=Счётчик ожиданий, последнее чтение];
+                                                   Editable=No }
+    { 21  ;   ;Last Wait (ms)      ;BigInteger    ;CaptionML=[ENU=Last Wait (ms);
+                                                              RUS=Счётчик миллисекунд, последнее чтение];
+                                                   Editable=No }
+    { 22  ;   ;Last Escalations    ;BigInteger    ;CaptionML=[ENU=Last Escalations;
+                                                              RUS=Счётчик эскалаций, последнее чтение];
+                                                   Editable=No }
+    { 30  ;   ;Waits               ;BigInteger    ;CaptionML=[ENU=Waits;
+                                                              RUS=Ожиданий насчитано];
+                                                   Editable=No }
+    { 31  ;   ;Wait (ms)           ;BigInteger    ;CaptionML=[ENU=Wait (ms);
+                                                              RUS=Миллисекунд ожидания насчитано];
+                                                   Editable=No }
+    { 32  ;   ;Escalations         ;BigInteger    ;CaptionML=[ENU=Escalations;
+                                                              RUS=Эскалаций насчитано];
+                                                   Editable=No }
+    { 40  ;   ;Resets              ;Integer       ;CaptionML=[ENU=Resets;
+                                                              RUS=Обнулений счётчика];
+                                                   Editable=No }
+    { 41  ;   ;Last Change At      ;DateTime      ;CaptionML=[ENU=Last Change At;
+                                                              RUS=Последний прирост];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;SQL Object Id,Index Id                  ;Clustered=Yes }
+    {    ;NAV Table Name,NAV Key No.               }
+    {    ;Wait (ms)                                }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    BEGIN
+    {
+      Накопительный слой: сколько ожиданий блокировок насчитал САМ СЕРВЕР по каждому
+      индексу, против того, сколько их назвал журнал. Здесь и живёт честный ответ на
+      вопрос "а всё ли видно" - без него сводка молча обещала бы, что видно всё.
+
+      Опрос очереди видит только те ожидания, которые дожили до следующего прохода.
+      Ожидание в двести миллисекунд при периоде в три секунды не увидит никто, и таких
+      ожиданий на живой базе большинство. Накопительные счётчики видят их все, и потому
+      слой этот не сторож (сторожем он быть не может - счётчик прирастает только в момент
+      КОНЦА ожидания, [FINDINGS.md], раздел 12), а ИТОГ.
+
+      Строка тут на пару "объект плюс индекс", а не на таблицу: разные ключи одной
+      таблицы ждут по-разному и лечатся по-разному, и складывать их значило бы прятать
+      именно то, ради чего слой заведён.
+
+      Хранятся ДВА набора чисел, и путать их нельзя. "Последнее чтение" - сырое значение
+      счётчика сервера, оно нужно только для вычитания на следующем проходе. "Насчитано" -
+      сумма приростов, и это единственное, что имеет смысл показывать: сырой счётчик
+      сервера считает от неизвестного момента и обнуляется, когда объект уходит из кэша
+      метаданных.
+
+      Обнуление видно ровно одним признаком - значение стало МЕНЬШЕ прежнего, - и оно
+      считается отдельным полем. Сумма, собранная поверх незамеченного обнуления, была бы
+      неотличима от правды.
+    }
+    END.
+  }
+}

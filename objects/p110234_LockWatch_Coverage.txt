@@ -1,0 +1,340 @@
+OBJECT Page 110234 LockWatch Coverage
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Coverage;
+               RUS=Охват наблюдения];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    Editable=No;
+    SourceTable=Table110235;
+    SourceTableView=SORTING(Wait (ms))
+                    ORDER(Descending);
+    PageType=Worksheet;
+    OnOpenPage=BEGIN
+                 ReadTotals;
+               END;
+
+    ActionList=ACTIONS
+    {
+      { 20      ;    ;ActionContainer;
+                      Name=CoverageActions;
+                      ActionContainerType=ActionItems }
+      { 21      ;1   ;Action    ;
+                      Name=Refresh;
+                      CaptionML=[ENU=Refresh;
+                                 RUS=Пересчитать];
+                      ToolTipML=[ENU=Recount the totals. The rows themselves are grown by the background pass, this only adds them up again.;
+                                 RUS=Пересчитать итоги. Сами строки наращивает фоновый проход, здесь только заново складываются числа.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Refresh;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ReadTotals;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 22      ;1   ;Action    ;
+                      Name=ShowEpisodes;
+                      CaptionML=[ENU=Episodes;
+                                 RUS=Эпизоды];
+                      ToolTipML=[ENU=Open the episodes the journal did see on this table and key, over the same stretch the counters have been adding up.;
+                                 RUS=Открыть эпизоды, которые журнал на этой таблице и этом ключе всё-таки увидел, - за тот же срок, за который складываются счётчики.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Log;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowEpisodes;
+                               END;
+                                }
+      { 23      ;1   ;Action    ;
+                      Name=StartOver;
+                      CaptionML=[ENU=Start Over;
+                                 RUS=Начать счёт заново];
+                      ToolTipML=[ENU=Drop the accumulated gains and start counting from now. Do this after a change that was meant to help: the old total would otherwise keep the pain that has already been cured.;
+                                 RUS=Сбросить накопленные приросты и начать счёт с этого мига. Делается после правки, которая должна была помочь: иначе прежний итог продолжит хранить боль, которую уже вылечили.];
+                      ApplicationArea=#All;
+                      Image=ClearLog;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 StartOver;
+                               END;
+                                }
+      { 24      ;1   ;Action    ;
+                      Name=OpenSetup;
+                      CaptionML=[ENU=Setup;
+                                 RUS=Настройка];
+                      ToolTipML=[ENU=Open the setup, where counting coverage is switched on and off.;
+                                 RUS=Открыть настройку, где счёт охвата включается и выключается.];
+                      ApplicationArea=#All;
+                      Image=Setup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Setup");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Totals;
+                CaptionML=[ENU=Coverage;
+                           RUS=Охват];
+                GroupType=Group }
+
+    { 3   ;2   ;Field     ;
+                Name=CoverageSince;
+                CaptionML=[ENU=Counted Since;
+                           RUS=Считается с];
+                ToolTipML=[ENU=Specifies the moment the gains started to be added up. Both halves of the coverage are counted from it, and comparing halves counted from different moments would give a share that means nothing.;
+                           RUS=Определяет миг, с которого складываются приросты. Обе половины охвата считаются от него, а половины, посчитанные от разных мигов, дали бы долю, которая ничего не значит.];
+                ApplicationArea=#All;
+                SourceExpr=CoverageSince }
+
+    { 4   ;2   ;Field     ;
+                Name=CounterMs;
+                CaptionML=[ENU=Server Counted (ms);
+                           RUS=Сервер насчитал, мс];
+                ToolTipML=[ENU=Specifies how many milliseconds of lock waiting the server counters have added up. They count every wait, including the ones shorter than the poll period, which nobody could have seen.;
+                           RUS=Определяет, сколько миллисекунд ожидания блокировок насчитали счётчики сервера. Они считают ВСЕ ожидания, в том числе короче периода опроса, которых никто увидеть не мог.];
+                ApplicationArea=#All;
+                SourceExpr=CounterMs }
+
+    { 5   ;2   ;Field     ;
+                Name=JournalMs;
+                CaptionML=[ENU=Journal Named (ms);
+                           RUS=Журнал назвал, мс];
+                ToolTipML=[ENU=Specifies how many milliseconds of waiting the journal has episodes for, over the same stretch.;
+                           RUS=Определяет, на сколько миллисекунд ожидания у журнала есть эпизоды - за тот же срок.];
+                ApplicationArea=#All;
+                SourceExpr=JournalMs }
+
+    { 6   ;2   ;Field     ;
+                Name=SharePct;
+                CaptionML=[ENU=Share Named (%);
+                           RUS=Доля названного, %];
+                ToolTipML=[ENU=Specifies what share of the waiting the journal can put a name to. A low share is not a fault: waits shorter than the poll period are invisible by design, and this number says so out loud instead of the summary silently promising that everything is visible.;
+                           RUS=Определяет, какой доле ожидания журнал может дать имя. Низкая доля - не поломка: ожидания короче периода опроса не видны по устройству, и это число говорит об этом вслух вместо молчаливого обещания сводки, что видно всё.];
+                ApplicationArea=#All;
+                StyleExpr=ShareStyle;
+                SourceExpr=SharePct }
+
+    { 7   ;2   ;Field     ;
+                Name=JournalEpisodes;
+                CaptionML=[ENU=Episodes Named;
+                           RUS=Эпизодов названо];
+                ToolTipML=[ENU=Specifies how many episodes the journal holds over the same stretch.;
+                           RUS=Определяет, сколько эпизодов держит журнал за тот же срок.];
+                ApplicationArea=#All;
+                SourceExpr=JournalEpisodes }
+
+    { 8   ;2   ;Field     ;
+                Name=CounterWaits;
+                CaptionML=[ENU=Server Counted (waits);
+                           RUS=Сервер насчитал ожиданий];
+                ToolTipML=[ENU=Specifies how many separate lock waits the server counters have added up. Comparing this with the number of episodes says how many waits were too short to see, and comparing the milliseconds says how much of the pain that was.;
+                           RUS=Определяет, сколько отдельных ожиданий блокировок насчитали счётчики сервера. Сравнение с числом эпизодов говорит, сколько ожиданий было слишком коротким, чтобы их увидеть, а сравнение миллисекунд - сколько в этом было боли.];
+                ApplicationArea=#All;
+                SourceExpr=CounterWaits }
+
+    { 9   ;2   ;Field     ;
+                Name=CounterEscalations;
+                CaptionML=[ENU=Escalations;
+                           RUS=Эскалаций];
+                ToolTipML=[ENU=Specifies how many times a lock was escalated from rows to the whole table. An escalation stops everyone at once and is cured by the size of the batch.;
+                           RUS=Определяет, сколько раз блокировка уходила со строк на таблицу целиком. Эскалация останавливает всех разом и лечится размером пачки.];
+                ApplicationArea=#All;
+                SourceExpr=CounterEscalations }
+
+    { 10  ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 11  ;2   ;Field     ;
+                Name=NAVTableName;
+                ToolTipML=[ENU=Specifies the table the counters belong to. An empty name means the SQL name did not parse into a NAV one, and the raw name is in the column next to it.;
+                           RUS=Определяет таблицу, к которой относятся счётчики. Пустое имя означает, что имя SQL не разобралось в имя NAV, и сырое имя стоит в соседней колонке.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Table Name" }
+
+    { 12  ;2   ;Field     ;
+                Name=NAVKeyNo;
+                ToolTipML=[ENU=Specifies the key the waiting happened on. Different keys of one table wait differently and are cured differently, so they are separate rows.;
+                           RUS=Определяет ключ, на котором шло ожидание. Разные ключи одной таблицы ждут по-разному и лечатся по-разному, поэтому и строки у них разные.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Key No." }
+
+    { 13  ;2   ;Field     ;
+                Name=WaitMs;
+                ToolTipML=[ENU=Specifies how many milliseconds of waiting the server counted on this index. The rows are sorted by this.;
+                           RUS=Определяет, сколько миллисекунд ожидания сервер насчитал на этом индексе. По нему строки и упорядочены.];
+                ApplicationArea=#All;
+                SourceExpr="Wait (ms)" }
+
+    { 14  ;2   ;Field     ;
+                Name=Waits;
+                ToolTipML=[ENU=Specifies how many separate waits the server counted on this index.;
+                           RUS=Определяет, сколько отдельных ожиданий сервер насчитал на этом индексе.];
+                ApplicationArea=#All;
+                SourceExpr=Waits }
+
+    { 15  ;2   ;Field     ;
+                Name=Escalations;
+                ToolTipML=[ENU=Specifies how many lock escalations the server counted on this index.;
+                           RUS=Определяет, сколько эскалаций блокировки сервер насчитал на этом индексе.];
+                ApplicationArea=#All;
+                SourceExpr=Escalations }
+
+    { 16  ;2   ;Field     ;
+                Name=OnSIFT;
+                ToolTipML=[ENU=Specifies whether this is a SIFT aggregate rather than a data table.;
+                           RUS=Определяет, агрегат ли это SIFT, а не таблица данных.];
+                ApplicationArea=#All;
+                SourceExpr="On SIFT" }
+
+    { 17  ;2   ;Field     ;
+                Name=Resets;
+                ToolTipML=[ENU=Specifies how many times the server zeroed this counter. The server does that when the object leaves its metadata cache, and whatever happened just before the zeroing is lost from the total. A growing number here means the total understates the pain.;
+                           RUS=Определяет, сколько раз сервер обнулял этот счётчик. Он делает это, когда объект уходит из кэша метаданных, и случившееся перед самым обнулением для итога потеряно. Растущее число здесь означает, что итог занижен.];
+                ApplicationArea=#All;
+                SourceExpr=Resets }
+
+    { 18  ;2   ;Field     ;
+                Name=LastChangeAt;
+                ToolTipML=[ENU=Specifies when this row last grew.;
+                           RUS=Определяет, когда эта строка последний раз прирастала.];
+                ApplicationArea=#All;
+                SourceExpr="Last Change At" }
+
+    { 19  ;2   ;Field     ;
+                Name=SQLObjectName;
+                ToolTipML=[ENU=Specifies the name SQL gives the object, with the company prefix as it stands in the database.;
+                           RUS=Определяет имя, которым объект зовёт SQL, - с префиксом компании, как оно и лежит в базе.];
+                ApplicationArea=#All;
+                SourceExpr="SQL Object Name" }
+
+  }
+  CODE
+  {
+    VAR
+      Coverage@1000000000 : Codeunit 110238;
+      CoverageSince@1000000001 : DateTime;
+      CounterWaits@1000000002 : BigInteger;
+      CounterMs@1000000003 : BigInteger;
+      CounterEscalations@1000000004 : BigInteger;
+      JournalEpisodes@1000000005 : Integer;
+      JournalMs@1000000006 : BigInteger;
+      SharePct@1000000007 : Decimal;
+      ShareStyle@1000000008 : Text[30];
+      StartOverQst@1000000009 : TextConst 'ENU=Drop the coverage counted so far and start over from now?;RUS=Сбросить насчитанный охват и начать счёт заново с этого мига?';
+
+    LOCAL PROCEDURE ReadTotals@1();
+    VAR
+      Setup@1000000000 : Record 110230;
+    BEGIN
+      Setup.FetchOnce;
+      CoverageSince := Setup."Coverage Since";
+      Coverage.CounterTotal(CounterWaits,CounterMs,CounterEscalations);
+      Coverage.JournalTotal(CoverageSince,JournalEpisodes,JournalMs);
+      SharePct := Coverage.Share(CounterMs,JournalMs);
+      SetShareStyle;
+    END;
+
+    LOCAL PROCEDURE SetShareStyle@2();
+    BEGIN
+      // Красится НИЗКАЯ доля, и порог у неё свой - не порог тревоги из настройки. Тот про
+      // длительность одного эпизода, этот про то, можно ли вообще верить сводке.
+      ShareStyle := StandardStyle;
+      IF (CounterMs > 0) AND (SharePct < LowShare) THEN
+        ShareStyle := AlarmStyle;
+    END;
+
+    LOCAL PROCEDURE StartOver@3();
+    VAR
+      Setup@1000000000 : Record 110230;
+    BEGIN
+      IF NOT CONFIRM(StartOverQst,FALSE) THEN
+        EXIT;
+      // Отметка и приросты сбрасываются ВМЕСТЕ. Оставить отметку значило бы сравнивать
+      // счётчики с этого мига против журнала за всё прошлое, а сбросить одну её - наоборот.
+      Coverage.ResetAll;
+      Setup.FetchOnce;
+      Setup."Coverage Since" := CURRENTDATETIME;
+      Setup.MODIFY;
+      COMMIT;
+      ReadTotals;
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    LOCAL PROCEDURE ShowEpisodes@4();
+    VAR
+      Episode@1000000000 : Record 110231;
+      TableName@1000000001 : Text[250];
+      KeyNo@1000000002 : Integer;
+    BEGIN
+      TableName := "NAV Table Name";
+      KeyNo := "NAV Key No.";
+      Episode.SETRANGE("NAV Table Name",TableName);
+      Episode.SETRANGE("NAV Key No.",KeyNo);
+      IF CoverageSince <> 0DT THEN
+        Episode.SETFILTER("Started At",'>=%1',CoverageSince);
+      PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
+    END;
+
+    LOCAL PROCEDURE LowShare@5() : Integer;
+    BEGIN
+      // Половина. Ниже неё журнал называет меньше половины ожидания, и сводкой по нему
+      // уже нельзя пользоваться как картиной целого - только как списком самых долгих
+      // случаев. Число это про доверие к экрану, а не про среду, и потому живёт в коде.
+      EXIT(50);
+    END;
+
+    LOCAL PROCEDURE StandardStyle@6() : Text[30];
+    BEGIN
+      EXIT('Standard');
+    END;
+
+    LOCAL PROCEDURE AlarmStyle@7() : Text[30];
+    BEGIN
+      EXIT('Unfavorable');
+    END;
+
+    BEGIN
+    {
+      Охват: сколько ожиданий насчитал сам сервер против того, сколько назвал журнал.
+      Экран этот заведён не для красоты, а против молчаливого обещания: сводка без охвата
+      утверждает, что видно всё, а это неверно и было неверно с самого начала.
+
+      Опрос очереди видит только те ожидания, которые дожили до следующего прохода.
+      Ожидание в двести миллисекунд при периоде в три секунды не увидит никто, и таких
+      на живой базе большинство. Поэтому доля НАЗВАННОГО почти никогда не будет
+      стопроцентной, и низкая доля сама по себе не поломка - поломкой было бы её не знать.
+
+      Сравнивать надо обе пары чисел, и они не об одном и том же. Число ожиданий против
+      числа эпизодов говорит, сколько ожиданий было слишком коротким, чтобы их увидеть;
+      миллисекунды против миллисекунд - сколько в этом было боли. Обычная картина -
+      "ожиданий видно десятую часть, а боли девять десятых": длинные ожидания опрос ловит
+      почти все, а коротких много и они дёшевы.
+
+      Сторожем этот слой быть не может: счётчик прирастает только в момент КОНЦА ожидания
+      ([FINDINGS.md], раздел 12), и триггер по нему сработал бы тогда, когда в очереди
+      уже никого нет.
+    }
+    END.
+  }
+}
