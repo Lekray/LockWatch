@@ -542,6 +542,286 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(FORMAT(Sign));
     END;
 
+    [External]
+    PROCEDURE ReadDeadlocks@50(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer) : Boolean;
+    BEGIN
+      LastError := '';
+      Rows := 0;
+      OldestAt := 0DT;
+      BufferPresent := FALSE;
+      Found.RESET;
+      Found.DELETEALL;
+      IF TryReadDeadlocks(SinceAt,MaxRows,WantStatements,Found,BufferPresent,OldestAt,Rows) THEN
+        EXIT(TRUE);
+      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      EXIT(FALSE);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryReadDeadlocks@51(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer);
+    VAR
+      SqlConn@1000000007 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlCmd@1000000008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlReader@1000000009 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      EventAt@1000000010 : DateTime;
+      ObjectName@1000000011 : Text;
+      IndexName@1000000012 : Text;
+      CompanyName@1000000013 : Text;
+      TableName@1000000014 : Text;
+      SiftKeyNo@1000000015 : Integer;
+      KeyNo@1000000016 : Integer;
+    BEGIN
+      SqlConn := SqlConn.SqlConnection(ConnString);
+      SqlConn.Open;
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText := DeadlocksSql(MomentDays(SinceAt),MomentMs(SinceAt),MaxRows,WantStatements);
+      SqlReader := SqlCmd.ExecuteReader;
+
+      // Первый набор - про сам буфер, а не про события: работает ли сессия system_health
+      // и каким событием буфер начинается. Без этих двух ответов выключенная сессия и
+      // потерянные события выглядят одинаково - как "взаимоблокировок не было".
+      IF SqlReader.Read THEN BEGIN
+        BufferPresent := ReaderInt(SqlReader,0) <> 0;
+        OldestAt := SqlMoment(ReaderInt(SqlReader,1),ReaderInt(SqlReader,2));
+      END;
+      SqlReader.NextResult;
+
+      WHILE SqlReader.Read AND (Rows < MaxRows) DO BEGIN
+        Rows := Rows + 1;
+        EventAt := SqlMoment(ReaderInt(SqlReader,0),ReaderInt(SqlReader,1));
+        Found.INIT;
+        Found."Entry No." := Rows;
+        Found."Victim SPID" := ReaderInt(SqlReader,2);
+        Found."Victim Host" := COPYSTR(ReaderText(SqlReader,3),1,MAXSTRLEN(Found."Victim Host"));
+        Found."Victim Process Id" := ReaderInt(SqlReader,4);
+        Found."Victim Is NAV" := NavFlag(ReaderText(SqlReader,5));
+        Found."Victim Transaction Id" := ReaderBigInt(SqlReader,6);
+        Found."Last Wait (ms)" := ReaderInt(SqlReader,7);
+        Found."Max Wait (ms)" := Found."Last Wait (ms)";
+        Found."Blocker SPID" := ReaderInt(SqlReader,8);
+        Found."Head Is Foreign" := NOT IsNavProgram(ReaderText(SqlReader,9));
+        Found."Blocker Transaction Id" := ReaderBigInt(SqlReader,10);
+        Found."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,11),ReaderInt(SqlReader,12));
+        Found."Resource Kind" := COPYSTR(UPPERCASE(ReaderText(SqlReader,13)),1,MAXSTRLEN(Found."Resource Kind"));
+        Found."Hobt Id" := ReaderBigInt(SqlReader,14);
+        Found."Database Id" := ReaderInt(SqlReader,15);
+        ObjectName := ReaderText(SqlReader,16);
+        IndexName := ReaderText(SqlReader,17);
+        Found."Held Mode" := COPYSTR(ReaderText(SqlReader,18),1,MAXSTRLEN(Found."Held Mode"));
+        Found."Wait Type" := COPYSTR(LockWaitPrefix + ReaderText(SqlReader,19),1,MAXSTRLEN(Found."Wait Type"));
+        Found."Deadlock Id" := Parse.TextFingerprint(ReaderText(SqlReader,20));
+        Found."Blocker Statement" := COPYSTR(ReaderText(SqlReader,21),1,MAXSTRLEN(Found."Blocker Statement"));
+
+        // Цепочка из двоих, и она ЗАМКНУТА - этим взаимоблокировка и отличается от
+        // очереди. Голова здесь не "тот, кто ни на кого не ждёт": ждут оба, и признак
+        // кольца тут не догадка разбора, а факт из графа.
+        Found."Head SPID" := Found."Blocker SPID";
+        Found."Chain Depth" := 1;
+        Found."Chain Ring" := TRUE;
+        Found."Victims Behind Head" := 1;
+        Found.Class := Parse.ClassDeadlock;
+        Found.Outcome := Parse.OutcomeDeadlocked;
+
+        // Эпизод приезжает УЖЕ ЗАКОНЧЕННЫМ: круг разорвал сервер, и конец известен точно.
+        // Начало считается назад от конца по времени ожидания жертвы - тем же правилом,
+        // каким считается начало обычного эпизода.
+        Found."Ended At" := EventAt;
+        Found."Last Seen At" := EventAt;
+        Found."Started At" := Parse.EpisodeStart(EventAt,Found."Last Wait (ms)");
+        Found.Open := FALSE;
+
+        KeyNo := Parse.UnknownKeyNo;
+        IF Parse.SplitSqlObjectName(ObjectName,CompanyName,TableName,SiftKeyNo) THEN BEGIN
+          IF SiftKeyNo <> Parse.UnknownKeyNo THEN
+            KeyNo := SiftKeyNo
+          ELSE
+            KeyNo := Parse.KeyNoFromIndexName(IndexName);
+          NameRow(Found,ObjectName,TableName,KeyNo,SiftKeyNo <> Parse.UnknownKeyNo);
+        END ELSE BEGIN
+          // Имя, которое не разобралось, показывается СЫРЫМ и метится непонятым. Пустая
+          // колонка на его месте читалась бы как "таблица неизвестна серверу".
+          Found."SQL Object Name" := COPYSTR(ObjectName,1,MAXSTRLEN(Found."SQL Object Name"));
+          Found."NAV Key No." := KeyNo;
+          Found."Resource Unresolved" := TRUE;
+        END;
+        Found.INSERT;
+      END;
+      SqlReader.Close;
+      SqlConn.Close;
+    END;
+
+    LOCAL PROCEDURE DeadlocksSql@52(SinceDays@1000000000 : Integer;SinceMs@1000000001 : Integer;MaxRows@1000000002 : Integer;WantStatements@1000000003 : Boolean) : Text;
+    VAR
+      Sql@1000000004 : Text;
+      Events@1000000005 : Text;
+      Statement@1000000006 : Text;
+    BEGIN
+      // Граф разбирает СЕРВЕР, а в C/AL приезжают готовые столбцы. Тащить XML в NAV
+      // значило бы завести второй разбор имён и держать его в согласии с первым.
+      //
+      // Кольцевой буфер превращается в XML ОДИН раз, в переменную: обращений к нему два -
+      // за границей буфера и за самими событиями, - а разбор многомегабайтной строки
+      // стоит столько, что платить за него дважды нельзя.
+      //
+      // QUOTED_IDENTIFIER включается явно. Драйвер и так включает его на соединении, но
+      // без него ЛЮБОЙ метод XML отказывает, и отказ называет не причину, а список
+      // требований к настройкам сеанса.
+      //
+      // Отметка собирается через datetime2(3), а не через datetime. У datetime шаг 3,33 мс,
+      // и он округляет ВВЕРХ: собранная им отметка оказывается на полтора миллисекунды
+      // позже настоящей, а событие ровно на границе при этом пропускается молча. Ради
+      // него отбор и сделан нестрогим, так что округление обесценило бы всю защиту.
+      Events := Q + '/RingBufferTarget/event[@name' + Eq + '"xml_deadlock_report"]' + Q;
+      IF WantStatements THEN
+        Statement := ' LTRIM(CONVERT(nvarchar(250),bp.n' + XVal('(inputbuf)[1]','nvarchar(500)') + '))'
+      ELSE
+        // Текст оператора едет со ЗНАЧЕНИЯМИ - теми самыми данными, которых мы обещали не
+        // собирать. Он приходит только под галкой, выключенной по умолчанию.
+        Statement := ' SPACE(0)';
+
+      Sql :=
+        'SET QUOTED_IDENTIFIER ON;' +
+        'DECLARE @x xml, @since datetime2(3), @shift int;' +
+        'SET @shift ' + Eq + ' DATEDIFF(minute,GETUTCDATE(),GETDATE());' +
+        'SET @since ' + Eq + ' DATEADD(ms,' + FORMAT(SinceMs) +
+        ',CONVERT(datetime2(3),CONVERT(datetime,' + FORMAT(SinceDays) + ')));' +
+        'SELECT @x ' + Eq + ' CONVERT(xml,t.target_data)' +
+        ' FROM sys.dm_xe_session_targets t' +
+        ' JOIN sys.dm_xe_sessions s ON s.address ' + Eq + ' t.event_session_address' +
+        ' WHERE s.name ' + Eq + ' ' + Q + 'system_health' + Q +
+        ' AND t.target_name ' + Eq + ' ' + Q + 'ring_buffer' + Q + ';';
+
+      // Время события в буфере лежит по UTC, а всё остальное в графе и в журнале - по
+      // местным часам. Сдвиг берётся у самого сервера: разница между его UTC и его
+      // местным. Считать её по часам NAV значило бы сложить две шкалы.
+      Sql := Sql +
+        'SELECT CASE WHEN @x IS NULL THEN 0 ELSE 1 END,' +
+        ' ISNULL(DATEDIFF(day,CONVERT(datetime,0),MIN(v.EventAt)),0),' +
+        ' ISNULL(DATEDIFF(ms,CONVERT(date,MIN(v.EventAt)),MIN(v.EventAt)),0)' +
+        ' FROM (SELECT DATEADD(minute,@shift,n.e' + XVal('@timestamp','datetime2(3)') +
+        ') AS EventAt FROM @x.nodes(' + Events + ') AS n(e)) v;';
+
+      Sql := Sql +
+        'WITH ev AS (SELECT DATEADD(minute,@shift,n.e' + XVal('@timestamp','datetime2(3)') +
+        ') AS EventAt, n.e.query(' + Q + 'data[@name' + Eq + '"xml_report"]/value/deadlock' +
+        Q + ') AS G FROM @x.nodes(' + Events + ') AS n(e)),' +
+        ' vic AS (SELECT ev.EventAt, ev.G, v.n' + XVal('@id','varchar(60)') + ' AS VictimId' +
+        ' FROM ev CROSS APPLY ev.G.nodes(' + Q + '/deadlock/victim-list/victimProcess' + Q +
+        ') AS v(n)),';
+
+      // Ресурс берётся не любой из графа, а ТОТ, в очереди к которому стоит жертва: в
+      // графе их столько, сколько сторон у круга, и любой другой назвал бы чужую таблицу.
+      Sql := Sql +
+        ' res AS (SELECT vic.EventAt, vic.G, vic.VictimId,' +
+        ' r.n' + XVal('local-name(.)','varchar(30)') + ' AS Kind,' +
+        ' r.n' + XVal('@hobtid','bigint') + ' AS HobtId,' +
+        ' r.n' + XVal('@dbid','int') + ' AS DbId,' +
+        ' r.n' + XVal('@objectname','nvarchar(300)') + ' AS ObjectName,' +
+        ' r.n' + XVal('@indexname','nvarchar(300)') + ' AS IndexName,' +
+        ' r.n' + XVal('(owner-list/owner/@id)[1]','varchar(60)') + ' AS OwnerId,' +
+        ' r.n' + XVal('(owner-list/owner/@mode)[1]','varchar(10)') + ' AS OwnerMode,' +
+        ' r.n' + XVal('(waiter-list/waiter/@mode)[1]','varchar(10)') + ' AS WaiterMode' +
+        ' FROM vic CROSS APPLY vic.G.nodes(' + Q + '/deadlock/resource-list/*[waiter-list/waiter/@id' +
+        Eq + 'sql:column("vic.VictimId")]' + Q + ') AS r(n))';
+
+      Sql := Sql +
+        ' SELECT TOP (' + FORMAT(MaxRows) + ')' +
+        ' DATEDIFF(day,CONVERT(datetime,0),res.EventAt),' +
+        ' DATEDIFF(ms,CONVERT(date,res.EventAt),res.EventAt),' +
+        ' vp.n' + XVal('@spid','int') + ',' +
+        ' vp.n' + XVal('@hostname','nvarchar(80)') + ',' +
+        ' vp.n' + XVal('@hostpid','int') + ',' +
+        ' vp.n' + XVal('@clientapp','nvarchar(120)') + ',' +
+        ' vp.n' + XVal('@xactid','bigint') + ',' +
+        ' vp.n' + XVal('@waittime','int') + ',' +
+        ' bp.n' + XVal('@spid','int') + ',' +
+        ' bp.n' + XVal('@clientapp','nvarchar(120)') + ',' +
+        ' bp.n' + XVal('@xactid','bigint') + ',' +
+        ' DATEDIFF(day,CONVERT(datetime,0),bp.n' + XVal('@lasttranstarted','datetime2(3)') + '),' +
+        ' DATEDIFF(ms,CONVERT(date,bp.n' + XVal('@lasttranstarted','datetime2(3)') + '),bp.n' +
+        XVal('@lasttranstarted','datetime2(3)') + '),' +
+        ' res.Kind, res.HobtId, res.DbId, ISNULL(PARSENAME(res.ObjectName,1),res.ObjectName),' +
+        ' res.IndexName, res.OwnerMode, res.WaiterMode,';
+
+      // Отпечаток графа собирается из того, что у события не меняется между чтениями:
+      // время, обе транзакции, hobt и ресурс, которого ждала жертва. Место в буфере в
+      // отпечаток не входит - оно меняется при каждом чтении, а граф нет.
+      Sql := Sql +
+        ' CONVERT(varchar(30),res.EventAt,126) + ' + Q + '|' + Q +
+        ' + CONVERT(varchar(20),vp.n' + XVal('@xactid','bigint') + ') + ' + Q + '|' + Q +
+        ' + CONVERT(varchar(20),bp.n' + XVal('@xactid','bigint') + ') + ' + Q + '|' + Q +
+        ' + CONVERT(varchar(20),res.HobtId) + ' + Q + '|' + Q +
+        ' + vp.n' + XVal('@waitresource','varchar(120)') + ',' +
+        Statement +
+        ' FROM res' +
+        ' CROSS APPLY res.G.nodes(' + Q + '/deadlock/process-list/process[@id' + Eq +
+        'sql:column("res.VictimId")]' + Q + ') AS vp(n)' +
+        ' CROSS APPLY res.G.nodes(' + Q + '/deadlock/process-list/process[@id' + Eq +
+        'sql:column("res.OwnerId")]' + Q + ') AS bp(n)' +
+        // Отбор нестрогий нарочно: два события в одну миллисекунду при строгом отборе
+        // потеряли бы второе молча. Повтор снимает отпечаток, потеря не снимается ничем.
+        ' WHERE res.EventAt >' + Eq + ' @since' +
+        ' ORDER BY res.EventAt;';
+      EXIT(Sql);
+    END;
+
+    LOCAL PROCEDURE NameRow@53(VAR Row@1000000000 : Record 110231;ObjectName@1000000001 : Text;TableName@1000000002 : Text;KeyNo@1000000003 : Integer;OnSift@1000000004 : Boolean);
+    BEGIN
+      // Одно место, где разобранное имя SQL ложится в строку. Дороги сюда две - очередь
+      // приходит с hobt, граф взаимоблокировки с готовым именем, - но раскладывать имя
+      // обязаны одинаково, иначе сводка сравнивала бы несравнимое.
+      Row."SQL Object Name" := COPYSTR(ObjectName,1,MAXSTRLEN(Row."SQL Object Name"));
+      Row."NAV Table Name" := COPYSTR(TableName,1,MAXSTRLEN(Row."NAV Table Name"));
+      Row."NAV Key No." := KeyNo;
+      Row."On SIFT" := OnSift;
+    END;
+
+    LOCAL PROCEDURE MomentDays@54(At@1000000000 : DateTime) : Integer;
+    VAR
+      Elapsed@1000000001 : Duration;
+      Days@1000000002 : Decimal;
+    BEGIN
+      // Отметка едет в запрос теми же двумя целыми, какими время приходит обратно. Дата
+      // строкой разбиралась бы по языку сервера и ошиблась бы не отказом, а сдвигом -
+      // тем самым, из-за которого события пропускались бы молча.
+      //
+      // Считается всё РАЗНИЦЕЙ МОМЕНТОВ, а не вычитанием дат: "дата минус дата" в C/AL
+      // берёт вторую дату за число дней и на любой настоящей дате роняет проход с
+      // "The date is not valid". Ошибка приходит не при компиляции, а на первом же
+      // непустом значении отметки - то есть на втором проходе, а не на первом.
+      IF At = 0DT THEN
+        EXIT(0);
+      Elapsed := At - CREATEDATETIME(SqlEpoch,0T);
+      Days := ROUND(Elapsed / Parse.MsPerDay,1,'<');
+      EXIT(Days);
+    END;
+
+    LOCAL PROCEDURE MomentMs@55(At@1000000000 : DateTime) : Integer;
+    VAR
+      Elapsed@1000000001 : Duration;
+    BEGIN
+      IF At = 0DT THEN
+        EXIT(0);
+      Elapsed := At - CREATEDATETIME(DT2DATE(At),0T);
+      EXIT(Elapsed);
+    END;
+
+    LOCAL PROCEDURE LockWaitPrefix@56() : Text;
+    BEGIN
+      // Очередь называет ожидание как LCK_M_U, а граф - одной буквой режима. В журнале
+      // колонка одна, и заполнять её двумя разными словарями значило бы сделать отбор по
+      // ней бесполезным.
+      EXIT('LCK_M_');
+    END;
+
+    LOCAL PROCEDURE XVal@57(Path@1000000000 : Text;Kind@1000000001 : Text) : Text;
+    BEGIN
+      // .value('путь','тип') - самая частая конструкция этого запроса, и собирать её
+      // руками два десятка раз значит два десятка раз расставить кавычки.
+      EXIT('.value(' + Q + Path + Q + ',' + Q + Kind + Q + ')');
+    END;
+
     LOCAL PROCEDURE ApplyName@6(VAR Observed@1000000000 : TEMPORARY Record 110231;Source@1000000001 : Integer;Id@1000000002 : BigInteger;ObjectName@1000000003 : Text;IndexName@1000000004 : Text);
     VAR
       CompanyName@1000000005 : Text;
@@ -569,10 +849,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       END;
       IF Observed.FINDSET(TRUE) THEN
         REPEAT
-          Observed."SQL Object Name" := COPYSTR(ObjectName,1,MAXSTRLEN(Observed."SQL Object Name"));
-          Observed."NAV Table Name" := COPYSTR(TableName,1,MAXSTRLEN(Observed."NAV Table Name"));
-          Observed."NAV Key No." := KeyNo;
-          Observed."On SIFT" := SiftKeyNo <> Parse.UnknownKeyNo;
+          NameRow(Observed,ObjectName,TableName,KeyNo,SiftKeyNo <> Parse.UnknownKeyNo);
           Observed.MODIFY;
         UNTIL Observed.NEXT = 0;
       Observed.RESET;

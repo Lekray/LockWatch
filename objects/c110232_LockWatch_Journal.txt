@@ -147,6 +147,31 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
+    PROCEDURE AddDeadlock@14(VAR Row@1000000000 : Record 110231) : Boolean;
+    VAR
+      Existing@1000000001 : Record 110231;
+    BEGIN
+      // Один и тот же граф виден при КАЖДОМ чтении буфера, пока не вытеснится, поэтому
+      // отметка "прочитано до" - только половина защиты. Вторая половина здесь: отпечаток
+      // графа. Отметка от повторов не спасает нарочно - события, попавшие в одну
+      // миллисекунду, читаются заново, чтобы не потерять второе из них.
+      IF Row."Deadlock Id" = '' THEN
+        EXIT(FALSE);
+      Existing.RESET;
+      Existing.SETCURRENTKEY("Deadlock Id");
+      Existing.SETRANGE("Deadlock Id",Row."Deadlock Id");
+      IF NOT Existing.ISEMPTY THEN
+        EXIT(FALSE);
+      // Строка приезжает ЗАКОНЧЕННОЙ: у взаимоблокировки нет "идёт сейчас", сервер уже
+      // разорвал круг. Поэтому она не открывается и ведению эпизода не подлежит вовсе.
+      Journal := Row;
+      Journal."Entry No." := NextNo;
+      Journal.Open := FALSE;
+      Journal.INSERT;
+      EXIT(TRUE);
+    END;
+
+    [External]
     PROCEDURE TrimOldEntries@5(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
     VAR
       Threshold@1000000002 : DateTime;
@@ -158,7 +183,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       // таблицы посреди прохода, то есть ровно то, что мы ловим.
       IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
         EXIT(0);
-      Age := RetentionDays * MsPerDay;
+      Age := RetentionDays * Parse.MsPerDay;
       Threshold := CURRENTDATETIME - Age;
 
       Journal.RESET;
@@ -255,14 +280,6 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.Open := FALSE;
       Journal.MODIFY;
       ClosedCount := ClosedCount + 1;
-    END;
-
-    LOCAL PROCEDURE MsPerDay@11() : Decimal;
-    BEGIN
-      // Суток в миллисекундах. Тип здесь важнее числа: он ОБЯЗАН быть дробным. Тридцать
-      // суток - это 2 592 000 000, что больше предельного Integer, и та же величина,
-      // объявленная целой, дала бы переполнение на самом обычном значении настройки.
-      EXIT(86400000);
     END;
 
     LOCAL PROCEDURE NextNo@10() : Integer;

@@ -29,6 +29,10 @@ OBJECT Codeunit 110235 LockWatch Pass
       NoMarkTxt@1000000030 : TextConst 'ENU=Neither road answered. The contended row is not in a context table (or the lock is not a key one), and the culprit left no context mark inside this transaction.;RUS=Не ответила ни одна дорога. Спорной строки нет в таблицах контекста (или блокировка не строчная), а отметки контекста виновник в этой транзакции не оставил.';
       DocFailedTxt@1000000031 : TextConst 'ENU=Documents are not named: %1;RUS=Документы не названы: %1';
       ReadFailedTxt@1000000008 : TextConst 'ENU=The queue could not be read: %1;RUS=Очередь прочитать не удалось: %1';
+      DeadlockFailedTxt@1000000032 : TextConst 'ENU=Deadlocks are not read: %1;RUS=Взаимоблокировки не прочитаны: %1';
+      DeadlocksTxt@1000000033 : TextConst 'ENU=Deadlocks added %1.;RUS=Взаимоблокировок добавлено %1.';
+      DeadlockLostTxt@1000000034 : TextConst 'ENU=The ring buffer evicted events newer than the mark, some deadlocks are lost.;RUS=Буфер вытеснил события новее отметки, часть взаимоблокировок потеряна.';
+      NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
 
     [External]
     PROCEDURE RunPass@1() : Boolean;
@@ -99,6 +103,10 @@ OBJECT Codeunit 110235 LockWatch Pass
       // нечего вовсе - ожидание кончилось ровно потому, что блокировку отпустили.
       Note := Note + NameDocuments;
 
+      // Взаимоблокировки собираются ПОСЛЕ очереди и не каждым проходом. Они приходят
+      // готовыми эпизодами и ведению не подлежат: сервер уже разорвал круг.
+      Note := Note + CollectDeadlocks(Setup);
+
       // Чистка порционная и внутри того же прохода: отдельное задание уборки - это ещё
       // один объект, который забудут включить, и журнал будет расти молча.
       Journal.TrimOldEntries(Setup."Retention (Days)",TrimRowsPerPass);
@@ -139,6 +147,66 @@ OBJECT Codeunit 110235 LockWatch Pass
             Journal.SetDocument(Pending."Entry No.",'','',Parse.DocSourceNone,NoMarkTxt);
         UNTIL Pending.NEXT = 0;
       EXIT('');
+    END;
+
+    LOCAL PROCEDURE CollectDeadlocks@9(VAR Setup@1000000000 : Record 110230) : Text;
+    VAR
+      Found@1000000001 : TEMPORARY Record 110231;
+      WasReadUntil@1000000002 : DateTime;
+      OldestAt@1000000003 : DateTime;
+      NewestAt@1000000004 : DateTime;
+      Elapsed@1000000005 : Duration;
+      Period@1000000006 : Duration;
+      Rows@1000000007 : Integer;
+      Added@1000000008 : Integer;
+      BufferPresent@1000000009 : Boolean;
+      Note@1000000010 : Text;
+    BEGIN
+      IF NOT Setup."Deadlocks Enabled" THEN
+        EXIT('');
+      // Буфер читается НЕ каждым проходом. Он растёт не от наших блокировок, а от чужих
+      // взаимоблокировок, и на тихом сервере не меняется вовсе; разбор всего буфера в XML
+      // дороже опроса очереди, ради которого проход и заведён.
+      Period := Parse.DeadlockReadPeriodMs;
+      IF Setup."Deadlocks Read At" <> 0DT THEN BEGIN
+        Elapsed := CURRENTDATETIME - Setup."Deadlocks Read At";
+        IF Elapsed < Period THEN
+          EXIT('');
+      END;
+      // Отметка "читали в" ставится ДО чтения и остаётся стоять при отказе: сервер,
+      // который не отвечает, нельзя спрашивать каждые три секунды.
+      Setup."Deadlocks Read At" := CURRENTDATETIME;
+      WasReadUntil := Setup."Deadlocks Read Until";
+
+      IF NOT Sql.ReadDeadlocks(WasReadUntil,Parse.MaxDeadlocksPerPass,
+                               Setup."Collect Statement Values",Found,BufferPresent,OldestAt,Rows)
+      THEN
+        EXIT(' ' + STRSUBSTNO(DeadlockFailedTxt,Sql.LastErrorText));
+
+      IF NOT BufferPresent THEN
+        // Выключенная сессия и отсутствие взаимоблокировок дают одну и ту же пустую
+        // колонку. Различает их только эта строка.
+        EXIT(' ' + NoBufferTxt);
+
+      Found.RESET;
+      IF Found.FINDSET THEN
+        REPEAT
+          IF Found."Ended At" > NewestAt THEN
+            NewestAt := Found."Ended At";
+          IF Journal.AddDeadlock(Found) THEN
+            Added := Added + 1;
+        UNTIL Found.NEXT = 0;
+      IF NewestAt <> 0DT THEN
+        Setup."Deadlocks Read Until" := NewestAt;
+
+      // Буфер кольцевой. Если самое старое событие в нём уже новее прежней отметки, между
+      // ними что-то вытеснено, и молчать об этом нельзя: пустая колонка читается как
+      // "взаимоблокировок не было", а это ровно противоположный вывод.
+      IF (WasReadUntil <> 0DT) AND (OldestAt <> 0DT) AND (OldestAt > WasReadUntil) THEN
+        Note := ' ' + DeadlockLostTxt;
+      IF Added > 0 THEN
+        Note := Note + ' ' + STRSUBSTNO(DeadlocksTxt,Added);
+      EXIT(Note);
     END;
 
     LOCAL PROCEDURE LoadContext@8(VAR Context@1000000000 : TEMPORARY Record 110232);

@@ -82,14 +82,17 @@ OBJECT Table 110231 LockWatch Episode
                                                               RUS=Эпизод открыт] }
     { 47  ;   ;Outcome             ;Option        ;CaptionML=[ENU=Outcome;
                                                               RUS=Исход];
-                                                   OptionCaptionML=[ENU=Undetermined,Granted,Timed out;
-                                                                    RUS=Не определён,Дождался,Отказ по пределу];
-                                                   OptionString=Undetermined,Granted,TimedOut }
+                                                   OptionCaptionML=[ENU=Undetermined,Granted,Timed out,Rolled back by the server;
+                                                                    RUS=Не определён,Дождался,Отказ по пределу,Откат сервером];
+                                                   OptionString=Undetermined,Granted,TimedOut,Deadlocked }
     { 48  ;   ;Class               ;Option        ;CaptionML=[ENU=Class;
                                                               RUS=Класс];
                                                    OptionCaptionML=[ENU=Plain,Escalation,Sleeping transaction,Deadlock;
                                                                     RUS=Спор за строку,Эскалация,Спит в транзакции,Взаимоблокировка];
                                                    OptionString=Plain,Escalation,SleepingTran,Deadlock }
+    { 49  ;   ;Deadlock Id         ;Code20        ;CaptionML=[ENU=Deadlock Id;
+                                                              RUS=Отпечаток графа];
+                                                   Editable=No }
     { 50  ;   ;Document No.        ;Code20        ;CaptionML=[ENU=Document No.;
                                                               RUS=Документ] }
     { 51  ;   ;Document Source     ;Option        ;CaptionML=[ENU=Document Source;
@@ -122,6 +125,7 @@ OBJECT Table 110231 LockWatch Episode
     {    ;Started At                               }
     {    ;Head SPID,Open                           }
     {    ;NAV Table Name,Started At                }
+    {    ;Deadlock Id                              }
   }
   FIELDGROUPS
   {

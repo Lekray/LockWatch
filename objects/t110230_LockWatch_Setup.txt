@@ -46,6 +46,9 @@ OBJECT Table 110230 LockWatch Setup
     { 31  ;   ;Deadlocks Read Until;DateTime      ;CaptionML=[ENU=Deadlocks Read Until;
                                                               RUS=Взаимоблокировки прочитаны до];
                                                    Editable=No }
+    { 32  ;   ;Deadlocks Read At   ;DateTime      ;CaptionML=[ENU=Deadlocks Read At;
+                                                              RUS=Буфер читали в];
+                                                   Editable=No }
     { 40  ;   ;Last Pass At        ;DateTime      ;CaptionML=[ENU=Last Pass At;
                                                               RUS=Последний проход];
                                                    Editable=No }

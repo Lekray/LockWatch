@@ -143,7 +143,16 @@ try {
     Write-Host "Подготовка стенда, ждущих будет $Waiters"
     if (Test-Path $stopFile) { Remove-Item $stopFile -Force }
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server';" | Out-Null
+    # Сбор взаимоблокировок на время опыта выключается. Он берёт графы из КОЛЬЦЕВОГО
+    # БУФЕРА сервера, а туда они попадают от кого угодно и когда угодно - хоть от прошлого
+    # прогона, хоть от чужой работы на той же базе. Строка в журнале получилась бы законной,
+    # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
+    # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
+    #
+    # Здесь у этого есть и вторая причина: разбор буфера стоит около 150 мс, и раз в минуту
+    # он лёг бы в худший проход. Цена буфера измерена отдельно и известна; смешивать её с
+    # потолком NAV-половины значило бы мерить потолок тем, что от нагрузки не зависит.
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0;" | Out-Null
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
     Invoke-Sql @"
@@ -225,7 +234,7 @@ exit 1
 finally {
     New-Item -ItemType File -Path $stopFile -Force -ErrorAction SilentlyContinue | Out-Null
     if ($crowd -and -not $crowd.HasExited) { Start-Sleep -Seconds 2; if (-not $crowd.HasExited) { $crowd.Kill() } }
-    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode;" 2>&1 | Out-Null
+    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; UPDATE $setup SET [Deadlocks Enabled] = 1;" 2>&1 | Out-Null
     if (Test-Path $stopFile) { Remove-Item $stopFile -Force }
     if ($StopInstance) { Stop-Service $service -Force }
 }

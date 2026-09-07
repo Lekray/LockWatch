@@ -324,7 +324,12 @@ FROM $episode ORDER BY [Entry No_] DESC;
 try {
     Write-Host 'Подготовка стенда'
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'';" | Out-Null
+    # Сбор взаимоблокировок на время опыта выключается. Он берёт графы из КОЛЬЦЕВОГО
+    # БУФЕРА сервера, а туда они попадают от кого угодно и когда угодно - хоть от прошлого
+    # прогона, хоть от чужой работы на той же базе. Строка в журнале получилась бы законной,
+    # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
+    # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'', [Deadlocks Enabled] = 0;" | Out-Null
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
 
     # Строка контекста заводится ОДНИМИ НОМЕРАМИ - имён здесь нет вовсе. Имена подставит сам
@@ -416,7 +421,8 @@ finally {
     Stop-Sqlcmd $waiter
     # Убираем за собой ОБЕ подложенные строки и строку настройки. Чужая таблица обязана
     # остаться ровно такой, какой была: отбор по номеру документа, и никаких DELETE без него.
-    $cleanup = "DELETE FROM $context WHERE [Table No_] = $TableNo;"
+    # Признак возвращается в исходное - таким он заводится при создании настройки.
+    $cleanup = "DELETE FROM $context WHERE [Table No_] = $TableNo; UPDATE $setup SET [Deadlocks Enabled] = 1;"
     if ($sqlTable -and $docColumn) {
         $cleanup += " DELETE FROM $sqlTable WHERE [$docColumn] IN (N'$docA',N'$docB',N'$docC',N'$docD');"
     }

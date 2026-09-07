@@ -196,6 +196,13 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Collect Statement Values" }
 
+    { 26  ;2   ;Field     ;
+                Name=DeadlocksEnabled;
+                ToolTipML=[ENU=Specifies whether deadlocks are collected from the server ring buffer. The server writes them there by itself and it costs no extra rights - only the same one the queue needs.;
+                           RUS=Определяет, собирать ли взаимоблокировки из кольцевого буфера сервера. Сервер пишет их туда сам, и новых прав это не требует - только то же, что и очередь.];
+                ApplicationArea=#All;
+                SourceExpr="Deadlocks Enabled" }
+
     { 12  ;1   ;Group     ;
                 CaptionML=[ENU=Last Pass;
                            RUS=Последний проход];
@@ -236,6 +243,14 @@ OBJECT Page 110230 LockWatch Setup
                            RUS=Определяет, была ли очередь длиннее потолка. Если стоит, в журнале лежат самые долгие ожидания того прохода, а не вся очередь.];
                 ApplicationArea=#All;
                 SourceExpr="Last Pass Truncated" }
+
+    { 36  ;2   ;Field     ;
+                Name=DeadlocksReadUntil;
+                ToolTipML=[ENU=Specifies the moment up to which deadlocks have been read. The ring buffer is circular and evicts the old ones, so the mark is what tells a quiet server from a lost one.;
+                           RUS=Определяет момент, до которого взаимоблокировки прочитаны. Буфер кольцевой и старое вытесняет, поэтому только по этой отметке видно, тихо на сервере или потеряно.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr="Deadlocks Read Until" }
 
     { 17  ;2   ;Field     ;
                 Name=WatchdogMessage;

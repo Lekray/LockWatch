@@ -118,7 +118,12 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
 try {
     Write-Host 'Подготовка стенда'
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server';" | Out-Null
+    # Сбор взаимоблокировок на время опыта выключается. Он берёт графы из КОЛЬЦЕВОГО
+    # БУФЕРА сервера, а туда они попадают от кого угодно и когда угодно - хоть от прошлого
+    # прогона, хоть от чужой работы на той же базе. Строка в журнале получилась бы законной,
+    # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
+    # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0;" | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
     Restart-Service $service -Force
@@ -201,7 +206,7 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETDATE());
 }
 finally {
     Stop-Sqlcmd $blocker
-    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId; UPDATE $setup SET [Enabled] = 0;" 2>&1 | Out-Null
+    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId; UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1;" 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }
 }
 
