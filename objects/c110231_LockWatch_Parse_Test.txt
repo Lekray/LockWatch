@@ -54,6 +54,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       ClassTxt@1000000040 : TextConst 'ENU=escalation %1, sleeping %2, under threshold %3, working %4;RUS=эскалация %1, спит %2, ниже порога %3, работает %4';
       ChkPrintTxt@1000000041 : TextConst 'ENU=the same graph gives the same fingerprint and a different one differs;RUS=один и тот же граф даёт один отпечаток, а другой - другой';
       PrintTxt@1000000042 : TextConst 'ENU=same [%1] and [%2], other [%3], empty [%4];RUS=одинаковые [%1] и [%2], другой [%3], пустой [%4]';
+      ChkPatternTxt@1000000044 : TextConst 'ENU=a field name becomes a LIKE pattern where every replaceable sign stands for any one sign;RUS=имя поля превращается в образец LIKE, где каждый заменяемый знак подходит к любому одному';
+      PatternTxt@1000000045 : TextConst 'ENU=[%1], cyrillic [%2], the ampersand kept its place [%3];RUS=[%1], кириллица [%2], амперсанд остался на месте [%3]';
+      ChkSameNameTxt@1000000046 : TextConst 'ENU=an SQL name is recognised as the NAV one only where the difference is a replaceable sign;RUS=имя из SQL признаётся именем NAV только там, где расхождение приходится на заменяемый знак';
+      SameNameTxt@1000000047 : TextConst 'ENU=dot against underscore %1, slash %2, another letter %3, other length %4;RUS=точка против подчёркивания %1, косая черта %2, другая буква %3, другая длина %4';
       FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -93,6 +97,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckVictims(Passed,Total,Report);
       CheckClass(Passed,Total,Report);
       CheckFingerprint(Passed,Total,Report);
+      CheckSqlNamePattern(Passed,Total,Report);
+      CheckSameSqlName(Passed,Total,Report);
     END;
 
     LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -410,6 +416,41 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       EXIT(Value);
     END;
 
+    LOCAL PROCEDURE CheckSqlNamePattern@57(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Dotted@1000000003 : Text;
+      Cyrillic@1000000004 : Text;
+      Kept@1000000005 : Text;
+    BEGIN
+      // Имена сняты с базы заказчика: "Acc. Schedule Name" лежит в SQL как "Acc_ Schedule
+      // Name", а кириллица и амперсанд платформой не трогаются вовсе.
+      Dotted := Parse.SqlNamePattern('Acc. Sched. KPI Web Srv. Line');
+      Cyrillic := Parse.SqlNamePattern('Сумма НДС');
+      Kept := Parse.SqlNamePattern('Cash Flow & Budget');
+      Check(Passed,Total,Report,ChkPatternTxt,
+        (Dotted = 'Acc_ Sched_ KPI Web Srv_ Line') AND (Cyrillic = 'Сумма НДС') AND
+        (Kept = 'Cash Flow _ Budget'),
+        STRSUBSTNO(PatternTxt,Dotted,Cyrillic,Kept));
+    END;
+
+    LOCAL PROCEDURE CheckSameSqlName@58(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Dot@1000000003 : Boolean;
+      Slash@1000000004 : Boolean;
+      Other@1000000005 : Boolean;
+      Length@1000000006 : Boolean;
+    BEGIN
+      // Расхождение позволено только там, где в имени NAV стоит заменяемый знак. Иначе
+      // "Gen_ Journal Line" совпало бы с "Gen. Journal Lint", и таблица нашлась бы не та.
+      Dot := Parse.SameSqlName('Gen_ Journal Line','Gen. Journal Line');
+      Slash := Parse.SameSqlName('G_L Entry','G/L Entry');
+      Other := Parse.SameSqlName('Gen_ Journal Lint','Gen. Journal Line');
+      Length := Parse.SameSqlName('Gen_ Journal Lines','Gen. Journal Line');
+      Check(Passed,Total,Report,ChkSameNameTxt,
+        Dot AND Slash AND (NOT Other) AND (NOT Length),
+        STRSUBSTNO(SameNameTxt,Dot,Slash,Other,Length));
+    END;
+
     LOCAL PROCEDURE CraftedKeyLock@56() : Text;
     BEGIN
       // Строка собрана нарочно: hobtid= здесь встречается ВНУТРИ ahobtid=, и наивный
@@ -458,8 +499,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
          представление о нём.
 
       Проверено поломкой 07.09.2026: со снятой границей слова в PairValue прогон даёт
-      17 из 18, и краснеет именно проверка границы - hobt 111 вместо 72057594261667840.
-      На целом коде 18 из 18. Проверять надо ПОСЛЕ перезапуска экземпляра службы: у неё
+      19 из 20, и краснеет именно проверка границы - hobt 111 вместо 72057594261667840.
+      На целом коде 20 из 20. Проверять надо ПОСЛЕ перезапуска экземпляра службы: у неё
       свой кэш объектов, и без перезапуска сломанный разбор тоже даёт 18 из 18.
 
       Самая ценная из проверок - на границу слова: в описании очереди рядом стоят

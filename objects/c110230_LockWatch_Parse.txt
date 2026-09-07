@@ -406,6 +406,70 @@ OBJECT Codeunit 110230 LockWatch Parse
       EXIT(FORMAT(Hash));
     END;
 
+    [External]
+    PROCEDURE SqlNamePattern@34(Name@1000 : Text) : Text;
+    VAR
+      Pattern@1001 : Text;
+      Index@1002 : Integer;
+      Ch@1003 : Char;
+    BEGIN
+      // Имя поля NAV в имя столбца SQL переводит не наше правило, а платформа, и правило
+      // это нигде не объявлено: измерением видно, что точка и косая черта становятся
+      // подчёркиванием, а скобки, запятая, двоеточие, минус и амперсанд остаются как есть.
+      // Повторять чужое правило по памяти - значит однажды промахнуться молча.
+      //
+      // Поэтому имя переводится не в имя, а в ОБРАЗЕЦ для LIKE: всё, что не буква, не
+      // цифра и не пробел, заменяется подчёркиванием, а подчёркивание в LIKE подходит к
+      // любому одному знаку. Образец подходит и к замене, и к её отсутствию, и правило
+      // платформы знать не требуется вовсе.
+      //
+      // Буква определяется тем, что у неё есть разный верхний и нижний регистр. Это
+      // работает для кириллицы так же, как для латиницы, а список диапазонов - нет:
+      // в именах столбцов заказчика кириллица встречается.
+      FOR Index := 1 TO STRLEN(Name) DO BEGIN
+        Ch := Name[Index];
+        IF IsNameChar(Ch) THEN
+          Pattern := Pattern + FORMAT(Ch)
+        ELSE
+          Pattern := Pattern + '_';
+      END;
+      EXIT(Pattern);
+    END;
+
+    [External]
+    PROCEDURE SameSqlName@35(SqlName@1000 : Text;NavName@1001 : Text) : Boolean;
+    VAR
+      Index@1002 : Integer;
+    BEGIN
+      // Сравнение имени, снятого с SQL, с именем объекта NAV - по тому же правилу, что и
+      // образец: расходиться они вправе только там, где в имени NAV стоит знак, который
+      // платформа могла заменить. Длина при замене не меняется, поэтому разная длина -
+      // сразу нет.
+      IF STRLEN(SqlName) <> STRLEN(NavName) THEN
+        EXIT(FALSE);
+      IF SqlName = '' THEN
+        EXIT(FALSE);
+      FOR Index := 1 TO STRLEN(NavName) DO
+        IF UPPERCASE(FORMAT(SqlName[Index])) <> UPPERCASE(FORMAT(NavName[Index])) THEN
+          IF IsNameChar(NavName[Index]) THEN
+            EXIT(FALSE);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE IsNameChar@36(Ch@1000 : Char) : Boolean;
+    VAR
+      Text@1001 : Text[1];
+    BEGIN
+      IF Ch = ' ' THEN
+        EXIT(TRUE);
+      IF (Ch >= '0') AND (Ch <= '9') THEN
+        EXIT(TRUE);
+      // Буква - это знак, у которого верхний и нижний регистр различаются. Проверка по
+      // диапазонам латиницы потеряла бы кириллицу, а она в именах столбцов есть.
+      Text := FORMAT(Ch);
+      EXIT(UPPERCASE(Text) <> LOWERCASE(Text));
+    END;
+
     LOCAL PROCEDURE FingerprintFactor@24() : Integer;
     BEGIN
       // Нечётный множитель полиномиального свёртывания. 131 - простое, взаимно простое

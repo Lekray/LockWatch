@@ -63,6 +63,14 @@ OBJECT Page 110232 LockWatch Context Tables
                 ApplicationArea=#All;
                 SourceExpr="Document Field No." }
 
+    { 9   ;2   ;Field     ;
+                Name=DocumentFieldName;
+                ToolTipML=[ENU=Specifies the name of that field. It is filled in by the tool and it is what the reverse lookup works by: SQL knows names, not NAV field numbers.;
+                           RUS=Определяет имя этого поля. Подставляется само, и именно по нему работает обратный поиск: в SQL нет номеров полей NAV, там есть имена.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr="Document Field Name" }
+
     { 6   ;2   ;Field     ;
                 Name=DocumentCaption;
                 ToolTipML=[ENU=Specifies what to call that document on screen.;

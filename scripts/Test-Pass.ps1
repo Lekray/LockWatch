@@ -36,6 +36,7 @@ param(
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
     [int]    $PassCodeunitId = 110235,
+    [switch] $ContextRoad,
     [switch] $KeepJournal,
     [switch] $StopInstance
 )
@@ -51,6 +52,7 @@ if (-not $Instance) { Fail 'не задан экземпляр службы: п�
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
 
 $episode = "[$Company`$LockWatch Episode]"
+$context = "[$Company`$LockWatch Context Table]"
 $setup   = "[$Company`$LockWatch Setup]"
 $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
@@ -130,6 +132,16 @@ try {
     # версию только что выложенных объектов, и опыт проверил бы не то.
     Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'';" | Out-Null
     if (-not $KeepJournal) { Invoke-Sql "DELETE FROM $episode;" | Out-Null }
+    # Дорога по хэшу самой блокировки включается ДО перезапуска службы: список таблиц
+    # контекста служба держит в кэше, и строка, вставленная запросом при работающей службе,
+    # до сессии не дойдёт - разбор просто не увидит её и промолчит.
+    Invoke-Sql "DELETE FROM $context WHERE [Table No_] = 110233;" | Out-Null
+    if ($ContextRoad) {
+        Invoke-Sql @"
+INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
+VALUES (110233,N'LockWatch Context Mark',13,N'Document No.',N'Отметка контекста',1);
+"@ | Out-Null
+    }
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] = -1;
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
@@ -210,10 +222,21 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # Виновник держит блокировку на строке отметки контекста и своим же UPDATE поставил
     # ей номер документа. Мост обязан пройти: транзакция -> её блокировка -> хэш ключа ->
     # обратный поиск -> строка -> документ и учётная запись. Ни одного нового права.
-    Check 'документ назван по отметке контекста' (($f[14] -eq 'HELD') -and ($f[15] -eq '2')) `
-        "документ [$($f[14])], откуда $($f[15]) при ожидаемом 2 (по отметке), причина [$($f[18])]"
-    Check 'виновник назван по имени, без права платформы' (($f[16] -eq 'STAND') -and ($f[17] -eq '1')) `
-        "учётная запись [$($f[16])], откуда $($f[17]) при ожидаемом 1 (по отметке)"
+    # Дорог к документу две, и различает их не значение, а ИСТОЧНИК. Значение здесь у обеих
+    # одно и то же нарочно: спорная строка и есть отметка контекста, поэтому проверка ловит
+    # именно ту дорогу, которую включили, а не совпадение ответов.
+    if ($ContextRoad) { $wantSource = '1'; $wantRoad = 'по хэшу блокировки' } else { $wantSource = '2'; $wantRoad = 'по отметке' }
+    Check "документ назван, дорога $wantRoad" (($f[14] -eq 'HELD') -and ($f[15] -eq $wantSource)) `
+        "документ [$($f[14])], откуда $($f[15]) при ожидаемом $wantSource, причина [$($f[18])]"
+    if ($ContextRoad) {
+        # Дорога по хэшу отвечает про СТРОКУ, а не про человека. Выдумывать учётную запись
+        # там, где её никто не называл, - худшее, что может сделать журнал.
+        Check 'по хэшу блокировки учётная запись не выдумывается' (($f[16] -eq '') -and ($f[17] -eq '0')) `
+            "учётная запись [$($f[16])], откуда $($f[17]) при ожидаемом 0 (нет)"
+    } else {
+        Check 'виновник назван по имени, без права платформы' (($f[16] -eq 'STAND') -and ($f[17] -eq '1')) `
+            "учётная запись [$($f[16])], откуда $($f[17]) при ожидаемом 1 (по отметке)"
+    }
 
     Write-Host 'Отпускаю блокировку и делаю второй проход'
     Stop-Sqlcmd $blocker
@@ -244,7 +267,7 @@ finally {
     # Убираем за собой И строку-мишень, И эпизоды. Оставленный эпизод - не мусор, а помеха:
     # мерный прогон журнала отказывается работать по непустому журналу, и следующий прогон
     # упал бы с виду беспричинно. Оставить его можно нарочно, ключом -KeepJournal.
-    $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1;"
+    $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $context WHERE [Table No_] = 110233;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
     & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }

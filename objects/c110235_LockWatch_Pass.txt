@@ -26,7 +26,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       BusyTxt@1000000006 : TextConst 'ENU=Pass went through, waiters %1.;RUS=Проход прошёл, ждущих %1.';
       TruncatedTxt@1000000007 : TextConst 'ENU=The pass hit the ceiling of %1 rows: the longest waits are kept, the rest of the queue is not in the journal.;RUS=Проход упёрся в потолок %1 строк: оставлены самые долгие ожидания, остаток очереди в журнал не попал.';
       CountsTxt@1000000009 : TextConst 'ENU=Opened %1, updated %2, closed %3, restarted %4.;RUS=Открыто %1, обновлено %2, закрыто %3, начато заново %4.';
-      NoMarkTxt@1000000030 : TextConst 'ENU=No context mark: the culprit did not write to a context table inside this transaction. The document can only be named by the lock hash, and that road is not built yet.;RUS=Отметки контекста нет: виновник в этой транзакции в таблицу контекста не писал. Назвать документ можно только по хэшу блокировки, а эта дорога ещё не построена.';
+      NoMarkTxt@1000000030 : TextConst 'ENU=Neither road answered. The contended row is not in a context table (or the lock is not a key one), and the culprit left no context mark inside this transaction.;RUS=Не ответила ни одна дорога. Спорной строки нет в таблицах контекста (или блокировка не строчная), а отметки контекста виновник в этой транзакции не оставил.';
       DocFailedTxt@1000000031 : TextConst 'ENU=Documents are not named: %1;RUS=Документы не названы: %1';
       ReadFailedTxt@1000000008 : TextConst 'ENU=The queue could not be read: %1;RUS=Очередь прочитать не удалось: %1';
 
@@ -114,6 +114,7 @@ OBJECT Codeunit 110235 LockWatch Pass
     LOCAL PROCEDURE NameDocuments@7() : Text;
     VAR
       Pending@1000000000 : TEMPORARY Record 110231;
+      Context@1000000002 : TEMPORARY Record 110232;
       Picked@1000000001 : Integer;
     BEGIN
       // Разбирать нечего - и запроса не будет вовсе. Это и есть ответ на "dm_tran_locks
@@ -122,7 +123,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       Picked := Journal.PickUnresolved(Pending,Parse.MaxDocumentsPerPass);
       IF Picked = 0 THEN
         EXIT('');
-      IF NOT Sql.ResolveDocuments(Pending) THEN
+      LoadContext(Context);
+      IF NOT Sql.ResolveDocuments(Pending,Context) THEN
         EXIT(' ' + STRSUBSTNO(DocFailedTxt,Sql.LastErrorText));
 
       Pending.RESET;
@@ -130,13 +132,30 @@ OBJECT Codeunit 110235 LockWatch Pass
         REPEAT
           IF Pending."Document No." <> '' THEN
             Journal.SetDocument(Pending."Entry No.",Pending."Document No.",Pending."User Name",
-                                Parse.DocSourceFromMark,'')
+                                Pending."Document Source",'')
           ELSE
             // Пустая колонка с ПРИЧИНОЙ честнее пустой колонки без неё: без причины она
             // читается как "блокировок по документам не было".
             Journal.SetDocument(Pending."Entry No.",'','',Parse.DocSourceNone,NoMarkTxt);
         UNTIL Pending.NEXT = 0;
       EXIT('');
+    END;
+
+    LOCAL PROCEDURE LoadContext@8(VAR Context@1000000000 : TEMPORARY Record 110232);
+    VAR
+      ContextTable@1000000001 : Record 110232;
+    BEGIN
+      // Список таблиц контекста читается ОДИН раз на проход и уезжает съёму копией. Он
+      // короткий - десятки строк, - а обращаться к нему пришлось бы на каждый разбираемый
+      // эпизод, то есть внутри цикла, который и без того самый дорогой.
+      Context.RESET;
+      Context.DELETEALL;
+      ContextTable.SETRANGE(Enabled,TRUE);
+      IF ContextTable.FINDSET THEN
+        REPEAT
+          Context := ContextTable;
+          Context.INSERT;
+        UNTIL ContextTable.NEXT = 0;
     END;
 
     LOCAL PROCEDURE SaveWatchdog@2(VAR Setup@1000000000 : Record 110230;Msg@1000000001 : Text;At@1000000002 : DateTime;Elapsed@1000000003 : Duration;Rows@1000000006 : Integer;Truncated@1000000004 : Boolean);

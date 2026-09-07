@@ -24,9 +24,16 @@ OBJECT Table 110232 LockWatch Context Table
     { 10  ;   ;Table Name          ;Text80        ;CaptionML=[ENU=Table Name;
                                                               RUS=Имя таблицы];
                                                    Editable=No }
-    { 11  ;   ;Document Field No.  ;Integer       ;CaptionML=[ENU=Document Field No.;
+    { 11  ;   ;Document Field No.  ;Integer       ;OnValidate=BEGIN
+                                                                SetFieldName;
+                                                              END;
+
+                                                   CaptionML=[ENU=Document Field No.;
                                                               RUS=Поле с номером документа];
                                                    MinValue=1 }
+    { 13  ;   ;Document Field Name ;Text30        ;CaptionML=[ENU=Document Field Name;
+                                                              RUS=Имя поля документа];
+                                                   Editable=No }
     { 12  ;   ;Document Caption    ;Text50        ;CaptionML=[ENU=Document Caption;
                                                               RUS=Подпись документа для экрана] }
     { 20  ;   ;Enabled             ;Boolean       ;CaptionML=[ENU=Enabled;
@@ -56,8 +63,24 @@ OBJECT Table 110232 LockWatch Context Table
       "Table Name" := '';
       IF "Table No." = 0 THEN
         EXIT;
+      // Берётся ИМЯ объекта, а не подпись. Подпись переведена на язык пользователя, а
+      // сверять её придётся с именем таблицы в SQL - там лежит имя, и только оно.
       IF AllObjWithCaption.GET(AllObjWithCaption."Object Type"::Table,"Table No.") THEN
-        "Table Name" := COPYSTR(AllObjWithCaption."Object Caption",1,MAXSTRLEN("Table Name"));
+        "Table Name" := COPYSTR(AllObjWithCaption."Object Name",1,MAXSTRLEN("Table Name"));
+      SetFieldName;
+    END;
+
+    LOCAL PROCEDURE SetFieldName@2();
+    VAR
+      Field@1000000000 : Record 2000000041;
+    BEGIN
+      // Имя поля нужно съёму: по нему строится образец имени столбца SQL. Номер поля для
+      // этого не годится вовсе - в SQL номеров полей NAV нет.
+      "Document Field Name" := '';
+      IF ("Table No." = 0) OR ("Document Field No." = 0) THEN
+        EXIT;
+      IF Field.GET("Table No.","Document Field No.") THEN
+        "Document Field Name" := COPYSTR(Field.FieldName,1,MAXSTRLEN("Document Field Name"));
     END;
 
     BEGIN
