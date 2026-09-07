@@ -78,6 +78,36 @@ OBJECT Page 110231 LockWatch Episodes
                                  PAGE.RUN(PAGE::"LockWatch Summary");
                                END;
                                 }
+      { 49      ;1   ;Action    ;
+                      Name=NameOpenUsers;
+                      CaptionML=[ENU=Name Everyone Waiting;
+                                 RUS=Назвать всех идущих];
+                      ToolTipML=[ENU=Ask the platform who is behind every wait going on right now. The standard table is read once per episode, which is not cheap - but the episodes going on are few, and the button is pressed by hand while someone is already sorting it out.;
+                                 RUS=Спросить у платформы, кто стоит за каждым идущим сейчас ожиданием. Штатная таблица читается по разу на эпизод, и это недёшево - но идущих эпизодов единицы, а кнопку жмут руками и тогда, когда уже разбираются.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Users;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 Platform.NameOpen;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 47      ;1   ;Action    ;
+                      Name=NamePlatformUser;
+                      CaptionML=[ENU=Name the User;
+                                 RUS=Назвать пользователя];
+                      ToolTipML=[ENU=Ask the platform who is behind this lock. It reads the standard table, and that table materialises every lock of the instance on any read - so it is done by this button, on one episode, and never in the background pass.;
+                                 RUS=Спросить у платформы, кто стоит за этой блокировкой. Читается штатная таблица, а она при любом чтении материализует все блокировки экземпляра - поэтому только по этой кнопке, на один эпизод, и никогда в фоновом проходе.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=User;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 NamePlatformUser;
+                               END;
+                                }
       { 46      ;1   ;Action    ;
                       Name=OpenAlerts;
                       CaptionML=[ENU=Alerts;
@@ -172,6 +202,13 @@ OBJECT Page 110231 LockWatch Episodes
                            RUS=Определяет, что с этим делать. Совет следует из того, что об эпизоде уже известно, и ничего от себя не добавляет: где сказать нечего, он пуст, а не вежлив.];
                 ApplicationArea=#All;
                 SourceExpr=Advice }
+
+    { 48  ;2   ;Field     ;
+                Name=BlockerALScope;
+                ToolTipML=[ENU=Specifies where the culprit is running RIGHT NOW - not where it took the lock. The platform reads it from the live stack at the moment of the read, so two consecutive reads of one episode can name different objects. The column is titled honestly for that reason.;
+                           RUS=Определяет, где виновник исполняется ПРЯМО СЕЙЧАС, а не где взял блокировку. Платформа берёт это из живого стека в момент чтения, поэтому два соседних чтения одного эпизода могут назвать разные объекты. Колонка потому и подписана честно.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker AL Scope" }
 
     { 30  ;2   ;Field     ;
                 Name=AdviceEvidence;
@@ -332,6 +369,28 @@ OBJECT Page 110231 LockWatch Episodes
     VAR
       AlertMs@1000000000 : Integer;
       WaitStyle@1000000001 : Text[30];
+      Platform@1000000002 : Codeunit 110241;
+      PlatformOffErr@1000000003 : TextConst 'ENU=Names from the platform are switched off in the setup. Switching them on costs a config change, an instance restart and both SQL rights - it is a decision, not a checkbox.;RUS=Имена от платформы выключены в настройке. Их включение стоит правки конфига, перезапуска экземпляра и обоих прав SQL - это решение, а не галка.';
+      NamedMsg@1000000004 : TextConst 'ENU=The platform named the user - %1;RUS=Платформа назвала пользователя - %1';
+      NotNamedMsg@1000000005 : TextConst 'ENU=The platform did not name anyone. %1;RUS=Платформа никого не назвала. %1';
+
+    LOCAL PROCEDURE NamePlatformUser@5();
+    VAR
+      Setup@1000000000 : Record 110230;
+      Reason@1000000001 : Text;
+    BEGIN
+      // Пустая колонка ответом не является, поэтому отказ объясняется словами. Причин у
+      // него три, и они разные: у эпизода нет номера транзакции, блокировку уже отпустили,
+      // либо дорога от платформы мертва - последнее видно только отдельной проверкой.
+      Setup.FetchOnce;
+      IF NOT Setup."Platform Names Enabled" THEN
+        ERROR(PlatformOffErr);
+      IF Platform.NameUser("Entry No.",Reason) THEN BEGIN
+        CurrPage.UPDATE(FALSE);
+        MESSAGE(NamedMsg,"User Name");
+      END ELSE
+        MESSAGE(NotNamedMsg,Reason);
+    END;
 
     LOCAL PROCEDURE ReadAlertThreshold@1();
     VAR

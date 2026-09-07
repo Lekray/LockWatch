@@ -113,6 +113,8 @@ OBJECT Table 110231 LockWatch Episode
                                                               RUS=Последний оператор виновника] }
     { 71  ;   ;NAV Object No.      ;Integer       ;CaptionML=[ENU=NAV Object No.;
                                                               RUS=Номер объекта NAV] }
+    { 72  ;   ;Blocker AL Scope    ;Text250       ;CaptionML=[ENU=Where the culprit runs now;
+                                                              RUS=Где виновник исполняется сейчас] }
     { 80  ;   ;Advice              ;Text250       ;CaptionML=[ENU=Advice;
                                                               RUS=Совет] }
     { 81  ;   ;Advice Evidence     ;Text250       ;CaptionML=[ENU=Advice Evidence;

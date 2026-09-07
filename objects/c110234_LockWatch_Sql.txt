@@ -73,6 +73,20 @@ OBJECT Codeunit 110234 LockWatch Sql
     END;
 
     [External]
+    PROCEDURE PlatformRoad@61(VAR ViewServerState@1000000000 : Boolean;VAR AlterEventSession@1000000001 : Boolean;VAR MonitorRunning@1000000002 : Boolean;VAR LockWaits@1000000003 : Integer) : Boolean;
+    BEGIN
+      LastError := '';
+      ViewServerState := FALSE;
+      AlterEventSession := FALSE;
+      MonitorRunning := FALSE;
+      LockWaits := 0;
+      IF TryPlatformRoad(ViewServerState,AlterEventSession,MonitorRunning,LockWaits) THEN
+        EXIT(TRUE);
+      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      EXIT(FALSE);
+    END;
+
+    [External]
     PROCEDURE LastErrorText@3() : Text;
     BEGIN
       EXIT(LastError);
@@ -1112,6 +1126,48 @@ OBJECT Codeunit 110234 LockWatch Sql
         // Выпавшая из потолка строка счёту не вредит - вернувшись, она отдаст прирост за
         // всё время отсутствия разом.
         ' ORDER BY g.wait_ms DESC;';
+      EXIT(Sql);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryPlatformRoad@62(VAR ViewServerState@1000000000 : Boolean;VAR AlterEventSession@1000000001 : Boolean;VAR MonitorRunning@1000000002 : Boolean;VAR LockWaits@1000000003 : Integer);
+    VAR
+      SqlConn@1000000004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlCmd@1000000005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlReader@1000000006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+    BEGIN
+      // Четыре ответа одним запросом, и все четыре нужны вместе. Права проверяются ТЕМ ЖЕ
+      // способом, каким их проверяет сама платформа: отказ в праве она не показывает
+      // никак, только строкой трассировки, и таблица при этом ведёт себя в точности как
+      // при отсутствии блокировок.
+      SqlConn := SqlConn.SqlConnection(ConnString);
+      SqlConn.Open;
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText := PlatformRoadSql;
+      SqlReader := SqlCmd.ExecuteReader;
+      IF SqlReader.Read THEN BEGIN
+        ViewServerState := ReaderInt(SqlReader,0) <> 0;
+        AlterEventSession := ReaderInt(SqlReader,1) <> 0;
+        MonitorRunning := ReaderInt(SqlReader,2) <> 0;
+        LockWaits := ReaderInt(SqlReader,3);
+      END;
+      SqlReader.Close;
+      SqlConn.Close;
+    END;
+
+    LOCAL PROCEDURE PlatformRoadSql@63() : Text;
+    VAR
+      Sql@1000000000 : Text;
+    BEGIN
+      // Сессия мониторинга зовётся "<База>_deadlock_monitor", и заводит её платформа сама
+      // при взведённом ключе. Ищем по хвосту имени: имя базы у нас есть, но сверять его
+      // строкой значило бы завести в коде ещё одно место, где имя базы имеет значение.
+      Sql :=
+        'SELECT CONVERT(int,HAS_PERMS_BY_NAME(null,null,' + Q + 'VIEW SERVER STATE' + Q + ')),' +
+        ' CONVERT(int,HAS_PERMS_BY_NAME(null,null,' + Q + 'ALTER ANY EVENT SESSION' + Q + ')),' +
+        ' (SELECT COUNT(*) FROM sys.dm_xe_sessions WHERE name LIKE ' + Q + Wildcard + 'deadlock_monitor' + Q + '),' +
+        ' (SELECT COUNT(*) FROM sys.dm_os_waiting_tasks WHERE wait_type LIKE ' + Q + 'LCK[_]' + Wildcard + Q + ');';
       EXIT(Sql);
     END;
 

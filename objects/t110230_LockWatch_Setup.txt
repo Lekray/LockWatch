@@ -48,6 +48,11 @@ OBJECT Table 110230 LockWatch Setup
                                                    OptionString=Off,Journal,EventLog }
     { 23  ;   ;Alert Event Source  ;Text50        ;CaptionML=[ENU=Alert Event Source;
                                                               RUS=Источник событий для тревоги] }
+    { 24  ;   ;Platform Names Enabled;Boolean     ;CaptionML=[ENU=Platform Names Enabled;
+                                                              RUS=Имена от платформы] }
+    { 25  ;   ;Platform Road Status;Text250       ;CaptionML=[ENU=Platform Road Status;
+                                                              RUS=Что со дорогой от платформы];
+                                                   Editable=No }
     { 30  ;   ;Deadlocks Enabled   ;Boolean       ;CaptionML=[ENU=Deadlocks Enabled;
                                                               RUS=Собирать взаимоблокировки] }
     { 31  ;   ;Deadlocks Read Until;DateTime      ;CaptionML=[ENU=Deadlocks Read Until;
@@ -107,6 +112,10 @@ OBJECT Table 110230 LockWatch Setup
       "Collect Statement Values" := FALSE;
       "Deadlocks Enabled" := TRUE;
       "Coverage Enabled" := TRUE;
+      // Имена от платформы по умолчанию ВЫКЛЮЧЕНЫ, и это не осторожность ради осторожности:
+      // включение стоит правки конфига, перезапуска экземпляра, обоих прав SQL и постоянной
+      // серверной сессии XE, переживающей снятие инструмента. Решение это заказчика.
+      "Platform Names Enabled" := FALSE;
       "Alert Channel" := "Alert Channel"::Journal;
       "Alert Event Source" := DefaultEventSource;
       INSERT;

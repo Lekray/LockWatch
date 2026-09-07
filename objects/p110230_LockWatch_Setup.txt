@@ -60,6 +60,20 @@ OBJECT Page 110230 LockWatch Setup
                                  CurrPage.UPDATE(FALSE);
                                END;
                                 }
+      { 52      ;1   ;Action    ;
+                      Name=CheckPlatformRoad;
+                      CaptionML=[ENU=Check the Platform Road;
+                                 RUS=Проверить дорогу от платформы];
+                      ToolTipML=[ENU=Ask whether the platform road to a person name is alive. The answer goes into the status line next to the switch, in words - an empty column is not an answer.;
+                                 RUS=Спросить, жива ли дорога от платформы к имени человека. Ответ ложится словами в строку рядом с выключателем - пустая колонка ответом не является.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Check;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CheckPlatformRoad;
+                               END;
+                                }
       { 43      ;1   ;Action    ;
                       Name=RunOnce;
                       CaptionML=[ENU=One pass now;
@@ -224,6 +238,21 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Alert Event Source" }
 
+    { 53  ;2   ;Field     ;
+                Name=PlatformNamesEnabled;
+                ToolTipML=[ENU=Specifies whether the tool may ask the platform for the name of the PERSON behind a lock. It costs a config change, an instance restart, both SQL rights and a permanent server-side event session that outlives the tool - so this is switched on by a decision, not by default.;
+                           RUS=Определяет, вправе ли инструмент спрашивать у платформы имя ЧЕЛОВЕКА за блокировкой. Стоит это правки конфига, перезапуска экземпляра, обоих прав SQL и постоянной серверной сессии, переживающей снятие инструмента, - поэтому включается решением, а не по умолчанию.];
+                ApplicationArea=#All;
+                SourceExpr="Platform Names Enabled" }
+
+    { 54  ;2   ;Field     ;
+                Name=PlatformRoadStatus;
+                ToolTipML=[ENU=Specifies what the last check of the platform road had to say. The refusal of that road is invisible by itself - an empty screen looks the same on a healthy system and on a broken one - so the check asks for the rights, for the monitor session, and cross-checks an empty platform table against a non-empty server queue.;
+                           RUS=Определяет, что сказала последняя проверка дороги от платформы. Отказ этой дороги сам по себе невидим - пустой экран одинаков на здоровой системе и на сломанной, - поэтому проверка спрашивает права, сессию мониторинга и сверяет пустую штатную таблицу с непустой очередью сервера.];
+                ApplicationArea=#All;
+                MultiLine=Yes;
+                SourceExpr="Platform Road Status" }
+
     { 12  ;1   ;Group     ;
                 CaptionML=[ENU=Last Pass;
                            RUS=Последний проход];
@@ -297,6 +326,16 @@ OBJECT Page 110230 LockWatch Setup
     VAR
       Task@1000000000 : Codeunit 110236;
       ScheduledTasks@1000000001 : Integer;
+      Platform@1000000002 : Codeunit 110241;
+
+    LOCAL PROCEDURE CheckPlatformRoad@1();
+    BEGIN
+      // Сам ответ и его запись в строку настройки живут в разборе дороги, а не здесь:
+      // кнопка на странице и вызов снаружи обязаны делать РОВНО ОДНО И ТО ЖЕ, иначе
+      // проверенным окажется не то, чем пользуются.
+      Platform.CheckRoad;
+      CurrPage.UPDATE(FALSE);
+    END;
 
     BEGIN
     {

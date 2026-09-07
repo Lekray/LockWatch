@@ -1,0 +1,238 @@
+OBJECT Codeunit 110241 LockWatch Platform
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      Sql@1000000000 : Codeunit 110234;
+      NoEntryErr@1000000001 : TextConst 'ENU=There is no episode %1 in the journal.;RUS=Эпизода %1 в журнале нет.';
+      NoTranTxt@1000000002 : TextConst 'ENU=The episode has no culprit transaction number, and the platform road starts from it. That happens when the queue named the head of the chain but the lock itself belongs to nobody we can see.;RUS=У эпизода нет номера транзакции виновника, а дорога от платформы начинается именно с него. Так бывает, когда очередь назвала голову цепочки, а сама блокировка принадлежит тому, кого мы не видим.';
+      NoRowTxt@1000000003 : TextConst 'ENU=The platform table has no row for transaction %1. The lock is most likely already released - the table shows what is held RIGHT NOW, and nothing else.;RUS=В штатной таблице нет строки для транзакции %1. Скорее всего блокировку уже отпустили: таблица показывает то, что держится ПРЯМО СЕЙЧАС, и ничего кроме.';
+      DeadTxt@1000000004 : TextConst 'ENU=The platform road is dead: %1;RUS=Дорога от платформы мертва: %1';
+      NoRightsTxt@1000000005 : TextConst 'ENU=the service account is missing rights - VIEW SERVER STATE %1, ALTER ANY EVENT SESSION %2;RUS=учётной записи службы не хватает прав - VIEW SERVER STATE %1, ALTER ANY EVENT SESSION %2';
+      NoMonitorTxt@1000000006 : TextConst 'ENU=the deadlock monitor session is not running on the server. It is started by the platform itself when EnableDeadlockMonitoring is on - which means the key is off, or the instance has not been restarted since.;RUS=серверная сессия мониторинга не работает. Её заводит сама платформа при взведённом EnableDeadlockMonitoring - значит ключ снят либо экземпляр после его взвода не перезапускали.';
+      DeadMapTxt@1000000007 : TextConst 'ENU=the map is dead: the server queue has %1 lock waits and the platform table is empty. The rights and the monitor session are both in place, so the transaction map was not filled. Measured 08.09.2026 on this platform build - it stays empty even with the key on, and even for a lock held by the reading session itself.;RUS=карта мертва: в очереди сервера %1 ожиданий блокировок, а штатная таблица пуста. Права и сессия мониторинга на месте, значит карта транзакций не наполнилась. Измерено 08.09.2026 на этой сборке платформы - она остаётся пустой и при взведённом ключе, и даже для блокировки, которую держит сама читающая сессия.';
+      AliveTxt@1000000008 : TextConst 'ENU=The platform road is alive: rights in place, the monitor session is running, the platform table holds %1 rows.;RUS=Дорога от платформы жива: права на месте, сессия мониторинга работает, в штатной таблице строк %1.';
+      QuietTxt@1000000009 : TextConst 'ENU=The platform road is alive: rights in place, the monitor session is running. There is nothing to name right now - neither the queue nor the platform table holds anything.;RUS=Дорога от платформы жива: права на месте, сессия мониторинга работает. Называть сейчас нечего - ни в очереди, ни в штатной таблице ничего нет.';
+      NoSqlTxt@1000000010 : TextConst 'ENU=the server could not be asked: %1;RUS=сервер спросить не удалось: %1';
+      StatusMsg@1000000011 : TextConst 'ENU=PLATFORMROAD alive %1 note %2;RUS=PLATFORMROAD alive %1 note %2';
+      NamedMsg@1000000012 : TextConst 'ENU=PLATFORMNAME named %1 of %2 note %3;RUS=PLATFORMNAME named %1 of %2 note %3';
+      LocksMsg@1000000014 : TextConst 'ENU=PLATFORMLOCKS rows %1 head %2;RUS=PLATFORMLOCKS rows %1 head %2';
+      OffErr@1000000013 : TextConst 'ENU=Names from the platform are switched off in the setup.;RUS=Имена от платформы выключены в настройке.';
+
+    [External]
+    PROCEDURE NameUser@1(EntryNo@1000000000 : Integer;VAR Reason@1000000001 : Text) : Boolean;
+    VAR
+      Episode@1000000002 : Record 110231;
+      Locks@1000000003 : Record 2000000154;
+    BEGIN
+      // Дорога к имени ЧЕЛОВЕКА от самой платформы. Мост - номер транзакции виновника: он
+      // уже лежит в строке журнала, снятый со стороны SQL, и он же стоит первым полем в
+      // штатной таблице. Совпадение это не случайное: обе стороны берут его у одного и
+      // того же request_owner_id.
+      //
+      // Читается таблица ТОЛЬКО по кнопке и только на один разбираемый случай. Провайдер у
+      // неё EagerVirtual: любое чтение, даже с отбором, материализует ВСЕ блокировки
+      // экземпляра и обходит все живые сессии - 157 мс при тридцати тысячах блокировок,
+      // то есть дороже всего именно в шторм (FINDINGS, раздел 2).
+      Reason := '';
+      IF NOT Episode.GET(EntryNo) THEN
+        ERROR(NoEntryErr,EntryNo);
+      IF Episode."Blocker Transaction Id" = 0 THEN BEGIN
+        Reason := NoTranTxt;
+        EXIT(FALSE);
+      END;
+
+      Locks.SETRANGE("Transaction ID",Episode."Blocker Transaction Id");
+      IF NOT Locks.FINDFIRST THEN BEGIN
+        Reason := STRSUBSTNO(NoRowTxt,Episode."Blocker Transaction Id");
+        EXIT(FALSE);
+      END;
+
+      Episode."User Name" := COPYSTR(Locks."User Name",1,MAXSTRLEN(Episode."User Name"));
+      Episode."User Source" := Episode."User Source"::FromPlatform;
+      // Колонки AL отвечают НЕ на тот вопрос, на который их хочется прочесть: платформа
+      // берёт их из живого стека виновника В МОМЕНТ ЧТЕНИЯ, а не оттуда, где он взял
+      // блокировку. Длинная проводка уходит через десятки кодюнитов, и два соседних
+      // чтения одного эпизода назовут разные объекты. Поэтому поле подписано честно.
+      Episode."Blocker AL Scope" := COPYSTR(Locks."AL Method Scope",1,MAXSTRLEN(Episode."Blocker AL Scope"));
+      Episode.MODIFY;
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE RoadStatus@2(VAR Reason@1000000000 : Text) : Boolean;
+    VAR
+      Locks@1000000001 : Record 2000000154;
+      ViewServerState@1000000002 : Boolean;
+      AlterEventSession@1000000003 : Boolean;
+      MonitorRunning@1000000004 : Boolean;
+      LockWaits@1000000005 : Integer;
+      Rows@1000000006 : Integer;
+    BEGIN
+      // Отказ этой дороги НЕВИДИМ: не выдали право - платформа пишет одну строку
+      // трассировки уровня Warning, и таблица ведёт себя в точности как при отсутствии
+      // блокировок. Экран будет пуст и на здоровой системе, и на сломанной, и различить
+      // их можно только этой проверкой.
+      Reason := '';
+      IF NOT Sql.PlatformRoad(ViewServerState,AlterEventSession,MonitorRunning,LockWaits) THEN BEGIN
+        Reason := STRSUBSTNO(DeadTxt,STRSUBSTNO(NoSqlTxt,Sql.LastErrorText));
+        EXIT(FALSE);
+      END;
+      IF NOT (ViewServerState AND AlterEventSession) THEN BEGIN
+        Reason := STRSUBSTNO(DeadTxt,STRSUBSTNO(NoRightsTxt,ViewServerState,AlterEventSession));
+        EXIT(FALSE);
+      END;
+      IF NOT MonitorRunning THEN BEGIN
+        Reason := STRSUBSTNO(DeadTxt,NoMonitorTxt);
+        EXIT(FALSE);
+      END;
+
+      Rows := Locks.COUNT;
+      // Перекрёстная проверка, и она здесь главная: права на месте, сессия работает, а
+      // таблица пуста ПРИ НЕПУСТОЙ ОЧЕРЕДИ - значит карта транзакций не наполнялась, и
+      // ключ был снят в момент первого обращения к базе. Без этой проверки инструмент
+      // сказал бы "всё хорошо" и показал пустую колонку.
+      IF (Rows = 0) AND (LockWaits > 0) THEN BEGIN
+        Reason := STRSUBSTNO(DeadTxt,STRSUBSTNO(DeadMapTxt,LockWaits));
+        EXIT(FALSE);
+      END;
+      IF Rows = 0 THEN
+        Reason := QuietTxt
+      ELSE
+        Reason := STRSUBSTNO(AliveTxt,Rows);
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE CheckRoad@3();
+    VAR
+      Setup@1000000000 : Record 110230;
+      Reason@1000000001 : Text;
+      Alive@1000000002 : Boolean;
+    BEGIN
+      // Ответ кладётся В СТРОКУ настройки, а не только в окно: окно закроют и забудут, а
+      // строка останется рядом с выключателем и будет видна тому, кто придёт после.
+      Setup.FetchOnce;
+      Alive := RoadStatus(Reason);
+      Setup."Platform Road Status" := COPYSTR(Reason,1,MAXSTRLEN(Setup."Platform Road Status"));
+      Setup.MODIFY;
+      COMMIT;
+      MESSAGE(StatusMsg,Alive,Reason);
+    END;
+
+    [External]
+    PROCEDURE NameOpen@4();
+    VAR
+      Episode@1000000000 : Record 110231;
+      Setup@1000000001 : Record 110230;
+      Reason@1000000002 : Text;
+      LastReason@1000000003 : Text;
+      Named@1000000004 : Integer;
+      Tried@1000000005 : Integer;
+    BEGIN
+      // Назвать всех, кто ждёт ПРЯМО СЕЙЧАС. Читается штатная таблица по одному разу на
+      // эпизод, и это дорого - но идущих эпизодов единицы, а кнопку жмут руками и в тот
+      // момент, когда уже разбираются. В фоновом проходе этого не делается никогда.
+      Setup.FetchOnce;
+      IF NOT Setup."Platform Names Enabled" THEN
+        ERROR(OffErr);
+      Episode.RESET;
+      Episode.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Episode.SETRANGE(Open,TRUE);
+      Episode.SETFILTER("Blocker Transaction Id",'<>%1',0);
+      IF Episode.FINDSET THEN
+        REPEAT
+          Tried := Tried + 1;
+          IF NameUser(Episode."Entry No.",Reason) THEN
+            Named := Named + 1
+          ELSE
+            LastReason := Reason;
+        UNTIL Episode.NEXT = 0;
+      COMMIT;
+      MESSAGE(NamedMsg,Named,Tried,LastReason);
+    END;
+
+    [External]
+    PROCEDURE ShowLocks@5();
+    VAR
+      Locks@1000000000 : Record 2000000154;
+      Line@1000000001 : Text;
+      Shown@1000000002 : Integer;
+    BEGIN
+      // Что платформа видит СЕЙЧАС. Нужно это ровно тогда, когда имя не назвалось: пустая
+      // штатная таблица и таблица, где нет нужной транзакции, - две разные беды, и лечатся
+      // они по-разному. Без этого списка их не различить.
+      Locks.RESET;
+      IF Locks.FINDSET THEN
+        REPEAT
+          Shown := Shown + 1;
+          IF Shown <= ShowLimit THEN
+            Line := Line + FORMAT(Locks."Transaction ID") + ' ' + Locks."User Name" + ' ' +
+                    COPYSTR(Locks."Object Name",1,40) + CrLf;
+        UNTIL Locks.NEXT = 0;
+      MESSAGE(LocksMsg,Shown,Line);
+    END;
+
+    LOCAL PROCEDURE ShowLimit@6() : Integer;
+    BEGIN
+      // Двадцать строк. Больше в окно всё равно не читают, а таблица в шторм отдаёт
+      // тридцать тысяч - и собрать их в одну строку значило бы уронить клиент.
+      EXIT(20);
+    END;
+
+    LOCAL PROCEDURE CrLf@7() : Text[2];
+    VAR
+      Cr@1000000000 : Char;
+      Lf@1000000001 : Char;
+    BEGIN
+      Cr := 13;
+      Lf := 10;
+      EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
+    BEGIN
+    {
+      Уровень 2: имя ЧЕЛОВЕКА от самой платформы. Всё, что инструмент умеет без него, -
+      называть операцию и учётную запись по нашей же отметке контекста; здесь появляется
+      имя, которое ведёт сама платформа.
+
+      Цена у этого не нулевая и вся расписана в FINDINGS, разделе 2: правка
+      CustomSettings.config, перезапуск экземпляра, ОБА права SQL, постоянная серверная
+      сессия XE, переживающая снятие инструмента, и надбавка на каждом старте транзакции в
+      каждой сессии. Поэтому по умолчанию выключено.
+
+      А ГЛАВНОЕ - цена эта, по замеру 08.09.2026, ничего не покупает. Ключ взведён, оба
+      права на месте, сессия мониторинга поднята платформой - и штатная таблица всё равно
+      пуста: ноль строк и стороннему наблюдателю, и самому держателю блокировки, читающему
+      её изнутри собственной открытой транзакции. Карта транзакций не наполняется вовсе
+      (FINDINGS, раздел 26).
+
+      Код при этом оставлен, и не из упрямства: сборки платформы разные, а сторож ниже
+      говорит правду в любом случае - и когда дорога мертва, и когда она вдруг оживёт.
+
+      Два места, где легко соврать красиво, и оба закрыты:
+
+      1. Отказ дороги НЕВИДИМ. Не выдали право - платформа пишет строку трассировки, а
+         таблица ведёт себя как при отсутствии блокировок. Пустой экран одинаков на
+         здоровой системе и на сломанной, поэтому сторож спрашивает права, сессию и
+         сверяет пустоту таблицы с непустой очередью.
+      2. Колонки AL отвечают не на тот вопрос. Платформа берёт их из живого стека виновника
+         В МОМЕНТ ЧТЕНИЯ, а не оттуда, где он взял блокировку. Поле поэтому названо "где
+         виновник исполняется сейчас", а не "где взял блокировку".
+
+      Читается штатная таблица только по кнопке и на один случай: провайдер у неё
+      EagerVirtual и материализует все блокировки экземпляра при любом чтении.
+    }
+    END.
+  }
+}

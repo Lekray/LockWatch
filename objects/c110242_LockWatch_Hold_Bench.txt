@@ -1,0 +1,98 @@
+OBJECT Codeunit 110242 LockWatch Hold Bench
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      HeldTxt@1000000000 : TextConst 'ENU=LOCKHOLD user %1 session %2 ms %3 ownrows %4 laterows %5;RUS=LOCKHOLD user %1 session %2 ms %3 ownrows %4 laterows %5';
+      NoRowErr@1000000001 : TextConst 'ENU=The bench mark row is not there. It is put down by the run itself, and holding a lock on a row that does not exist would measure nothing.;RUS=Строки-мишени нет. Её кладёт сам прогон, и держать блокировку на несуществующей строке значит не мерить ничего.';
+
+    [External]
+    PROCEDURE Hold@1();
+    VAR
+      Mark@1000000000 : Record 110233;
+      Waited@1000000001 : Integer;
+      Locks@1000000002 : Record 2000000154;
+      OwnRows@1000000003 : Integer;
+      LateRows@1000000004 : Integer;
+    BEGIN
+      // Блокировку держит СЕССИЯ NAV, и в этом весь смысл. Штатная таблица блокировок
+      // показывает только те транзакции, что платформа завела в свою карту, а туда
+      // попадают лишь сессии NAV этого экземпляра. Соединение sqlcmd в ней не появится
+      // никогда, и проверять дорогу к имени человека им нельзя вовсе.
+      Mark.LOCKTABLE;
+      IF NOT Mark.GET(TargetInstanceId,TargetSessionId) THEN
+        ERROR(NoRowErr);
+      Mark."Document No." := HeldDocumentNo;
+      Mark.MODIFY;
+      // COMMIT здесь не делается нарочно: транзакция держится открытой, и вместе с ней
+      // держится блокировка. Отпустит её платформа сама, когда вызов кончится.
+      //
+      // Штатная таблица читается ОТСЮДА, изнутри собственной открытой транзакции. Это и
+      // есть решающий опыт: если держатель не видит даже СВОЕЙ блокировки, значит карта
+      // транзакций пуста вовсе; если видит свою, а сторонний наблюдатель не видит ничего,
+      // значит карта у каждой сессии своя, и дорога к чужому имени по ней не проходит.
+      OwnRows := Locks.COUNT;
+      Waited := HoldMs;
+      SLEEP(Waited DIV 2);
+      // Второй счёт - когда ждущий уже стоит в очереди. Первый мог оказаться слишком
+      // ранним: карта наполняется на старте транзакции, а не на взятии блокировки.
+      Locks.RESET;
+      LateRows := Locks.COUNT;
+      SLEEP(Waited DIV 2);
+      MESSAGE(HeldTxt,USERID,SESSIONID,Waited,OwnRows,LateRows);
+    END;
+
+    LOCAL PROCEDURE HoldMs@2() : Integer;
+    BEGIN
+      // Минута. Больше предела ожидания NAV (10 000 мс) - чтобы жертва успела отвалиться
+      // по нему и эпизод получил честный исход, - и заведомо больше, чем нужно прогону на
+      // проход и нажатие кнопки. Меньше минуты не годится: на холодной службе первый
+      // проход платит за сборку business assemblies, и окно съедается целиком.
+      EXIT(60000);
+    END;
+
+    LOCAL PROCEDURE TargetInstanceId@3() : Integer;
+    BEGIN
+      // Та же мишень, что и у прогона по живой блокировке: отрицательные номера сеанса и
+      // экземпляра настоящими не бывают, и столкнуться с чужой отметкой нельзя.
+      EXIT(-1);
+    END;
+
+    LOCAL PROCEDURE TargetSessionId@4() : Integer;
+    BEGIN
+      EXIT(-1);
+    END;
+
+    LOCAL PROCEDURE HeldDocumentNo@5() : Code[20];
+    BEGIN
+      EXIT('HELD-BY-NAV');
+    END;
+
+    BEGIN
+    {
+      Держатель блокировки для проверки дороги к имени ЧЕЛОВЕКА.
+
+      Нужен он ровно затем, что этой дороги нельзя проверить соединением sqlcmd: штатная
+      таблица блокировок показывает лишь те транзакции, что платформа завела в свою карту,
+      а туда попадают только сессии NAV этого экземпляра. Держатель поэтому - сессия NAV,
+      запускаемая через Invoke-NAVCodeunit, а ждущим остаётся всё тот же sqlcmd.
+
+      Ответ он отдаёт машиночитаемой строкой и на обоих языках одинаково: разбирать её
+      прогону, а не читать человеку, и зависеть от языка службы разбор не должен.
+
+      Объект мерный, как и Codeunit 110233: в бою он не нужен и вреда не приносит - без
+      строки-мишени он просто отказывается работать.
+    }
+    END.
+  }
+}
