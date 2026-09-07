@@ -1,0 +1,466 @@
+OBJECT Codeunit 110231 LockWatch Parse Test
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            SelfTest;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Parse@1000000000 : Codeunit 110230;
+      PassedTxt@1000000001 : TextConst 'ENU=PASS;RUS=пройдено';
+      FailedTxt@1000000002 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ ';
+      VerdictTxt@1000000003 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
+      ChkWaitKeyTxt@1000000010 : TextConst 'ENU=a keylock line of the wait queue splits into kind, hobt, database and mode;RUS=строка keylock из очереди ожиданий разбирается на род, hobt, базу и режим';
+      WaitKeyTxt@1000000011 : TextConst 'ENU=kind %1, hobt %2, database %3, mode %4, object %5;RUS=род %1, hobt %2, база %3, режим %4, объект %5';
+      ChkWaitObjTxt@1000000012 : TextConst 'ENU=an objectlock line gives the object and leaves hobt empty;RUS=строка objectlock отдаёт объект и оставляет hobt пустым';
+      WaitObjTxt@1000000013 : TextConst 'ENU=object %1, hobt %2;RUS=объект %1, hobt %2';
+      ChkWaitBoundTxt@1000000014 : TextConst 'ENU=names are matched on a word boundary, not as a substring;RUS=имена ищутся на границе слова, а не подстрокой';
+      WaitBoundTxt@1000000015 : TextConst 'ENU=hobt %1 taken past id lock..., object %2 not taken from associatedObjectId;RUS=hobt %1 взят мимо id lock..., объект %2 не взят из associatedObjectId';
+      ChkWaitJunkTxt@1000000016 : TextConst 'ENU=a line without a database number is refused, not half-parsed;RUS=строка без номера базы отвергается, а не разбирается наполовину';
+      WaitJunkTxt@1000000017 : TextConst 'ENU=answer %1;RUS=ответ %1';
+      ChkHashTxt@1000000018 : TextConst 'ENU=the key hash loses its padding and a non-hash gives nothing;RUS=хэш ключа теряет добивку пробелами, а не-хэш не даёт ничего';
+      HashTxt@1000000019 : TextConst 'ENU=hash [%1], page resource [%2];RUS=хэш [%1], страничный ресурс [%2]';
+      ChkSplitPlainTxt@1000000020 : TextConst 'ENU=an ordinary SQL name splits into company and table;RUS=обычное имя SQL разбирается на компанию и таблицу';
+      SplitPlainTxt@1000000021 : TextConst 'ENU=company [%1], table [%2], sift key %3;RUS=компания [%1], таблица [%2], ключ SIFT %3';
+      ChkSplitNoCoTxt@1000000022 : TextConst 'ENU=a table with DataPerCompany No has no company prefix and that is not an error;RUS=у таблицы без разделения по компаниям префикса нет, и это не ошибка';
+      ChkSplitSiftTxt@1000000023 : TextConst 'ENU=a SIFT view gives the key number from its own name;RUS=SIFT-представление отдаёт номер ключа из собственного имени';
+      ChkSplitNdoTxt@1000000024 : TextConst 'ENU=a platform $ndo$ name is refused instead of passing as a nameless company;RUS=платформенное имя $ndo$ отвергается, а не выдаётся за безымянную компанию';
+      ChkKeyNoTxt@1000000025 : TextConst 'ENU=the NAV key number comes off the index name, and VSIFTIDX carries none;RUS=номер ключа NAV снимается с имени индекса, а VSIFTIDX его не несёт';
+      KeyNoTxt@1000000026 : TextConst 'ENU=clustered %1, secondary %2, VSIFTIDX %3;RUS=кластерный %1, вторичный %2, VSIFTIDX %3';
+      ChkStartTxt@1000000027 : TextConst 'ENU=the episode start is counted back from the observation, not from our own clock;RUS=начало эпизода считается назад от наблюдения, а не по своим часам';
+      StartTxt@1000000028 : TextConst 'ENU=difference %1 against the expected %2;RUS=разница %1 против ожидаемых %2';
+      ChkNewEpTxt@1000000029 : TextConst 'ENU=a wait counter that went backwards means a second episode, not the same one;RUS=счётчик ожидания, пошедший назад, означает второй эпизод, а не тот же';
+      NewEpTxt@1000000030 : TextConst 'ENU=backwards %1, forwards %2;RUS=назад %1, вперёд %2';
+      ChkOutcomeTxt@1000000031 : TextConst 'ENU=the outcome has three values and a foreign session never gets one;RUS=исход имеет три значения, а чужой сессии не приписывается вовсе';
+      OutcomeTxt@1000000032 : TextConst 'ENU=at the limit %1, well short %2, gap under one period %3, foreign session %4;RUS=на пределе %1, с запасом %2, зазор меньше периода %3, чужая сессия %4';
+      ChkChainTxt@1000000033 : TextConst 'ENU=the chain is unwound to the head, not to the neighbour;RUS=цепочка разматывается до головы, а не до соседа';
+      ChainTxt@1000000034 : TextConst 'ENU=head %1 at depth %2, ring %3;RUS=голова %1 на глубине %2, кольцо %3';
+      ChkCycleTxt@1000000035 : TextConst 'ENU=a ring is broken and reported, not spun in;RUS=кольцо обрывается и отмечается, а не крутится';
+      CycleTxt@1000000036 : TextConst 'ENU=ring %1, steps counted %2;RUS=кольцо %1, шагов насчитано %2';
+      ChkVictimsTxt@1000000037 : TextConst 'ENU=victims behind one head are counted, so one trouble is not read as many;RUS=жертвы за одной головой сосчитаны, и одна беда не читается как много';
+      VictimsTxt@1000000038 : TextConst 'ENU=behind the head %1 of %2 waiters;RUS=за головой %1 из %2 ждущих';
+      ChkClassTxt@1000000039 : TextConst 'ENU=escalation outranks a sleeping transaction, and idling under the threshold is plain;RUS=эскалация старше спящей транзакции, а простой ниже порога - обычный случай';
+      ClassTxt@1000000040 : TextConst 'ENU=escalation %1, sleeping %2, under threshold %3, working %4;RUS=эскалация %1, спит %2, ниже порога %3, работает %4';
+      ChkPrintTxt@1000000041 : TextConst 'ENU=the same graph gives the same fingerprint and a different one differs;RUS=один и тот же граф даёт один отпечаток, а другой - другой';
+      PrintTxt@1000000042 : TextConst 'ENU=same [%1] and [%2], other [%3], empty [%4];RUS=одинаковые [%1] и [%2], другой [%3], пустой [%4]';
+      FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
+
+    [External]
+    PROCEDURE SelfTest@1();
+    VAR
+      Passed@1000000000 : Integer;
+      Total@1000000001 : Integer;
+      Report@1000000002 : Text;
+    BEGIN
+      // Обкатка судит сама: первой строкой "пройдено N из M", и при любом провале
+      // выходит ошибкой, а не сообщением. Запуск через Invoke-NAVCodeunit тогда
+      // отличает целое от сломанного по коду возврата, а не по чтению глазами.
+      RunChecks(Passed,Total,Report);
+      Report := STRSUBSTNO(VerdictTxt,Passed,Total) + CrLf + CrLf + Report;
+      IF Passed < Total THEN
+        ERROR(FailedRunErr,Report);
+      MESSAGE(Report);
+    END;
+
+    LOCAL PROCEDURE RunChecks@2(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    BEGIN
+      CheckWaitKey(Passed,Total,Report);
+      CheckWaitObject(Passed,Total,Report);
+      CheckWaitBoundary(Passed,Total,Report);
+      CheckWaitJunk(Passed,Total,Report);
+      CheckHash(Passed,Total,Report);
+      CheckSplitPlain(Passed,Total,Report);
+      CheckSplitNoCompany(Passed,Total,Report);
+      CheckSplitSift(Passed,Total,Report);
+      CheckSplitPlatform(Passed,Total,Report);
+      CheckKeyNo(Passed,Total,Report);
+      CheckEpisodeStart(Passed,Total,Report);
+      CheckNewEpisode(Passed,Total,Report);
+      CheckOutcome(Passed,Total,Report);
+      CheckChain(Passed,Total,Report);
+      CheckChainRing(Passed,Total,Report);
+      CheckVictims(Passed,Total,Report);
+      CheckClass(Passed,Total,Report);
+      CheckFingerprint(Passed,Total,Report);
+    END;
+
+    LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Kind@1000000003 : Text;
+      HobtId@1000000004 : BigInteger;
+      ObjectId@1000000005 : Integer;
+      DatabaseId@1000000006 : Integer;
+      HeldMode@1000000007 : Text;
+      Ok@1000000008 : Boolean;
+    BEGIN
+      // Строка снята с живого ожидания на стенде 07.09.2026, не придумана.
+      Ok := Parse.ParseWaitResource(SampleKeyLock,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Check(Passed,Total,Report,ChkWaitKeyTxt,
+        Ok AND (Kind = 'keylock') AND (HobtId = SampleHobt) AND (DatabaseId = 7) AND (HeldMode = 'X'),
+        STRSUBSTNO(WaitKeyTxt,Kind,HobtId,DatabaseId,HeldMode,ObjectId));
+    END;
+
+    LOCAL PROCEDURE CheckWaitObject@11(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Kind@1000000003 : Text;
+      HobtId@1000000004 : BigInteger;
+      ObjectId@1000000005 : Integer;
+      DatabaseId@1000000006 : Integer;
+      HeldMode@1000000007 : Text;
+      Ok@1000000008 : Boolean;
+    BEGIN
+      // У блокировки на объект hobt нет вовсе: там objid. Отдать чужое число за hobt
+      // значит разрешить его в постороннюю таблицу - и это будет выглядеть правдоподобно.
+      Ok := Parse.ParseWaitResource(SampleObjectLock,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Check(Passed,Total,Report,ChkWaitObjTxt,
+        Ok AND (Kind = 'objectlock') AND (ObjectId = 1115203073) AND (HobtId = 0),
+        STRSUBSTNO(WaitObjTxt,ObjectId,HobtId));
+    END;
+
+    LOCAL PROCEDURE CheckWaitBoundary@12(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Kind@1000000003 : Text;
+      HobtId@1000000004 : BigInteger;
+      ObjectId@1000000005 : Integer;
+      DatabaseId@1000000006 : Integer;
+      HeldMode@1000000007 : Text;
+    BEGIN
+      // В строке keylock рядом стоят hobtid=, id=lock... и associatedObjectId=.
+      // Поиск подстрокой без границы слова взял бы id= внутри hobtid=, а objid -
+      // из associatedObjectId. Обе подмены беззвучны: числа выглядят настоящими.
+      Parse.ParseWaitResource(CraftedKeyLock,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Check(Passed,Total,Report,ChkWaitBoundTxt,
+        (HobtId = SampleHobt) AND (ObjectId = 0),
+        STRSUBSTNO(WaitBoundTxt,HobtId,ObjectId));
+    END;
+
+    LOCAL PROCEDURE CheckWaitJunk@13(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Kind@1000000003 : Text;
+      HobtId@1000000004 : BigInteger;
+      ObjectId@1000000005 : Integer;
+      DatabaseId@1000000006 : Integer;
+      HeldMode@1000000007 : Text;
+      Ok@1000000008 : Boolean;
+    BEGIN
+      Ok := Parse.ParseWaitResource('something else entirely',Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Check(Passed,Total,Report,ChkWaitJunkTxt,NOT Ok,STRSUBSTNO(WaitJunkTxt,Ok));
+    END;
+
+    LOCAL PROCEDURE CheckHash@14(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Hash@1000000003 : Text;
+      NotHash@1000000004 : Text;
+    BEGIN
+      // dm_tran_locks добивает хэш пробелами до ширины столбца, а страничный ресурс
+      // выглядит как 1:25456 и хэшем не является вовсе.
+      Hash := Parse.TrimLockHash('(92410d4f079d)                    ');
+      NotHash := Parse.TrimLockHash('1:25456   ');
+      Check(Passed,Total,Report,ChkHashTxt,
+        (Hash = '(92410d4f079d)') AND (NotHash = ''),
+        STRSUBSTNO(HashTxt,Hash,NotHash));
+    END;
+
+    LOCAL PROCEDURE CheckSplitPlain@15(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Company@1000000003 : Text;
+      TableName@1000000004 : Text;
+      SiftKeyNo@1000000005 : Integer;
+      Ok@1000000006 : Boolean;
+    BEGIN
+      Ok := Parse.SplitSqlObjectName('CRONUS$Sales Line',Company,TableName,SiftKeyNo);
+      Check(Passed,Total,Report,ChkSplitPlainTxt,
+        Ok AND (Company = 'CRONUS') AND (TableName = 'Sales Line') AND (SiftKeyNo = Parse.UnknownKeyNo),
+        STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
+    END;
+
+    LOCAL PROCEDURE CheckSplitNoCompany@16(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Company@1000000003 : Text;
+      TableName@1000000004 : Text;
+      SiftKeyNo@1000000005 : Integer;
+      Ok@1000000006 : Boolean;
+    BEGIN
+      // Object - штатная таблица с DataPerCompany=No: префикса компании у неё нет.
+      Ok := Parse.SplitSqlObjectName('Object',Company,TableName,SiftKeyNo);
+      Check(Passed,Total,Report,ChkSplitNoCoTxt,
+        Ok AND (Company = '') AND (TableName = 'Object'),
+        STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
+    END;
+
+    LOCAL PROCEDURE CheckSplitSift@17(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Company@1000000003 : Text;
+      TableName@1000000004 : Text;
+      SiftKeyNo@1000000005 : Integer;
+      Ok@1000000006 : Boolean;
+    BEGIN
+      // Самый частый случай блокировок NAV садится не на таблицу, а на её SIFT-агрегат.
+      // Правило "номер ключа из имени индекса" на нём даёт VSIFTIDX, то есть ничего:
+      // номер лежит в имени самого представления, после последнего $VSIFT$.
+      Ok := Parse.SplitSqlObjectName('CRONUS$Sales Line$VSIFT$3',Company,TableName,SiftKeyNo);
+      Check(Passed,Total,Report,ChkSplitSiftTxt,
+        Ok AND (Company = 'CRONUS') AND (TableName = 'Sales Line') AND (SiftKeyNo = 3),
+        STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
+    END;
+
+    LOCAL PROCEDURE CheckSplitPlatform@18(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Company@1000000003 : Text;
+      TableName@1000000004 : Text;
+      SiftKeyNo@1000000005 : Integer;
+      Ok@1000000006 : Boolean;
+    BEGIN
+      // $ndo$dbproperty начинается с $, и наивное правило "до первого $ - компания"
+      // выдало бы безымянную компанию и таблицу ndo$dbproperty. Правдоподобно и неверно.
+      Ok := Parse.SplitSqlObjectName('$ndo$dbproperty',Company,TableName,SiftKeyNo);
+      Check(Passed,Total,Report,ChkSplitNdoTxt,NOT Ok,STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
+    END;
+
+    LOCAL PROCEDURE CheckKeyNo@19(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Clustered@1000000003 : Integer;
+      Secondary@1000000004 : Integer;
+      Sift@1000000005 : Integer;
+    BEGIN
+      Clustered := Parse.KeyNoFromIndexName('CRONUS$Sales Line$0');
+      Secondary := Parse.KeyNoFromIndexName('$13');
+      Sift := Parse.KeyNoFromIndexName('VSIFTIDX');
+      Check(Passed,Total,Report,ChkKeyNoTxt,
+        (Clustered = 0) AND (Secondary = 13) AND (Sift = Parse.UnknownKeyNo),
+        STRSUBSTNO(KeyNoTxt,Clustered,Secondary,Sift));
+    END;
+
+    LOCAL PROCEDURE CheckEpisodeStart@20(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      ObservedAt@1000000003 : DateTime;
+      StartedAt@1000000004 : DateTime;
+      Difference@1000000005 : Duration;
+      Expected@1000000006 : Duration;
+    BEGIN
+      ObservedAt := CREATEDATETIME(DMY2DATE(7,9,2026),TIME);
+      StartedAt := Parse.EpisodeStart(ObservedAt,4500);
+      Difference := ObservedAt - StartedAt;
+      Expected := 4500;
+      Check(Passed,Total,Report,ChkStartTxt,Difference = Expected,STRSUBSTNO(StartTxt,Difference,Expected));
+    END;
+
+    LOCAL PROCEDURE CheckNewEpisode@21(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Backwards@1000000003 : Boolean;
+      Forwards@1000000004 : Boolean;
+    BEGIN
+      Backwards := Parse.IsNewEpisode(9000,120);
+      Forwards := Parse.IsNewEpisode(120,9000);
+      Check(Passed,Total,Report,ChkNewEpTxt,Backwards AND (NOT Forwards),STRSUBSTNO(NewEpTxt,Backwards,Forwards));
+    END;
+
+    LOCAL PROCEDURE CheckOutcome@22(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      AtLimit@1000000003 : Integer;
+      WellShort@1000000004 : Integer;
+      NarrowGap@1000000005 : Integer;
+      Foreign@1000000006 : Integer;
+    BEGIN
+      // Три набора и чужая сессия. Средний случай самый важный: 8 000 мс при периоде
+      // в 3 000 - это НЕ отказ и НЕ успех, а незнание, и подписывать его надо так.
+      AtLimit := Parse.Outcome(10120,3000,TRUE);
+      WellShort := Parse.Outcome(1200,3000,TRUE);
+      NarrowGap := Parse.Outcome(8000,3000,TRUE);
+      Foreign := Parse.Outcome(10527,3000,FALSE);
+      Check(Passed,Total,Report,ChkOutcomeTxt,
+        (AtLimit = Parse.OutcomeTimedOut) AND (WellShort = Parse.OutcomeGranted) AND
+        (NarrowGap = Parse.OutcomeUnknown) AND (Foreign = Parse.OutcomeUnknown),
+        STRSUBSTNO(OutcomeTxt,AtLimit,WellShort,NarrowGap,Foreign));
+    END;
+
+    LOCAL PROCEDURE CheckChain@23(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Waiter@1000000003 : ARRAY [500] OF Integer;
+      Blocker@1000000004 : ARRAY [500] OF Integer;
+      Head@1000000005 : Integer;
+      Depth@1000000006 : Integer;
+      Cycle@1000000007 : Boolean;
+    BEGIN
+      // Цепочка 3 -> 2 -> 1. Непосредственный виновник у сеанса 3 - это 2, но 2 сам
+      // стоит в очереди за 1. Назвать виновным 2 значит назвать виновным пострадавшего.
+      Waiter[1] := 3; Blocker[1] := 2;
+      Waiter[2] := 2; Blocker[2] := 1;
+      Head := Parse.ChainHead(Waiter,Blocker,2,3,Depth,Cycle);
+      Check(Passed,Total,Report,ChkChainTxt,
+        (Head = 1) AND (Depth = 2) AND (NOT Cycle),
+        STRSUBSTNO(ChainTxt,Head,Depth,Cycle));
+    END;
+
+    LOCAL PROCEDURE CheckChainRing@24(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Waiter@1000000003 : ARRAY [500] OF Integer;
+      Blocker@1000000004 : ARRAY [500] OF Integer;
+      Head@1000000005 : Integer;
+      Depth@1000000006 : Integer;
+      Cycle@1000000007 : Boolean;
+    BEGIN
+      // Кольцо 1 -> 2 -> 1. Это взаимоблокировка на подходе либо уже разобранная
+      // сервером. Разматывание обязано оборваться и сказать об этом, а не зациклиться:
+      // фоновая задача, ушедшая в вечный цикл, держит слот планировщика насмерть.
+      Waiter[1] := 1; Blocker[1] := 2;
+      Waiter[2] := 2; Blocker[2] := 1;
+      Head := Parse.ChainHead(Waiter,Blocker,2,1,Depth,Cycle);
+      Check(Passed,Total,Report,ChkCycleTxt,
+        Cycle AND (Depth <= Parse.MaxChainSteps + 1),
+        STRSUBSTNO(CycleTxt,Cycle,Depth));
+    END;
+
+    LOCAL PROCEDURE CheckVictims@25(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Waiter@1000000003 : ARRAY [500] OF Integer;
+      Blocker@1000000004 : ARRAY [500] OF Integer;
+      Behind@1000000005 : Integer;
+    BEGIN
+      // Три ждущих, одна голова. Отчёт, считающий это тремя бедами, отправит чинить три
+      // операции вместо одной.
+      Waiter[1] := 3; Blocker[1] := 2;
+      Waiter[2] := 2; Blocker[2] := 1;
+      Waiter[3] := 4; Blocker[3] := 1;
+      Behind := Parse.VictimsBehindHead(Waiter,Blocker,3,1);
+      Check(Passed,Total,Report,ChkVictimsTxt,Behind = 3,STRSUBSTNO(VictimsTxt,Behind,3));
+    END;
+
+    LOCAL PROCEDURE CheckClass@26(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Escalated@1000000003 : Integer;
+      Sleeping@1000000004 : Integer;
+      UnderThreshold@1000000005 : Integer;
+      Working@1000000006 : Integer;
+    BEGIN
+      Escalated := Parse.EpisodeClass(TRUE,FALSE,60000,2);
+      Sleeping := Parse.EpisodeClass(TRUE,FALSE,60000,0);
+      UnderThreshold := Parse.EpisodeClass(TRUE,FALSE,5000,0);
+      Working := Parse.EpisodeClass(FALSE,TRUE,0,0);
+      Check(Passed,Total,Report,ChkClassTxt,
+        (Escalated = Parse.ClassEscalation) AND (Sleeping = Parse.ClassSleepingTran) AND
+        (UnderThreshold = Parse.ClassPlain) AND (Working = Parse.ClassPlain),
+        STRSUBSTNO(ClassTxt,Escalated,Sleeping,UnderThreshold,Working));
+    END;
+
+    LOCAL PROCEDURE CheckFingerprint@27(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      First@1000000003 : Code[20];
+      Second@1000000004 : Code[20];
+      Other@1000000005 : Code[20];
+      Empty@1000000006 : Code[20];
+    BEGIN
+      // Один и тот же граф придёт при каждом чтении кольцевого буфера, пока не
+      // вытеснится. Без устойчивого отпечатка журнал наполнится копиями одной беды.
+      First := Parse.TextFingerprint(SampleGraph);
+      Second := Parse.TextFingerprint(SampleGraph);
+      Other := Parse.TextFingerprint(SampleGraph + ' ');
+      Empty := Parse.TextFingerprint('');
+      Check(Passed,Total,Report,ChkPrintTxt,
+        (First = Second) AND (First <> '') AND (First <> Other) AND (Empty = ''),
+        STRSUBSTNO(PrintTxt,First,Second,Other,Empty));
+    END;
+
+    LOCAL PROCEDURE Check@50(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text;CheckName@1000000003 : Text;Ok@1000000004 : Boolean;Detail@1000000005 : Text);
+    BEGIN
+      Total := Total + 1;
+      IF Ok THEN BEGIN
+        Passed := Passed + 1;
+        Report := Report + PassedTxt;
+      END ELSE
+        Report := Report + FailedTxt;
+      Report := Report + ' ' + CheckName;
+      IF Detail <> '' THEN
+        Report := Report + ' - ' + Detail;
+      Report := Report + CrLf;
+    END;
+
+    LOCAL PROCEDURE SampleKeyLock@51() : Text;
+    BEGIN
+      // Снято с живого ожидания на стенде 07.09.2026: держатель взял XLOCK на строку,
+      // жертва встала за UPDLOCK, съём шёл с третьего соединения.
+      EXIT('keylock hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=72057594261667840');
+    END;
+
+    LOCAL PROCEDURE SampleHobt@55() : BigInteger;
+    VAR
+      Value@1000000000 : BigInteger;
+    BEGIN
+      // Числовой литерал в C/AL - это Decimal, а он кончается на 999 999 999 999 999,99.
+      // hobt_id в семнадцать знаков через литерал не проходит вовсе: импорт объекта падает
+      // с "Decimal must be in the range of". Большое число входит в код только текстом.
+      EVALUATE(Value,'72057594261667840');
+      EXIT(Value);
+    END;
+
+    LOCAL PROCEDURE CraftedKeyLock@56() : Text;
+    BEGIN
+      // Строка собрана нарочно: hobtid= здесь встречается ВНУТРИ ahobtid=, и наивный
+      // поиск подстрокой вернёт 111 вместо настоящего числа - молча и правдоподобно.
+      // На строке, снятой с натуры, такого столкновения нет, и проверка на ней была бы
+      // пустой: проходила бы и с границей слова, и без неё.
+      EXIT('keylock ahobtid=111 hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=72057594261667840');
+    END;
+
+    LOCAL PROCEDURE SampleObjectLock@52() : Text;
+    BEGIN
+      EXIT('objectlock lockPartition=0 objid=1115203073 subresource=FULL dbid=7 id=lock1870ff96880 mode=X');
+    END;
+
+    LOCAL PROCEDURE SampleGraph@53() : Text;
+    BEGIN
+      EXIT('<deadlock><victim-list><victimProcess id="process1"/></victim-list></deadlock>');
+    END;
+
+    LOCAL PROCEDURE CrLf@54() : Text[2];
+    VAR
+      Cr@1000000000 : Char;
+      Lf@1000000001 : Char;
+    BEGIN
+      Cr := 13;
+      Lf := 10;
+      EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
+    BEGIN
+    {
+      Обкатка разбора. Базы не касается вовсе: всё, что она проверяет, - чистые
+      функции над данными, и потому её можно гонять где угодно и сколько угодно.
+
+      Три правила, по которым она сделана:
+
+      1. Судит сама. Первой строкой "пройдено N из M", и при любом провале выходит
+         ERROR, а не MESSAGE: запуск через Invoke-NAVCodeunit тогда отличает целое от
+         сломанного по коду возврата, а не по чтению глазами.
+
+      2. Каждая проверка непуста. Проверяемое место ломается нарочно, и проверка
+         обязана покраснеть. Проверки, которая проходит всегда, здесь быть не должно.
+
+      3. Данные взяты с натуры, а не выдуманы. Строки описания ресурса сняты с живого
+         ожидания на стенде 07.09.2026, и потому проверяют настоящий формат, а не
+         представление о нём.
+
+      Проверено поломкой 07.09.2026: со снятой границей слова в PairValue прогон даёт
+      17 из 18, и краснеет именно проверка границы - hobt 111 вместо 72057594261667840.
+      На целом коде 18 из 18. Проверять надо ПОСЛЕ перезапуска экземпляра службы: у неё
+      свой кэш объектов, и без перезапуска сломанный разбор тоже даёт 18 из 18.
+
+      Самая ценная из проверок - на границу слова: в описании очереди рядом стоят
+      hobtid=, id=lock... и associatedObjectId=, и разбор простой подстрокой подменит
+      одно другим МОЛЧА, выдав правдоподобные числа. Такое не ловится ни компиляцией,
+      ни глазами - только проверкой.
+    }
+    END.
+  }
+}

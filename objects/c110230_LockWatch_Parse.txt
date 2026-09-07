@@ -1,0 +1,456 @@
+OBJECT Codeunit 110230 LockWatch Parse
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE NavLockTimeoutMs@10() : Integer;
+    BEGIN
+      // Предел ожидания блокировки у NAV. Замерено дважды: жертва умирала на 10 099 и
+      // 10 120 мс со штатным текстом "запись заблокирована другим пользователем".
+      // Это предел ПЛАТФОРМЫ, а не сервера: сессия SQL без него ждёт сколько угодно -
+      // в опыте на стенде спокойно прождала 10 527 мс и продолжала ждать.
+      EXIT(10000);
+    END;
+
+    [External]
+    PROCEDURE IdleInTranMs@11() : Integer;
+    BEGIN
+      // Полминуты без единого оператора внутри открытой транзакции - это уже не работа,
+      // а забытое модальное окно. Число - порог суждения, а не среды: живёт в коде.
+      EXIT(30000);
+    END;
+
+    [External]
+    PROCEDURE MaxWaitersPerPass@12() : Integer;
+    BEGIN
+      // Потолок строк очереди за проход. Совпадает с размерностью массивов цепочки:
+      // больше пятисот ждущих - это уже не разбор, а шторм, и его метят "усечено".
+      EXIT(500);
+    END;
+
+    [External]
+    PROCEDURE MaxChainSteps@13() : Integer;
+    BEGIN
+      // Обрыв разматывания цепочки. Настоящая цепочка блокировок в NAV - единицы звеньев;
+      // сотня означает кольцо, а не длинную очередь, и крутиться в нём нельзя.
+      EXIT(100);
+    END;
+
+    [External]
+    PROCEDURE UnknownKeyNo@14() : Integer;
+    BEGIN
+      // "Номер ключа не опознан". Строку с ним НЕ выбрасывать: показывать сырым именем
+      // и считать счётчиком. Молчаливый пропуск - это и есть ложь.
+      EXIT(-1);
+    END;
+
+    [External]
+    PROCEDURE OutcomeUnknown@15() : Integer;
+    BEGIN
+      EXIT(0);
+    END;
+
+    [External]
+    PROCEDURE OutcomeGranted@16() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE OutcomeTimedOut@17() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    [External]
+    PROCEDURE ClassPlain@18() : Integer;
+    BEGIN
+      EXIT(0);
+    END;
+
+    [External]
+    PROCEDURE ClassEscalation@19() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE ClassSleepingTran@20() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    [External]
+    PROCEDURE ClassDeadlock@21() : Integer;
+    BEGIN
+      EXIT(3);
+    END;
+
+    [External]
+    PROCEDURE ParseWaitResource@1(ResourceText@1000 : Text;VAR Kind@1001 : Text;VAR HobtId@1002 : BigInteger;VAR ObjectId@1003 : Integer;VAR DatabaseId@1004 : Integer;VAR HeldMode@1005 : Text) : Boolean;
+    VAR
+      Trimmed@1006 : Text;
+      SpacePos@1007 : Integer;
+    BEGIN
+      // Описание ресурса в очереди ожиданий - это род и пары имя=значение:
+      //   keylock hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=...
+      //   objectlock lockPartition=0 objid=1115203073 subresource=FULL dbid=7 id=... mode=X
+      // Хэша ключа здесь НЕТ вовсе - он живёт только в dm_tran_locks. Значит дешёвый
+      // опрос очереди отвечает "какая таблица и какой ключ", но не "какая запись".
+      // mode здесь - режим ДЕРЖИМОЙ блокировки, а wait_type говорит, чего хочет жертва.
+      Kind := '';
+      CLEAR(HobtId);
+      ObjectId := 0;
+      DatabaseId := 0;
+      HeldMode := '';
+
+      Trimmed := DELCHR(ResourceText,'<>',' ');
+      IF Trimmed = '' THEN
+        EXIT(FALSE);
+
+      SpacePos := STRPOS(Trimmed,' ');
+      IF SpacePos = 0 THEN
+        Kind := LOWERCASE(Trimmed)
+      ELSE
+        Kind := LOWERCASE(COPYSTR(Trimmed,1,SpacePos - 1));
+
+      IF NOT EVALUATE(HobtId,PairValue(Trimmed,'hobtid')) THEN
+        CLEAR(HobtId);
+      IF NOT EVALUATE(ObjectId,PairValue(Trimmed,'objid')) THEN
+        ObjectId := 0;
+      IF NOT EVALUATE(DatabaseId,PairValue(Trimmed,'dbid')) THEN
+        DatabaseId := 0;
+      HeldMode := UPPERCASE(PairValue(Trimmed,'mode'));
+
+      EXIT((Kind <> '') AND (DatabaseId > 0));
+    END;
+
+    [External]
+    PROCEDURE TrimLockHash@2(ResourceDescription@1000 : Text) : Text;
+    VAR
+      Value@1001 : Text;
+    BEGIN
+      // dm_tran_locks отдаёт хэш ключа добитым пробелами до ширины столбца DMV.
+      // Сравнение с параметром это переживает - SQL игнорирует хвостовые пробелы, -
+      // а склейка хэша в текст запроса не переживает и молча не находит ничего.
+      Value := DELCHR(ResourceDescription,'<>',' ');
+      IF STRLEN(Value) < 3 THEN
+        EXIT('');
+      IF (COPYSTR(Value,1,1) <> '(') OR (COPYSTR(Value,STRLEN(Value),1) <> ')') THEN
+        EXIT('');
+      EXIT(Value);
+    END;
+
+    [External]
+    PROCEDURE SplitSqlObjectName@3(SqlName@1000 : Text;VAR CompanyName@1001 : Text;VAR TableName@1002 : Text;VAR SiftKeyNo@1003 : Integer) : Boolean;
+    VAR
+      Value@1004 : Text;
+      Marker@1005 : Text;
+      Pos@1006 : Integer;
+      Suffix@1007 : Text;
+    BEGIN
+      // Правил разбора два, а не одно, и одно правило теряет самый частый случай молча.
+      // У таблицы номер ключа NAV - суффикс имени ИНДЕКСА (см. KeyNoFromIndexName).
+      // У SIFT-представления индекс у всех один и тот же, VSIFTIDX, и номера не несёт:
+      // номер там - число после ПОСЛЕДНЕГО $VSIFT$ в имени самого объекта.
+      CompanyName := '';
+      TableName := '';
+      SiftKeyNo := UnknownKeyNo;
+
+      Value := DELCHR(SqlName,'<>',' ');
+      IF Value = '' THEN
+        EXIT(FALSE);
+
+      Marker := '$VSIFT$';
+      Pos := LastPos(UPPERCASE(Value),Marker);
+      IF Pos > 0 THEN BEGIN
+        Suffix := COPYSTR(Value,Pos + STRLEN(Marker));
+        IF NOT IsAllDigits(Suffix) THEN
+          EXIT(FALSE);
+        EVALUATE(SiftKeyNo,Suffix);
+        Value := COPYSTR(Value,1,Pos - 1);
+      END;
+
+      // Платформенные $ndo$* пользовательскими таблицами не являются: их 19 на базу,
+      // и разбирать в них нечего. Отдать их как таблицу компании "" было бы враньём.
+      IF COPYSTR(LOWERCASE(Value),1,5) = '$ndo$' THEN
+        EXIT(FALSE);
+
+      Pos := STRPOS(Value,'$');
+      IF Pos = 0 THEN
+        // У таблиц с DataPerCompany=No префикса компании нет вовсе - это не ошибка.
+        TableName := Value
+      ELSE BEGIN
+        CompanyName := COPYSTR(Value,1,Pos - 1);
+        TableName := COPYSTR(Value,Pos + 1);
+      END;
+
+      EXIT(TableName <> '');
+    END;
+
+    [External]
+    PROCEDURE KeyNoFromIndexName@4(IndexName@1000 : Text) : Integer;
+    VAR
+      Value@1001 : Text;
+      Pos@1002 : Integer;
+      Suffix@1003 : Text;
+      KeyNo@1004 : Integer;
+    BEGIN
+      // Кластерный индекс зовётся <Компания>$<Таблица>$0, вторичные - просто $1, $5, $13.
+      // Номера НЕ сплошные: у выключенного ключа индекса в SQL нет вовсе, и дыры в
+      // нумерации - норма, а не признак поломки. index_id и номер ключа NAV - разные вещи.
+      Value := DELCHR(IndexName,'<>',' ');
+      Pos := LastPos(Value,'$');
+      IF Pos = 0 THEN
+        EXIT(UnknownKeyNo);
+      Suffix := COPYSTR(Value,Pos + 1);
+      IF NOT IsAllDigits(Suffix) THEN
+        EXIT(UnknownKeyNo);
+      EVALUATE(KeyNo,Suffix);
+      EXIT(KeyNo);
+    END;
+
+    [External]
+    PROCEDURE EpisodeStart@5(ObservedAt@1000 : DateTime;WaitDurationMs@1001 : Integer) : DateTime;
+    VAR
+      Waited@1002 : Duration;
+    BEGIN
+      // Длительность из DMV точна, а период опроса плавает: сам проход в шторм стоит
+      // миллисекунды. Считать начало по своим часам значит внести погрешность периода
+      // в цифру, которую потом покажут заказчику. Считаем назад от момента наблюдения,
+      // а сам момент берётся SYSDATETIME() тем же запросом - часами SQL, не NAV.
+      IF WaitDurationMs <= 0 THEN
+        EXIT(ObservedAt);
+      Waited := WaitDurationMs;
+      EXIT(ObservedAt - Waited);
+    END;
+
+    [External]
+    PROCEDURE IsNewEpisode@6(PrevDurationMs@1000 : Integer;NewDurationMs@1001 : Integer) : Boolean;
+    BEGIN
+      // Жертва может дождаться и тут же встать снова на тот же ресурс: сессия та же,
+      // транзакция та же, ресурс тот же - по ключу это один эпизод, а на деле второй.
+      // Единственный видимый признак - счётчик ожидания пошёл назад.
+      EXIT(NewDurationMs < PrevDurationMs);
+    END;
+
+    [External]
+    PROCEDURE Outcome@7(LastDurationMs@1000 : Integer;PeriodMs@1001 : Integer;SessionIsNav@1002 : Boolean) : Integer;
+    BEGIN
+      // Жертва исчезла из очереди - и дождавшаяся, и отвалившаяся исчезают одинаково.
+      // Твёрдо судить можно только в двух случаях из трёх:
+      //   наблюдали на пределе и дальше - отказ,
+      //   до предела не хватило целого периода - дождался,
+      //   зазор меньше периода - не определён, и врать про это нельзя.
+      // Чужой сессии исход не приписываем вовсе: предел 10 000 мс - предел NAV,
+      // внешнее подключение и задание обслуживания ждут сколько угодно.
+      IF NOT SessionIsNav THEN
+        EXIT(OutcomeUnknown);
+      IF (LastDurationMs <= 0) OR (PeriodMs < 0) THEN
+        EXIT(OutcomeUnknown);
+      IF LastDurationMs >= NavLockTimeoutMs THEN
+        EXIT(OutcomeTimedOut);
+      IF LastDurationMs + PeriodMs < NavLockTimeoutMs THEN
+        EXIT(OutcomeGranted);
+      EXIT(OutcomeUnknown);
+    END;
+
+    [External]
+    PROCEDURE ChainHead@8(VAR Waiter@1000 : ARRAY [500] OF Integer;VAR Blocker@1001 : ARRAY [500] OF Integer;Count@1002 : Integer;StartSession@1003 : Integer;VAR Depth@1004 : Integer;VAR Cycle@1005 : Boolean) : Integer;
+    VAR
+      Current@1006 : Integer;
+      Next@1007 : Integer;
+      Index@1008 : Integer;
+      Steps@1009 : Integer;
+    BEGIN
+      // Очередь называет НЕПОСРЕДСТВЕННОГО блокирующего. В цепочке A -> B -> C у C
+      // непосредственный виновник - B, который сам стоит за A. Написать в журнал B
+      // значит назвать виновным пострадавшего, и назвать правдоподобно: он ведь и
+      // правда держит то, чего ждёт C. По такому журналу чинят не то.
+      // Голова - сессия, которой самой нет среди ждущих. Разматывается по уже
+      // прочитанным строкам прохода: ни одного лишнего запроса к серверу.
+      Depth := 0;
+      Cycle := FALSE;
+      Current := StartSession;
+      IF (Count <= 0) OR (Count > MaxWaitersPerPass) THEN
+        EXIT(Current);
+
+      Steps := 0;
+      REPEAT
+        Next := 0;
+        FOR Index := 1 TO Count DO
+          IF (Next = 0) AND (Waiter[Index] = Current) THEN
+            Next := Blocker[Index];
+        IF Next <> 0 THEN BEGIN
+          Current := Next;
+          Depth := Depth + 1;
+          Steps := Steps + 1;
+          // Кольцо (A ждёт B, B ждёт A) - это взаимоблокировка на подходе либо уже
+          // разобранная сервером. Обрываем: и по возврату в начало, и по потолку шагов,
+          // потому что начало может вести В кольцо, не входя в него само.
+          IF (Current = StartSession) OR (Steps > MaxChainSteps) THEN BEGIN
+            Cycle := TRUE;
+            Next := 0;
+          END;
+        END;
+      UNTIL Next = 0;
+      EXIT(Current);
+    END;
+
+    [External]
+    PROCEDURE VictimsBehindHead@9(VAR Waiter@1000 : ARRAY [500] OF Integer;VAR Blocker@1001 : ARRAY [500] OF Integer;Count@1002 : Integer;Head@1003 : Integer) : Integer;
+    VAR
+      Index@1004 : Integer;
+      Depth@1005 : Integer;
+      Cycle@1006 : Boolean;
+      Behind@1007 : Integer;
+    BEGIN
+      // Одна голова с сорока жертвами - это не сорок бед, а одна. Это число и есть
+      // честный ответ на "кто пострадал", и по нему решают, что чинить первым.
+      IF (Count <= 0) OR (Count > MaxWaitersPerPass) THEN
+        EXIT(0);
+      FOR Index := 1 TO Count DO
+        IF ChainHead(Waiter,Blocker,Count,Waiter[Index],Depth,Cycle) = Head THEN
+          Behind := Behind + 1;
+      EXIT(Behind);
+    END;
+
+    [External]
+    PROCEDURE EpisodeClass@22(CulpritIsSleeping@1000 : Boolean;CulpritHasRequest@1001 : Boolean;CulpritIdleMs@1002 : Integer;EscalationsInWindow@1003 : Integer) : Integer;
+    BEGIN
+      // Классы лечатся по-разному, поэтому и подписываются отдельно:
+      //   эскалация - размером пачки, а не индексом,
+      //   забытая транзакция - звонком, а не правкой кода,
+      //   обычный спор за строку - кодом или ключом.
+      // Эскалация старше сна: она останавливает всех разом, и она же чаще причина,
+      // а не следствие. Взаимоблокировку сюда не выводим - её называет разбор графа.
+      IF EscalationsInWindow > 0 THEN
+        EXIT(ClassEscalation);
+      IF CulpritIsSleeping AND (NOT CulpritHasRequest) AND (CulpritIdleMs >= IdleInTranMs) THEN
+        EXIT(ClassSleepingTran);
+      EXIT(ClassPlain);
+    END;
+
+    [External]
+    PROCEDURE TextFingerprint@23(Value@1000 : Text) : Code[20];
+    VAR
+      Hash@1001 : BigInteger;
+      Index@1002 : Integer;
+      CharCode@1003 : Integer;
+      Length@1004 : Integer;
+    BEGIN
+      // Один и тот же граф взаимоблокировки виден при КАЖДОМ чтении кольцевого буфера,
+      // пока не вытеснится. Дедупликация идёт по времени события плюс этому отпечатку,
+      // а не по месту в буфере: место меняется при каждом чтении, граф - нет.
+      Length := STRLEN(Value);
+      IF Length = 0 THEN
+        EXIT('');
+      Hash := 0;
+      FOR Index := 1 TO Length DO BEGIN
+        CharCode := Value[Index];
+        Hash := (Hash * FingerprintFactor + CharCode) MOD FingerprintModulus;
+      END;
+      EXIT(FORMAT(Hash));
+    END;
+
+    LOCAL PROCEDURE FingerprintFactor@24() : Integer;
+    BEGIN
+      // Нечётный множитель полиномиального свёртывания. 131 - простое, взаимно простое
+      // с модулем; конкретное значение неважно, важно, что оно НЕ МЕНЯЕТСЯ никогда:
+      // отпечатки лежат в базе, и смена множителя развалит дедупликацию задним числом.
+      EXIT(131);
+    END;
+
+    LOCAL PROCEDURE FingerprintModulus@25() : Integer;
+    BEGIN
+      // Простое число Мерсенна 2^31-1: наибольшее, что помещается в Integer C/AL,
+      // поэтому промежуточное произведение считается в BigInteger, а результат - нет.
+      EXIT(2147483647);
+    END;
+
+    LOCAL PROCEDURE PairValue@26(Source@1000 : Text;Name@1001 : Text) : Text;
+    VAR
+      Padded@1002 : Text;
+      Needle@1003 : Text;
+      Pos@1004 : Integer;
+      Tail@1005 : Text;
+      SpacePos@1006 : Integer;
+    BEGIN
+      // Имя ищется только на ГРАНИЦЕ слова. В описании очереди рядом живут id=lock...
+      // и associatedObjectId=..., и поиск простой подстрокой возьмёт не то: "id=" нашлось
+      // бы внутри "hobtid=". Отсюда ведущий пробел в игле и в стоге.
+      Padded := ' ' + LOWERCASE(Source);
+      Needle := ' ' + LOWERCASE(Name) + '=';
+      Pos := STRPOS(Padded,Needle);
+      IF Pos = 0 THEN
+        EXIT('');
+      Tail := COPYSTR(Source,Pos + STRLEN(Needle) - 1);
+      SpacePos := STRPOS(Tail,' ');
+      IF SpacePos > 0 THEN
+        Tail := COPYSTR(Tail,1,SpacePos - 1);
+      EXIT(Tail);
+    END;
+
+    LOCAL PROCEDURE LastPos@27(Source@1000 : Text;Sub@1001 : Text) : Integer;
+    VAR
+      Found@1002 : Integer;
+      Cursor@1003 : Integer;
+      Step@1004 : Integer;
+    BEGIN
+      // В C/AL нет поиска с конца: идём вперёд и запоминаем последнее совпадение.
+      // Именно последнее: имя SIFT-представления может нести $VSIFT$ не один раз.
+      IF (Source = '') OR (Sub = '') THEN
+        EXIT(0);
+      Found := 0;
+      Cursor := 1;
+      REPEAT
+        Step := STRPOS(COPYSTR(Source,Cursor),Sub);
+        IF Step > 0 THEN BEGIN
+          Found := Cursor + Step - 1;
+          Cursor := Found + 1;
+        END;
+      UNTIL (Step = 0) OR (Cursor > STRLEN(Source));
+      EXIT(Found);
+    END;
+
+    LOCAL PROCEDURE IsAllDigits@28(Value@1000 : Text) : Boolean;
+    BEGIN
+      IF Value = '' THEN
+        EXIT(FALSE);
+      EXIT(DELCHR(Value,'=','0123456789') = '');
+    END;
+
+    BEGIN
+    {
+      Разбор того, что отдают DMV, и счёт эпизода. Ни одного обращения к базе: всё
+      здесь - чистые функции над данными, и потому проверяются прогоном без стенда
+      (Codeunit 110231). Обращения к SQL живут отдельно.
+
+      Два места, где легко ошибиться молча, и оба стоили опыта на стенде:
+
+      1. Описаний ресурса ДВА. В dm_os_waiting_tasks это "keylock hobtid=... dbid=...
+         mode=X ...", и хэша ключа там нет вовсе. В dm_tran_locks - только хэш "(...)",
+         а hobt лежит отдельным столбцом. Путать их значит искать запись там, где её
+         не называют.
+
+      2. Хэш считается ПО КОНКРЕТНОМУ ИНДЕКСУ. Одна и та же строка даёт разный хэш на
+         кластерном и на вторичном индексе, а поиск по чужому хэшу возвращает пустой
+         набор и никакой ошибки. Ветвление по index_id из hobt_id обязательно.
+
+      Числа с именами собраны наверху отдельными функциями: у каждого рядом довод,
+      откуда оно взялось. В настройке им не место - от среды они не зависят.
+    }
+    END.
+  }
+}
