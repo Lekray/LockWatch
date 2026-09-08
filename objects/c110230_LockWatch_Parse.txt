@@ -29,6 +29,7 @@ OBJECT Codeunit 110230 LockWatch Parse
       EvQueueTxt@1000000015 : TextConst 'ENU=%1 victims behind one head;RUS=жертв за одной головой %1';
       EvTimedOutTxt@1000000016 : TextConst 'ENU=refused on the limit, %1 ms;RUS=отказ по пределу, %1 мс';
       EvLongWaitTxt@1000000017 : TextConst 'ENU=%1 ms against the threshold of %2 ms;RUS=%1 мс при пороге %2 мс';
+      CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено LockWatch, весь оператор %1 знаков, оставлено %2';
 
     [External]
     PROCEDURE NavLockTimeoutMs@10() : Integer;
@@ -631,6 +632,59 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
+    [External]
+    PROCEDURE MaxStatementChars@56() : Integer;
+    BEGIN
+      // Шестнадцать тысяч знаков - это около двухсот строк, и узнать по ним запрос можно с
+      // большим запасом: опознаётся он началом, а не хвостом. Всё, что длиннее, у NAV
+      // обычно список значений в IN, и он повторяет сам себя.
+      //
+      // Потолок нужен не ради экрана, а ради базы: текст пишется на КАЖДЫЙ открытый
+      // эпизод, а в шторм их сотня за проход. Без потолка один запрос с длинным списком
+      // раздул бы журнал сильнее, чем весь остальной журнал.
+      EXIT(16000);
+    END;
+
+    [External]
+    PROCEDURE StatementWithMark@57(Body@1000000000 : Text;FullLength@1000000001 : Integer) : Text;
+    BEGIN
+      // Усечение обязано быть видно ТОМУ, КТО ЧИТАЕТ, а не только тому, кто писал код.
+      // Обрезанный текст без отметки выглядит как целый запрос, и человек ищет ошибку в
+      // том, чего в нём просто нет. Отметка идёт комментарием SQL нарочно: текст из
+      // журнала копируют в studio и запускают, и отметка не должна ломать запуск.
+      IF Body = '' THEN
+        EXIT('');
+      IF FullLength <= STRLEN(Body) THEN
+        EXIT(Body);
+      EXIT(Body + CrLf + STRSUBSTNO(CutTxt,FullLength,STRLEN(Body)));
+    END;
+
+    [External]
+    PROCEDURE Flatten@59(Body@1000000000 : Text) : Text;
+    VAR
+      Cr@1000000001 : Char;
+      Lf@1000000002 : Char;
+      Tab@1000000003 : Char;
+    BEGIN
+      // Для колонки в списке текст обязан быть ОДНОЙ строкой. Многострочный запрос в
+      // Text250 обрезается на первом же переводе строки визуально: колонка показывает
+      // "SELECT" и ничего больше, и выглядит это как будто запрос такой и есть.
+      Cr := 13;
+      Lf := 10;
+      Tab := 9;
+      EXIT(CONVERTSTR(Body,FORMAT(Cr) + FORMAT(Lf) + FORMAT(Tab),'   '));
+    END;
+
+    LOCAL PROCEDURE CrLf@58() : Text[2];
+    VAR
+      Cr@1000000000 : Char;
+      Lf@1000000001 : Char;
+    BEGIN
+      Cr := 13;
+      Lf := 10;
+      EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
     PROCEDURE MaxCoverageRows@53() : Integer;
     BEGIN
       // Потолок строк накопительного слоя за проход. Берутся САМЫЕ ЖДУЩИЕ - запрос

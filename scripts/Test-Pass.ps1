@@ -143,7 +143,10 @@ try {
     # прогона, хоть от чужой работы на той же базе. Строка в журнале получилась бы законной,
     # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
     # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'', [Deadlocks Enabled] = 0;" | Out-Null
+    # Текст запроса снимается только при включённом признаке, и признак этот по умолчанию
+    # выключен: в операторе едут ЗНАЧЕНИЯ, а это решение заказчика, а не наше умолчание.
+    # Прогон включает его сам и возвращает как было.
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'', [Deadlocks Enabled] = 0, [Collect Statement Values] = 1;" | Out-Null
     # Накопительный слой, наоборот, чистится и остаётся ВКЛЮЧЁННЫМ: без чистки проверка
     # прошла бы на строках прошлого прогона, то есть не проверяла бы ничего.
     Invoke-Sql "DELETE FROM $coverage; UPDATE $setup SET [Coverage Enabled] = 1, [Coverage Since] = $blankDate;" | Out-Null
@@ -240,6 +243,41 @@ FROM $episode ORDER BY [Entry No_] DESC;
     Check 'цепочка размотана до головы' ((([int]$f[1]) -eq $blockerSpid) -and ($f[3] -eq '1') -and ($f[4] -eq '1')) `
         "голова $($f[1]), глубина $($f[3]), жертв за головой $($f[4])"
     Check 'чужая сессия названа чужой' ($f[10] -eq '2') "признак сессии NAV $($f[10]) при ожидаемом 2 (нет)"
+
+    # Текст запроса. Проверка СОСТЯЗАТЕЛЬНАЯ: виновник пишет в строку HELD, жертва - WANT,
+    # и перепутанные местами колонки провалят обе проверки разом. Проверка "текст непустой"
+    # прошла бы и на тексте не того сеанса, а чужой запрос выглядит так же убедительно,
+    # как свой, и опровергнуть его читателю нечем.
+    $st = Scalar @"
+SELECT TOP 1
+  CONVERT(varchar(11),ISNULL(DATALENGTH([Blocker Statement Text]),0)) + '|' +
+  CONVERT(varchar(11),ISNULL(DATALENGTH([Victim Statement]),0)) + '|' +
+  CONVERT(varchar(11),CASE WHEN CAST(CAST([Blocker Statement Text] AS varbinary(max)) AS varchar(max)) LIKE '%HELD%' THEN 1 ELSE 0 END) + '|' +
+  CONVERT(varchar(11),CASE WHEN CAST(CAST([Blocker Statement Text] AS varbinary(max)) AS varchar(max)) LIKE '%WANT%' THEN 1 ELSE 0 END) + '|' +
+  CONVERT(varchar(11),CASE WHEN CAST(CAST([Victim Statement] AS varbinary(max)) AS varchar(max)) LIKE '%UPDATE%' THEN 1 ELSE 0 END) + '|' +
+  CONVERT(varchar(11),CASE WHEN CAST(CAST([Victim Statement] AS varbinary(max)) AS varchar(max)) LIKE '%WAITFOR%' THEN 1 ELSE 0 END) + '|' +
+  LEFT([Blocker Statement],40)
+FROM $episode ORDER BY [Entry No_] DESC;
+"@
+    $q = ($st -split '\|') | ForEach-Object { $_.Trim() }
+    if ($q.Count -lt 7) { Fail "строка о запросах пришла неполной: $($q.Count) колонок" }
+
+    Check 'запрос виновника лёг в журнал, и это ЕГО запрос' `
+        (($q[2] -eq '1') -and ($q[3] -eq '0') -and ([int]$q[0] -gt 0)) `
+        "байтов $($q[0]), HELD внутри $($q[2]), WANT внутри $($q[3])"
+    # У жертвы значения искать бессмысленно, и это не мелочь, а свойство дороги: её запрос
+    # берётся из КЭША ПЛАНОВ и приходит параметризованным - "set [Document No_] = @1".
+    # Виновников берётся из его соединения сырым батчем, со всеми литералами. Поэтому
+    # состязательность здесь другая: у жертвы обязан быть UPDATE и не быть WAITFOR, который
+    # есть только в батче виновника.
+    Check 'запрос жертвы лёг в журнал, и это ЕЁ запрос' `
+        (($q[4] -eq '1') -and ($q[5] -eq '0') -and ([int]$q[1] -gt 0)) `
+        "байтов $($q[1]), UPDATE внутри $($q[4]), WAITFOR внутри $($q[5])"
+    # Колонка списка обязана что-то показывать: иначе за каждым запросом придётся лезть
+    # в отдельное окно, а список перестаёт отвечать на вопрос "чем они все заняты".
+    Check 'начало запроса видно в списке, одной строкой' `
+        (($q[6] -ne '') -and ($q[6] -notmatch "[`r`n]")) `
+        "в колонке [$($q[6])]"
     Check 'эпизод открыт и длительность растёт' (($f[11] -eq '1') -and (([int]$f[12]) -gt 0)) `
         "открыт $($f[11]), длительность $($f[12]) мс"
 
@@ -328,7 +366,7 @@ finally {
     # упал бы с виду беспричинно. Оставить его можно нарочно, ключом -KeepJournal.
     # Признак возвращается в исходное - таким он заводится при создании настройки.
     $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $context WHERE [Table No_] = 110233;"
-    $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = 1;"
+    $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = 1, [Collect Statement Values] = 0;"
     $cleanup += " DELETE FROM $coverage; UPDATE $setup SET [Coverage Since] = $blankDate;"
     # Настройка тревоги возвращается в исходное: порог и канал - то, чем инструмент
     # заводится, и оставлять их сдвинутыми после прогона нельзя.

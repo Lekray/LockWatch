@@ -72,7 +72,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       Setup.FetchOnce;
       StartedAt := CURRENTDATETIME;
 
-      IF NOT Sql.ReadQueue(Setup."Max Rows per Pass",Observed,Waiter,Blocker,BlockerIsNav,
+      IF NOT Sql.ReadQueue(Setup."Max Rows per Pass",Setup."Collect Statement Values",
+                           Observed,Waiter,Blocker,BlockerIsNav,
                            RowCount,ObservedAt,OtherDatabase)
       THEN BEGIN
         // Отказ съёма журнал НЕ трогает. Закрыть эпизоды моментом, которого мы не знаем,

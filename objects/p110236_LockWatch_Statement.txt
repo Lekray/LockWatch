@@ -1,0 +1,76 @@
+OBJECT Page 110236 LockWatch Statement
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Statement;
+               RUS=Запрос];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    Editable=No;
+    PageType=Card;
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Statement;
+                CaptionML=[ENU=Statement;
+                           RUS=Запрос];
+                GroupType=Group }
+
+    { 3   ;2   ;Field     ;
+                Name=Whose;
+                CaptionML=[ENU=Whose statement;
+                           RUS=Чей запрос];
+                ToolTipML=[ENU=Specifies whose statement is shown - the victim that waits, or the culprit that holds the lock.;
+                           RUS=Определяет, чей запрос показан - жертвы, которая ждёт, или виновника, который держит блокировку.];
+                ApplicationArea=#All;
+                SourceExpr=Whose }
+
+    { 4   ;2   ;Field     ;
+                Name=Body;
+                CaptionML=[ENU=Text;
+                           RUS=Текст];
+                ToolTipML=[ENU=Specifies the statement as the server remembers it. It is written into the journal once, when the episode opens, and is not rewritten afterwards - the culprit manages to send another statement within seconds, and that one would no longer be the statement that took the lock.;
+                           RUS=Определяет запрос в том виде, в каком его помнит сервер. Записывается он в журнал один раз, при открытии эпизода, и потом не переписывается - виновник за секунды успевает послать другой оператор, и тот был бы уже не тем, который взял блокировку.];
+                ApplicationArea=#All;
+                MultiLine=Yes;
+                SourceExpr=Body }
+
+  }
+  CODE
+  {
+    VAR
+      Whose@1000000000 : Text[100];
+      Body@1000000001 : Text;
+
+    [External]
+    PROCEDURE SetStatement@1(NewWhose@1000000000 : Text;NewBody@1000000001 : Text);
+    BEGIN
+      // Страница показывает то, что ей дали, и сама в журнал не ходит. Довод простой: тот,
+      // кто её открывает, уже знает, чей запрос он просит, а страница, решающая это сама,
+      // однажды покажет запрос не того - и отличить это будет нечем.
+      Whose := COPYSTR(NewWhose,1,MAXSTRLEN(Whose));
+      Body := NewBody;
+    END;
+
+    BEGIN
+    {
+      Чтение запроса, который лежит в журнале блобом.
+
+      Отдельный экран, а не окно сообщения: MESSAGE обрезает длинный текст и не даёт его
+      выделить, а запрос из журнала обычно копируют - в studio, в письмо, в задачу.
+    }
+    END.
+  }
+}

@@ -115,6 +115,14 @@ OBJECT Table 110231 LockWatch Episode
                                                               RUS=Номер объекта NAV] }
     { 72  ;   ;Blocker AL Scope    ;Text250       ;CaptionML=[ENU=Where the culprit runs now;
                                                               RUS=Где виновник исполняется сейчас] }
+    { 73  ;   ;Victim Statement    ;BLOB          ;CaptionML=[ENU=Victim Statement;
+                                                              RUS=Запрос жертвы];
+                                                   SubType=Memo;
+                                                   Compressed=No }
+    { 74  ;   ;Blocker Statement Text;BLOB         ;CaptionML=[ENU=Blocker Statement in full;
+                                                              RUS=Запрос виновника целиком];
+                                                   SubType=Memo;
+                                                   Compressed=No }
     { 80  ;   ;Advice              ;Text250       ;CaptionML=[ENU=Advice;
                                                               RUS=Совет] }
     { 81  ;   ;Advice Evidence     ;Text250       ;CaptionML=[ENU=Advice Evidence;
@@ -137,6 +145,17 @@ OBJECT Table 110231 LockWatch Episode
 
     BEGIN
     {
+      Текст запроса лежит НЕСЖАТЫМ, и это решение, а не умолчание.
+
+      Сжатый блоб читается только через NAV: ни прогон, ни администратор базы, ни любая
+      сторонняя выборка не достанут из него ни строчки. Проверка, которая не может
+      прочитать то, что проверяет, доказывает не запись текста, а лишь наличие байтов.
+      Несжатый читается откуда угодно - CAST в varchar, - и текст запроса перестаёт быть
+      заложником одного экрана.
+
+      Цена невелика: оператор усечён потолком в разборе, и хранится он не на каждый проход,
+      а на каждый ОТКРЫТЫЙ эпизод, один раз.
+
       Эпизод - непрерывное ожидание ОДНОЙ жертвы на ОДНОМ ресурсе, одной строкой,
       которая обновляется, а не плодится снимками. В шторм это единственное, что
       удерживает NAV-половину прохода в разумной цене.

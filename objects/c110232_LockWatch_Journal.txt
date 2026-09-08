@@ -174,7 +174,82 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.Open := FALSE;
       ApplyAdvice(Journal);
       Journal.INSERT;
+      CopyStatements(Row,Journal);
       EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CopyStatements@17(VAR From@1000000000 : Record 110231;VAR Into@1000000001 : Record 110231);
+    VAR
+      InStr@1000000002 : InStream;
+      OutStr@1000000003 : OutStream;
+      Body@1000000004 : BigText;
+      Line@1000000006 : Text;
+      Touched@1000000005 : Boolean;
+    BEGIN
+      // Текст запроса переносится ОДИН раз, при открытии эпизода, и дальше не трогается.
+      // Довод не в экономии: строка эпизода обновляется каждым проходом, и переписывать
+      // текст заново значило бы менять его под читателем. Виновник за три секунды успевает
+      // послать другой оператор, и в журнале оказался бы не тот, который взял блокировку.
+      //
+      // CALCFIELDS у источника не зовётся нарочно: источник - ВРЕМЕННАЯ запись, значение
+      // у неё уже в памяти, и считать там нечего.
+      // CALCFIELDS обязателен ДАЖЕ на временной записи, и это ровно наоборот тому, чего
+      // ждёшь: у временной таблицы значения и так в памяти. Без него HASVALUE отвечает
+      // "нет" при полностью заполненном источнике, текст молча не переносится, а на экране
+      // это выглядит как "запрос не сняли". Измерено на себе 08.09.2026.
+      From.CALCFIELDS("Victim Statement","Blocker Statement Text");
+      IF From."Victim Statement".HASVALUE THEN BEGIN
+        From."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+        Body.READ(InStr);
+        Body.GETSUBTEXT(Line,1,Body.LENGTH);
+        IF Line <> '' THEN BEGIN
+          Into."Victim Statement".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+          OutStr.WRITETEXT(Line);
+          Touched := TRUE;
+        END;
+      END;
+      IF From."Blocker Statement Text".HASVALUE THEN BEGIN
+        CLEAR(Body);
+        Line := '';
+        From."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+        Body.READ(InStr);
+        Body.GETSUBTEXT(Line,1,Body.LENGTH);
+        IF Line <> '' THEN BEGIN
+          Into."Blocker Statement Text".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+          OutStr.WRITETEXT(Line);
+          Touched := TRUE;
+        END;
+      END;
+      // Лишний MODIFY там, где текста нет вовсе, - это цена ВЫКЛЮЧЕННОГО выключателя, а
+      // выключенное платить не должно.
+      IF Touched THEN
+        Into.MODIFY;
+    END;
+
+    [External]
+    PROCEDURE StatementText@18(EntryNo@1000000000 : Integer;Blocker@1000000001 : Boolean) : Text;
+    VAR
+      Row@1000000002 : Record 110231;
+      InStr@1000000003 : InStream;
+      Body@1000000004 : BigText;
+      Result@1000000005 : Text;
+    BEGIN
+      IF NOT Row.GET(EntryNo) THEN
+        EXIT('');
+      IF Blocker THEN BEGIN
+        Row.CALCFIELDS("Blocker Statement Text");
+        IF NOT Row."Blocker Statement Text".HASVALUE THEN
+          EXIT('');
+        Row."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END ELSE BEGIN
+        Row.CALCFIELDS("Victim Statement");
+        IF NOT Row."Victim Statement".HASVALUE THEN
+          EXIT('');
+        Row."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END;
+      Body.READ(InStr);
+      Body.GETSUBTEXT(Result,1,Body.LENGTH);
+      EXIT(Result);
     END;
 
     LOCAL PROCEDURE ApplyAdvice@11(VAR Row@1000000000 : Record 110231);
@@ -332,6 +407,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.Open := TRUE;
       ApplyAdvice(Journal);
       Journal.INSERT;
+      CopyStatements(Observed,Journal);
       OpenedCount := OpenedCount + 1;
     END;
 

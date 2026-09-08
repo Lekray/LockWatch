@@ -20,7 +20,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       NoDatabaseErr@1000000003 : TextConst 'ENU=The database name is not known: the current session is missing from Active Session.;RUS=Имя базы неизвестно: текущего сеанса нет в Active Session.';
 
     [External]
-    PROCEDURE ReadQueue@1(MaxRows@1000000000 : Integer;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer) : Boolean;
+    PROCEDURE ReadQueue@1(MaxRows@1000000000 : Integer;WantStatements@1000000008 : Boolean;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer) : Boolean;
     BEGIN
       // Один запрос на проход, и он же приносит ЧАСЫ. Часы нужны серверные: NAV и SQL
       // могут стоять на разных машинах, а в журнале рядом лежат начало эпизода (считанное
@@ -38,7 +38,7 @@ OBJECT Codeunit 110234 LockWatch Sql
         MaxRows := Parse.MaxWaitersPerPass;
       IF MaxRows > Parse.MaxWaitersPerPass THEN
         MaxRows := Parse.MaxWaitersPerPass;
-      IF TryReadQueue(MaxRows,Observed,Waiter,Blocker,BlockerIsNav,RowCount,ObservedAt,OtherDatabase) THEN
+      IF TryReadQueue(MaxRows,WantStatements,Observed,Waiter,Blocker,BlockerIsNav,RowCount,ObservedAt,OtherDatabase) THEN
         EXIT(TRUE);
       // Отказ съёма не роняет фоновую задачу: прав может не быть, сервер может быть занят,
       // и в обоих случаях правильный ответ - записать причину и жить дальше. Молча
@@ -93,7 +93,7 @@ OBJECT Codeunit 110234 LockWatch Sql
     END;
 
     [TryFunction]
-    LOCAL PROCEDURE TryReadQueue@4(MaxRows@1000000000 : Integer;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer);
+    LOCAL PROCEDURE TryReadQueue@4(MaxRows@1000000000 : Integer;WantStatements@1000000019 : Boolean;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer);
     VAR
       SqlConn@1000000008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000009 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
@@ -106,12 +106,15 @@ OBJECT Codeunit 110234 LockWatch Sql
       HeldMode@1000000016 : Text;
       ResourceText@1000000017 : Text;
       Parsed@1000000018 : Boolean;
+      OutStr@1000000020 : OutStream;
+      VictimBody@1000000021 : Text;
+      BlockerBody@1000000022 : Text;
     BEGIN
       SqlConn := SqlConn.SqlConnection(ConnString);
       SqlConn.Open;
       SqlCmd := SqlConn.CreateCommand;
       SqlCmd.CommandTimeout := ReadTimeoutSec;
-      SqlCmd.CommandText := QueueSql(MaxRows);
+      SqlCmd.CommandText := QueueSql(MaxRows,WantStatements);
       SqlReader := SqlCmd.ExecuteReader;
 
       // Первый набор - часы и номер базы. Он приходит ДАЖЕ когда ждущих нет: без него
@@ -144,7 +147,12 @@ OBJECT Codeunit 110234 LockWatch Sql
           Observed."Victim Process Id" := ReaderInt(SqlReader,6);
           Observed."Blocker SPID" := Blocker[RowCount];
           Observed."Blocker Transaction Id" := ReaderBigInt(SqlReader,9);
-          Observed."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,14),ReaderInt(SqlReader,15));
+          // Колонки 15 и 16, а не 14 и 15. На единицу раньше лежит признак "у виновника
+          // есть исполняемый запрос", и он уходил в ДНИ: журнал показывал начало
+          // транзакции 1900-01-02, а класс эпизода считался по миллисекундам вместо
+          // признака. Ни одна проверка этого не ловила - обе величины целые, обе
+          // правдоподобные, и отказа не было ни разу.
+          Observed."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,15),ReaderInt(SqlReader,16));
           Observed."Wait Type" := COPYSTR(ReaderText(SqlReader,3),1,MAXSTRLEN(Observed."Wait Type"));
           Observed."Last Wait (ms)" := SqlReader.GetInt32(2);
           Observed."Resource Kind" := COPYSTR(UPPERCASE(Kind),1,MAXSTRLEN(Observed."Resource Kind"));
@@ -159,6 +167,32 @@ OBJECT Codeunit 110234 LockWatch Sql
             // бы соврать тишиной, а показать пустую - соврать дважды.
             Observed."SQL Object Name" := COPYSTR(ResourceText,1,MAXSTRLEN(Observed."SQL Object Name"));
           Observed.Class := EpisodeClassOf(SqlReader);
+          VictimBody := '';
+          BlockerBody := '';
+          IF WantStatements THEN BEGIN
+            // Текст кладётся во ВРЕМЕННУЮ строку, и она же довезёт его до журнала. Отдельным
+            // запросом за ним ходить нельзя: к моменту второго запроса виновник успевает
+            // послать другой оператор, и в журнал лёг бы не тот, который взял блокировку.
+            VictimBody := Parse.StatementWithMark(ReaderText(SqlReader,17),ReaderInt(SqlReader,18));
+            BlockerBody := Parse.StatementWithMark(ReaderText(SqlReader,19),ReaderInt(SqlReader,20));
+            IF BlockerBody <> '' THEN
+              // Начало запроса ложится и в короткое поле: в списке эпизодов колонка должна
+              // что-то показывать, не заставляя открывать каждую строку по очереди.
+              Observed."Blocker Statement" :=
+                COPYSTR(Parse.Flatten(BlockerBody),1,MAXSTRLEN(Observed."Blocker Statement"));
+          END;
+          // Поток в поле-БЛОБ открывается ДО вставки строки, и это не мелочь: на временной
+          // записи блоб, записанный после INSERT и закреплённый MODIFY, до читателя не
+          // доезжает вовсе. Измерено на себе - HASVALUE у принимающей стороны отвечал "нет"
+          // при полностью заполненной строке.
+          IF VictimBody <> '' THEN BEGIN
+            Observed."Victim Statement".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+            OutStr.WRITETEXT(VictimBody);
+          END;
+          IF BlockerBody <> '' THEN BEGIN
+            Observed."Blocker Statement Text".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+            OutStr.WRITETEXT(BlockerBody);
+          END;
           Observed.INSERT;
         END;
       END;
@@ -599,6 +633,8 @@ OBJECT Codeunit 110234 LockWatch Sql
       TableName@1000000014 : Text;
       SiftKeyNo@1000000015 : Integer;
       KeyNo@1000000016 : Integer;
+      StatementOut@1000000017 : OutStream;
+      StatementBody@1000000018 : Text;
     BEGIN
       SqlConn := SqlConn.SqlConnection(ConnString);
       SqlConn.Open;
@@ -641,6 +677,7 @@ OBJECT Codeunit 110234 LockWatch Sql
         Found."Wait Type" := COPYSTR(LockWaitPrefix + ReaderText(SqlReader,19),1,MAXSTRLEN(Found."Wait Type"));
         Found."Deadlock Id" := Parse.TextFingerprint(ReaderText(SqlReader,20));
         Found."Blocker Statement" := COPYSTR(ReaderText(SqlReader,21),1,MAXSTRLEN(Found."Blocker Statement"));
+        StatementBody := Parse.StatementWithMark(ReaderText(SqlReader,22),ReaderInt(SqlReader,23));
 
         // Цепочка из двоих, и она ЗАМКНУТА - этим взаимоблокировка и отличается от
         // очереди. Голова здесь не "тот, кто ни на кого не ждёт": ждут оба, и признак
@@ -674,6 +711,10 @@ OBJECT Codeunit 110234 LockWatch Sql
           Found."NAV Key No." := KeyNo;
           Found."Resource Unresolved" := TRUE;
         END;
+        IF StatementBody <> '' THEN BEGIN
+          Found."Blocker Statement Text".CREATEOUTSTREAM(StatementOut,TEXTENCODING::UTF8);
+          StatementOut.WRITETEXT(StatementBody);
+        END;
         Found.INSERT;
       END;
       SqlReader.Close;
@@ -702,12 +743,17 @@ OBJECT Codeunit 110234 LockWatch Sql
       // позже настоящей, а событие ровно на границе при этом пропускается молча. Ради
       // него отбор и сделан нестрогим, так что округление обесценило бы всю защиту.
       Events := Q + '/RingBufferTarget/event[@name' + Eq + '"xml_deadlock_report"]' + Q;
+      // nvarchar(max) метод .value() не принимает вовсе, и это не наш выбор потолка:
+      // сервер САМ обрезает входной буфер на четырёх тысячах знаков, поэтому 4000 здесь
+      // ничего не теряет. Отметка усечения на этой дороге поэтому и не срабатывает.
       IF WantStatements THEN
-        Statement := ' LTRIM(CONVERT(nvarchar(250),bp.n' + XVal('(inputbuf)[1]','nvarchar(500)') + '))'
+        Statement := ' LTRIM(CONVERT(nvarchar(250),bp.n' + XVal('(inputbuf)[1]','nvarchar(500)') + ')),' +
+                     ' LTRIM(bp.n' + XVal('(inputbuf)[1]','nvarchar(4000)') + '),' +
+                     ' CONVERT(int,ISNULL(LEN(LTRIM(bp.n' + XVal('(inputbuf)[1]','nvarchar(4000)') + ')),0))'
       ELSE
         // Текст оператора едет со ЗНАЧЕНИЯМИ - теми самыми данными, которых мы обещали не
         // собирать. Он приходит только под галкой, выключенной по умолчанию.
-        Statement := ' SPACE(0)';
+        Statement := ' SPACE(0), SPACE(0), 0';
 
       Sql :=
         'SET QUOTED_IDENTIFIER ON;' +
@@ -910,10 +956,42 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(List + ',' + Value);
     END;
 
-    LOCAL PROCEDURE QueueSql@9(MaxRows@1000000000 : Integer) : Text;
+    LOCAL PROCEDURE QueueSql@9(MaxRows@1000000000 : Integer;WantStatements@1000000002 : Boolean) : Text;
     VAR
       Sql@1000000001 : Text;
+      Cols@1000000003 : Text;
+      Joins@1000000004 : Text;
+      Cap@1000000005 : Text;
     BEGIN
+      // Текст запроса стоит четырёх присоединений к горячему запросу прохода, и потому он
+      // ВЫКЛЮЧАЕМ. Выключенный не платит ничем: колонки остаются на месте пустыми, а
+      // присоединений в запросе нет вовсе - читателю не приходится знать, какой сегодня
+      // набор столбцов.
+      //
+      // Жертва ждёт, то есть у неё есть исполняемый запрос, и текст берётся по нему с
+      // точными границами оператора. Виновник чаще СПИТ - в этом вся беда NAV-блокировок, -
+      // и запроса у него нет; берётся последний, что он послал, из его соединения. Это и
+      // есть тот оператор, который взял блокировку.
+      Cap := FORMAT(Parse.MaxStatementChars);
+      IF WantStatements THEN BEGIN
+        Cols :=
+          ', LEFT(vst.t,' + Cap + '), CONVERT(int,ISNULL(LEN(vst.t),0)),' +
+          ' LEFT(bst.t,' + Cap + '), CONVERT(int,ISNULL(LEN(bst.t),0))';
+        Joins :=
+          ' OUTER APPLY (SELECT TOP 1 r.sql_handle AS h, r.statement_start_offset AS so,' +
+          ' r.statement_end_offset AS eo FROM sys.dm_exec_requests r' +
+          ' WHERE r.session_id ' + Eq + ' wt.session_id) vq' +
+          ' OUTER APPLY sys.dm_exec_sql_text(vq.h) vtx' +
+          ' OUTER APPLY (SELECT LTRIM(SUBSTRING(vtx.text,(vq.so/2)+1,' +
+          ' ((CASE vq.eo WHEN -1 THEN DATALENGTH(vtx.text) ELSE vq.eo END - vq.so)/2)+1)) AS t) vst' +
+          ' OUTER APPLY (SELECT TOP 1 c.most_recent_sql_handle AS h FROM sys.dm_exec_connections c' +
+          ' WHERE c.session_id ' + Eq + ' wt.blocking_session_id) bq' +
+          ' OUTER APPLY sys.dm_exec_sql_text(bq.h) btx' +
+          ' OUTER APPLY (SELECT LTRIM(btx.text) AS t) bst';
+      END ELSE BEGIN
+        Cols := ', SPACE(0), 0, SPACE(0), 0';
+        Joins := '';
+      END;
       // Каждое целое приведено к int нарочно, и это не перестраховка: номер сеанса и
       // номер базы в системных представлениях - smallint, а GetInt32 на smallint падает
       // с "Specified cast is not valid". Отказ приходит на ПЕРВОЙ строке очереди, то есть
@@ -947,6 +1025,7 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' CASE WHEN ba.transaction_begin_time IS NULL THEN 0' +
         ' ELSE DATEDIFF(ms,CONVERT(date,ba.transaction_begin_time),' +
         ' ba.transaction_begin_time) END' +
+        Cols +
         ' FROM sys.dm_os_waiting_tasks wt' +
         ' JOIN sys.dm_exec_sessions vs ON vs.session_id = wt.session_id' +
         ' LEFT JOIN sys.dm_tran_session_transactions vt ON vt.session_id = wt.session_id' +
@@ -955,6 +1034,7 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' ON bt.session_id = wt.blocking_session_id' +
         ' LEFT JOIN sys.dm_tran_active_transactions ba' +
         ' ON ba.transaction_id = bt.transaction_id' +
+        Joins +
         ' WHERE wt.wait_type LIKE ' + Q + 'LCK[_]%' + Q +
         ' AND wt.session_id <> @@SPID' +
         ' ORDER BY wt.wait_duration_ms DESC;';
@@ -1004,7 +1084,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       IdleMs := ReaderInt(SqlReader,12);
       OpenTrans := ReaderInt(SqlReader,13);
       Sleeping := (Status = SleepingStatus) AND (OpenTrans > 0);
-      EXIT(Parse.EpisodeClass(Sleeping,ReaderInt(SqlReader,16) = 1,IdleMs,0));
+      EXIT(Parse.EpisodeClass(Sleeping,ReaderInt(SqlReader,14) = 1,IdleMs,0));
     END;
 
     LOCAL PROCEDURE NavFlag@12(ProgramName@1000000000 : Text) : Integer;

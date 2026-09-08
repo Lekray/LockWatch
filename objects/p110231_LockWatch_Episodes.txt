@@ -78,6 +78,32 @@ OBJECT Page 110231 LockWatch Episodes
                                  PAGE.RUN(PAGE::"LockWatch Summary");
                                END;
                                 }
+      { 50      ;1   ;Action    ;
+                      Name=ShowBlockerStatement;
+                      CaptionML=[ENU=Culprit Statement;
+                                 RUS=Запрос виновника];
+                      ToolTipML=[ENU=Open the statement the culprit sent last before it took the lock. It is kept in the journal in full, so it can be copied out and run.;
+                                 RUS=Открыть оператор, который виновник послал последним перед тем, как взял блокировку. В журнале он лежит целиком, и его можно скопировать и выполнить.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=ViewDetails;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowStatement(TRUE);
+                               END;
+                                }
+      { 51      ;1   ;Action    ;
+                      Name=ShowVictimStatement;
+                      CaptionML=[ENU=Victim Statement;
+                                 RUS=Запрос жертвы];
+                      ToolTipML=[ENU=Open the statement the victim was waiting on. It is the operation a human saw stall, and it is kept in the journal in full.;
+                                 RUS=Открыть оператор, на котором стояла жертва. Это та самая операция, которую человек увидел зависшей, и в журнале она лежит целиком.];
+                      ApplicationArea=#All;
+                      Image=ViewDetails;
+                      OnAction=BEGIN
+                                 ShowStatement(FALSE);
+                               END;
+                                }
       { 49      ;1   ;Action    ;
                       Name=NameOpenUsers;
                       CaptionML=[ENU=Name Everyone Waiting;
@@ -373,6 +399,29 @@ OBJECT Page 110231 LockWatch Episodes
       PlatformOffErr@1000000003 : TextConst 'ENU=Names from the platform are switched off in the setup. Switching them on costs a config change, an instance restart and both SQL rights - it is a decision, not a checkbox.;RUS=Имена от платформы выключены в настройке. Их включение стоит правки конфига, перезапуска экземпляра и обоих прав SQL - это решение, а не галка.';
       NamedMsg@1000000004 : TextConst 'ENU=The platform named the user - %1;RUS=Платформа назвала пользователя - %1';
       NotNamedMsg@1000000005 : TextConst 'ENU=The platform did not name anyone. %1;RUS=Платформа никого не назвала. %1';
+      Journal@1000000006 : Codeunit 110232;
+      BlockerTxt@1000000007 : TextConst 'ENU=Culprit, SPID %1;RUS=Виновник, сеанс %1';
+      VictimTxt@1000000008 : TextConst 'ENU=Victim, SPID %1;RUS=Жертва, сеанс %1';
+      NoStatementErr@1000000009 : TextConst 'ENU=There is no statement text in this entry. The journal keeps it only when Collect Statement Values is on in the setup, and only from the moment it was switched on - the text is taken at the instant the episode opens and cannot be fetched afterwards.;RUS=Текста запроса в этой строке нет. Журнал хранит его только при включённом признаке "Собирать значения в операторах" и только с мига, когда его включили, - текст снимается в момент открытия эпизода и задним числом не берётся.';
+
+    LOCAL PROCEDURE ShowStatement@6(Blocker@1000000000 : Boolean);
+    VAR
+      Viewer@1000000001 : Page 110236;
+      Body@1000000002 : Text;
+      Whose@1000000003 : Text;
+    BEGIN
+      Body := Journal.StatementText("Entry No.",Blocker);
+      // Пустой текст объясняется словами, а не пустым окном. Причин у пустоты две, и обе
+      // не ошибка: признак выключен, либо эпизод открылся раньше, чем его включили.
+      IF Body = '' THEN
+        ERROR(NoStatementErr);
+      IF Blocker THEN
+        Whose := STRSUBSTNO(BlockerTxt,"Blocker SPID")
+      ELSE
+        Whose := STRSUBSTNO(VictimTxt,"Victim SPID");
+      Viewer.SetStatement(Whose,Body);
+      Viewer.RUNMODAL;
+    END;
 
     LOCAL PROCEDURE NamePlatformUser@5();
     VAR
