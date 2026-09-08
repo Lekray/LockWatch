@@ -43,6 +43,12 @@ $merge = Join-Path $PSScriptRoot 'Merge-MenuSuite.ps1'
 $originalFile = Join-Path $outDir "menusuite-$TargetId-original.txt"
 $mergedFile   = Join-Path $outDir "menusuite-$TargetId-merged.txt"
 $keptFile     = Join-Path $outDir "menusuite-$TargetId-kept.txt"
+# Файлов ДВА, и роли у них разные. kept - то, что вернётся на стенд в конце: чужой объект
+# в том виде, в каком его застали. base - то, с чем сравнивают проверки: тот же объект, но
+# заведомо БЕЗ нашей врезки. На чистом стенде это одно и то же, а на стенде, где врезку уже
+# поставили (показом, например), - нет, и без этого различия прогон мерил бы врезку
+# относительно врезки: слияние "не изменило ни строки", снятие "потеряло семьдесят семь".
+$baseFile     = Join-Path $outDir "menusuite-$TargetId-base.txt"
 
 $passed = 0; $total = 0; $report = @()
 function Check([string]$what, [bool]$ok, [string]$detail) {
@@ -98,10 +104,20 @@ function Line-Diff([string]$a, [string]$b) {
 
 try {
     Write-Host 'Слияние без импорта'
-    Run-Merge 'слияние' @() | Out-Null
+    $first = Run-Merge 'слияние' @()
     if (-not (Test-Path $originalFile)) { Fail 'оригинал не выгрузился' }
     Copy-Item $originalFile $keptFile -Force
-    $diff = Line-Diff $keptFile $mergedFile
+
+    # Врезка могла стоять в меню ещё до прогона - её ставит показ и оставляет нарочно.
+    # Тогда прогон снимает её СЕБЕ для замера и возвращает в конце вместе с оригиналом:
+    # проверять слияние на объекте, где оно уже сделано, значит проверять пустоту.
+    if ($first -match 'прежняя врезка найдена') {
+        Write-Host 'В меню уже стоит наша врезка - снимаю её на время замера'
+        Run-Merge 'снятие прежней врезки' @('-Remove', '-Import') | Out-Null
+        Run-Merge 'слияние на чистом меню' @() | Out-Null
+    }
+    Copy-Item $originalFile $baseFile -Force
+    $diff = Line-Diff $baseFile $mergedFile
     Check 'слияние правит ровно один чужой узел' `
         (($diff.Changed -eq 1) -and ($diff.Added -gt 1) -and ($diff.ChangedText -match 'NextNodeID')) `
         "изменено строк $($diff.Changed), дописано $($diff.Added), изменённая строка про NextNodeID: $(if ($diff.ChangedText -match 'NextNodeID') { 'да' } else { 'нет' })"
@@ -117,7 +133,7 @@ try {
     $again = Run-Merge 'повторное слияние' @()
     $mergedAgain = Join-Path $outDir "menusuite-$TargetId-merged-again.txt"
     Copy-Item $mergedFile $mergedAgain -Force
-    $diffAgain = Line-Diff $keptFile $mergedAgain
+    $diffAgain = Line-Diff $baseFile $mergedAgain
     Check 'повторное слияние не удваивает пункты' `
         (($diffAgain.Changed -eq $diff.Changed) -and ($diffAgain.Added -eq $diff.Added) -and ($again -match 'прежняя врезка найдена')) `
         "изменено $($diffAgain.Changed) при $($diff.Changed), дописано $($diffAgain.Added) при $($diff.Added), прежняя врезка замечена: $(if ($again -match 'прежняя врезка найдена') { 'да' } else { 'НЕТ' })"
@@ -125,7 +141,7 @@ try {
     Write-Host 'Снятие врезки'
     Run-Merge 'снятие врезки' @('-Remove', '-Import') | Out-Null
     Run-Merge 'выгрузка после снятия' @('-Remove') | Out-Null
-    $backDiff = Line-Diff $keptFile $originalFile
+    $backDiff = Line-Diff $baseFile $originalFile
     Check 'снятие врезки возвращает чужой объект байт в байт' `
         (($backDiff.Changed -eq 0) -and ($backDiff.Added -eq 0)) `
         "расхождений с исходным: изменено $($backDiff.Changed), дописано $($backDiff.Added)"
@@ -143,6 +159,7 @@ finally {
         } catch { Write-Host "ВНИМАНИЕ: оригинал меню вернуть не удалось, он лежит в $keptFile" -ForegroundColor Red }
         Remove-Item $keptFile -Force
     }
+    if (Test-Path $baseFile) { Remove-Item $baseFile -Force }
 }
 
 Write-Host ''
