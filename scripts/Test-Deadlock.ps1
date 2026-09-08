@@ -132,6 +132,19 @@ function Invoke-Pass([string]$why) {
 # аргумента -Q рвёт разбор командной строки sqlcmd, и отказ он объявляет не про кавычку,
 # а про "непредвиденный аргумент". Инструмента это не касается: там текст запроса уходит
 # драйверу, а не через командную строку, и двойные кавычки в нём законны.
+# Самое свежее событие в буфере. Именно оно, а не СЧЁТ событий, говорит, что круг случился:
+# буфер кольцевой, и на забитом дневными опытами кольце сервер вытесняет столько же,
+# сколько кладёт. Счёт при этом стоит на месте, опыт объявляет "круга не вышло" там, где
+# круг был, ставит его заново - и в журнал приезжают лишние НАСТОЯЩИЕ круги, а красной
+# оказывается проверка на повтор. Ловилось 08.09.2026 на кольце из 23 чужих графов.
+$graphNewest = @"
+SELECT ISNULL(MAX(CONVERT(varchar(30),n.e.value('@timestamp','datetime2(3)'),126)),'') FROM (
+  SELECT CONVERT(xml, t.target_data) AS x
+  FROM sys.dm_xe_session_targets t
+  JOIN sys.dm_xe_sessions s ON s.address = t.event_session_address
+  WHERE s.name = 'system_health' AND t.target_name = 'ring_buffer') q
+CROSS APPLY q.x.nodes('/RingBufferTarget/event[@name=''xml_deadlock_report'']') AS n(e);
+"@
 $graphCount = @"
 SELECT COUNT(*) FROM (
   SELECT CONVERT(xml, t.target_data) AS x
@@ -164,7 +177,7 @@ function Invoke-Deadlock([string]$why) {
     # Одна попытка красит смету случайным цветом, а смета со случайным цветом хуже
     # отсутствующей: её перестают читать.
     for ($attempt = 1; $attempt -le (CircleAttempts); $attempt++) {
-        $before = [int](Scalar $graphCount)
+        $before = Scalar $graphNewest
         # Жертва назначается ключом: без него сервер выбирает по стоимости отката, и проверка
         # "жертва та самая" стала бы угадыванием.
         $a = "SET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'A1' WHERE [Server Instance Id]=-11`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'A2' WHERE [Server Instance Id]=-12`nCOMMIT`n"
@@ -191,13 +204,13 @@ function Invoke-Deadlock([string]$why) {
         if (($victim -gt 0) -and ($winner -gt 0)) {
             $deadline = (Get-Date).AddSeconds(30)
             while ((Get-Date) -lt $deadline) {
-                if ([int](Scalar $graphCount) -gt $before) { break }
+                if ((Scalar $graphNewest) -ne $before) { break }
                 Start-Sleep -Milliseconds 500
             }
-            $after = [int](Scalar $graphCount)
-            if ($after -gt $before) {
+            $after = Scalar $graphNewest
+            if ($after -ne $before) {
                 $note = if ($attempt -gt 1) { ", попыток $attempt" } else { '' }
-                Write-Host "  $why - жертва $victim, победитель $winner, графов в буфере $after$note"
+                Write-Host "  $why - жертва $victim, победитель $winner, графов в буфере $(Scalar $graphCount)$note"
                 return @($victim, $winner)
             }
             Write-Host "  $why - круг с попытки $attempt не состоялся, графа в буфере нет" -ForegroundColor Yellow
@@ -294,10 +307,16 @@ FROM $episode ORDER BY [Entry No_] DESC;
     Check 'второй проход тоже отчитался' (($watchdog2 -ne '') -and ($watchdog2 -notmatch 'не прочитаны') -and ($watchdog2 -notmatch 'не работает')) `
         "сторож пишет: $watchdog2"
 
+    # Проверяется ОТПЕЧАТОК, а не число строк. Кольцевой буфер общий: чужой круг, случившийся
+    # между двумя проходами, - законная строка журнала, а не признак поломки, и считать
+    # строки значило бы судить инструмент по чужой работе. Повтор ловится точнее: первый круг
+    # второй проход прочитал ЗАНОВО - отбор по отметке нестрогий нарочно, - и остаться он
+    # обязан одной строкой, а дублей не должно быть ни у кого.
     $rows2 = [int](Scalar "SELECT COUNT(*) FROM $episode;")
     $ids = [int](Scalar "SELECT COUNT(DISTINCT [Deadlock Id]) FROM $episode;")
-    Check 'повторно прочитанный граф не удваивает строку' (($rows2 -eq 2) -and ($ids -eq 2)) `
-        "строк в журнале $rows2 при ожидаемых 2, разных отпечатков $ids"
+    $firstAgain = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Deadlock Id] = N'$($f[8])';")
+    Check 'повторно прочитанный граф не удваивает строку' (($rows2 -eq $ids) -and ($firstAgain -eq 1)) `
+        "строк в журнале $rows2 при $ids разных отпечатках, строк первого круга $firstAgain при ожидаемой 1"
     $second = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Victim SPID]) + '|' + CONVERT(varchar(11),[Blocker SPID]) FROM $episode ORDER BY [Entry No_] DESC;"
     $s = ($second -split '\|') | ForEach-Object { $_.Trim() }
     Check 'новый граф подхвачен, а не пропущен по отметке' ((([int]$s[0]) -eq $two[0]) -and (([int]$s[1]) -eq $two[1])) `
