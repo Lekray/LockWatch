@@ -80,6 +80,35 @@ OBJECT Page 110233 LockWatch Summary
                                  Refill;
                                END;
                                 }
+      { 27      ;1   ;Action    ;
+                      Name=WithHistoryOn;
+                      CaptionML=[ENU=Count History Too;
+                                 RUS=Считать и по истории];
+                      ToolTipML=[ENU=Add the entries that have already moved out of the journal into history. The journal holds the last weeks - what the term in the setup allows - and the question "does this repeat" is asked of the whole record, not of the last month.;
+                                 RUS=Добавить к счёту записи, уже уехавшие из журнала в историю. В журнале лежат последние недели - сколько позволяет срок из настройки, - а вопрос "повторяется ли это" задают ко всему сроку наблюдения, а не к последнему месяцу.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=History;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 WithHistory := TRUE;
+                                 Refill;
+                               END;
+                                }
+      { 28      ;1   ;Action    ;
+                      Name=WithHistoryOff;
+                      CaptionML=[ENU=Journal Only;
+                                 RUS=Только журнал];
+                      ToolTipML=[ENU=Count the journal alone. This is what is going on now and lately, without the older record behind it.;
+                                 RUS=Считать один журнал. Это то, что происходит сейчас и в последнее время, без давнего за спиной.];
+                      ApplicationArea=#All;
+                      Image=Journal;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 WithHistory := FALSE;
+                                 Refill;
+                               END;
+                                }
       { 24      ;1   ;Action    ;
                       Name=ShowEpisodes;
                       CaptionML=[ENU=Episodes;
@@ -93,6 +122,19 @@ OBJECT Page 110233 LockWatch Summary
                       PromotedCategory=Process;
                       OnAction=BEGIN
                                  ShowEpisodes;
+                               END;
+                                }
+      { 29      ;1   ;Action    ;
+                      Name=ShowHistoryEpisodes;
+                      CaptionML=[ENU=Episodes in History;
+                                 RUS=Эпизоды в истории];
+                      ToolTipML=[ENU=Open the same group in history: the same window, the same table and key. A summary line counted with history behind it points at entries the journal no longer holds, and sending the eye to the journal alone would show fewer than were counted.;
+                                 RUS=Открыть ту же группу в истории: то же окно, та же таблица и ключ. Строка свода, посчитанная вместе с историей, указывает и на записи, которых в журнале уже нет, и отправлять взгляд в один журнал значило бы показать меньше, чем посчитано.];
+                      ApplicationArea=#All;
+                      Image=History;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowHistoryEpisodes;
                                END;
                                 }
       { 26      ;1   ;Action    ;
@@ -161,6 +203,16 @@ OBJECT Page 110233 LockWatch Summary
                            RUS=Определяет порог, по которому считается колонка "из них выше порога". Берётся из настройки, и ноль в ней означает "не тревожить вовсе", а не "тревожить на всём".];
                 ApplicationArea=#All;
                 SourceExpr=AlertMs }
+
+    { 30  ;2   ;Field     ;
+                Name=CountedOver;
+                CaptionML=[ENU=Counted Over;
+                           RUS=Посчитано по];
+                ToolTipML=[ENU=Specifies whether the numbers next to this include history or the journal alone. A number without the scope it was counted over is not a number.;
+                           RUS=Определяет, посчитаны ли соседние числа вместе с историей или по одному журналу. Число без того, за что оно посчитано, - не число.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr=CountedOverText }
 
     { 6   ;2   ;Field     ;
                 Name=TotalEpisodes;
@@ -248,6 +300,10 @@ OBJECT Page 110233 LockWatch Summary
       AlertMs@1000000003 : Integer;
       TotalEpisodes@1000000004 : Integer;
       OverThresholdStyle@1000000005 : Text[30];
+      WithHistory@1000000006 : Boolean;
+      CountedOverText@1000000007 : Text[50];
+      JournalOnlyTxt@1000000008 : TextConst 'ENU=the journal;RUS=журналу';
+      WithHistoryTxt@1000000009 : TextConst 'ENU=the journal and history;RUS=журналу и истории';
 
     LOCAL PROCEDURE SetWindow@1(Hours@1000000000 : Integer);
     VAR
@@ -278,7 +334,13 @@ OBJECT Page 110233 LockWatch Summary
       // сразу же.
       Setup.FetchOnce;
       AlertMs := Setup."Alert Threshold (ms)";
-      TotalEpisodes := Journal.Summarize(Rec,WindowFrom,WindowTo,AlertMs);
+      TotalEpisodes := Journal.Summarize(Rec,WindowFrom,WindowTo,AlertMs,WithHistory);
+      // Объём пишется рядом с числом, а не подразумевается кнопкой: кнопку нажали минуту
+      // назад, а число смотрят сейчас, и вспомнить, за что оно посчитано, будет неоткуда.
+      IF WithHistory THEN
+        CountedOverText := WithHistoryTxt
+      ELSE
+        CountedOverText := JournalOnlyTxt;
     END;
 
     LOCAL PROCEDURE Refill@4();
@@ -313,6 +375,35 @@ OBJECT Page 110233 LockWatch Summary
       ELSE
         Episode.SETRANGE("Started At",WindowFrom,WindowTo);
       PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
+    END;
+
+    LOCAL PROCEDURE ShowHistoryEpisodes@13();
+    VAR
+      Episode@1000000000 : Record 110238;
+      TableName@1000000001 : Text[250];
+      KeyNo@1000000002 : Integer;
+    BEGIN
+      // То же самое, но по истории. Отдельной кнопкой, а не догадкой по признаку "считали
+      // ли с историей": в журнале и в истории лежат РАЗНЫЕ эпизоды одной и той же группы,
+      // и человек сам решает, куда смотреть.
+      TableName := "NAV Table Name";
+      KeyNo := "NAV Key No.";
+      Episode.SETRANGE("NAV Table Name",TableName);
+      Episode.SETRANGE("NAV Key No.",KeyNo);
+      IF WindowFrom = 0DT THEN
+        Episode.SETFILTER("Started At",'<=%1',WindowTo)
+      ELSE
+        Episode.SETRANGE("Started At",WindowFrom,WindowTo);
+      PAGE.RUN(PAGE::"LockWatch Episode History",Episode);
+    END;
+
+    [External]
+    PROCEDURE CountHistory@14(Yes@1000000000 : Boolean);
+    BEGIN
+      // Открыть свод сразу с историей может тот, кто пришёл из неё. Ставится ДО запуска
+      // страницы: после запуска первое заполнение уже случилось, и человек увидел бы
+      // сначала одно число, а потом другое.
+      WithHistory := Yes;
     END;
 
     LOCAL PROCEDURE SetStyle@10();

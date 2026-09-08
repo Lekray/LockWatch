@@ -377,11 +377,9 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE Summarize@15(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;
+    PROCEDURE Summarize@15(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer;WithHistory@1000000007 : Boolean) : Integer;
     VAR
-      Episode@1000000004 : Record 110231;
       Counted@1000000005 : Integer;
-      WaitMs@1000000006 : Integer;
     BEGIN
       // Сводка считается ПЕРЕБОРОМ, а не агрегатом базы. FlowField со счётом по журналу
       // означал бы SumIndexFields на таблице, куда фоновая задача пишет каждые три
@@ -390,41 +388,13 @@ OBJECT Codeunit 110232 LockWatch Journal
       Line.RESET;
       Line.DELETEALL;
 
-      Episode.RESET;
-      Episode.SETCURRENTKEY("NAV Table Name","Started At");
-      // Пустая нижняя граница означает "весь журнал". Диапазон с пустым концом выглядел
-      // бы тем же самым, но означал бы отбор ПО пустому значению, а не его отсутствие.
-      IF FromAt = 0DT THEN
-        Episode.SETFILTER("Started At",'<=%1',ToAt)
-      ELSE
-        Episode.SETRANGE("Started At",FromAt,ToAt);
-      IF Episode.FINDSET THEN
-        REPEAT
-          Counted := Counted + 1;
-          WaitMs := Episode."Max Wait (ms)";
-          IF NOT Line.GET(Episode."NAV Table Name",Episode."NAV Key No.") THEN BEGIN
-            Line.INIT;
-            Line."NAV Table Name" := Episode."NAV Table Name";
-            Line."NAV Key No." := Episode."NAV Key No.";
-            Line.INSERT;
-          END;
-          Line.Episodes := Line.Episodes + 1;
-          Line."Total Wait (ms)" := Line."Total Wait (ms)" + WaitMs;
-          IF (AlertMs > 0) AND (WaitMs >= AlertMs) THEN
-            Line."Over Threshold" := Line."Over Threshold" + 1;
-          IF Episode."On SIFT" THEN
-            Line."On SIFT" := TRUE;
-          IF Episode."Started At" > Line."Last At" THEN
-            Line."Last At" := Episode."Started At";
-          // Совет строки - совет самого долгого эпизода группы. Первый эпизод берётся
-          // безусловно, а дальше только строго длиннее: при равенстве побеждает первый
-          // встреченный, и строка сводки не меняется от порядка чтения.
-          IF (Line.Episodes = 1) OR (WaitMs > Line."Max Wait (ms)") THEN BEGIN
-            Line."Max Wait (ms)" := WaitMs;
-            Line.Advice := Episode.Advice;
-          END;
-          Line.MODIFY;
-        UNTIL Episode.NEXT = 0;
+      // Проходов два, а свод один. Раздельными они стали не по прихоти: тип записи в
+      // параметре C/AL фиксирован, а RecordRef полей по имени отдаёт не то и не так.
+      // Дублируется здесь только ОБХОД - решение о том, как складывать, живёт в FoldOne
+      // одним куском, и расходиться двум сводкам неоткуда.
+      Counted := FoldJournal(Line,FromAt,ToAt,AlertMs);
+      IF WithHistory THEN
+        Counted := Counted + FoldHistory(Line,FromAt,ToAt,AlertMs);
 
       // Порядок - часть смысла сводки, а не украшение страницы: первым идёт то, во что
       // ожидание обошлось дороже всего. Поэтому он ставится здесь, а не только видом
@@ -476,6 +446,77 @@ OBJECT Codeunit 110232 LockWatch Journal
           Moved := Moved + 1;
         UNTIL (Moved >= MaxRows) OR (Journal.NEXT = 0);
       EXIT(Moved);
+    END;
+
+    LOCAL PROCEDURE FoldJournal@22(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;
+    VAR
+      Episode@1000000004 : Record 110231;
+      Counted@1000000005 : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETCURRENTKEY("NAV Table Name","Started At");
+      // Пустая нижняя граница означает "весь журнал". Диапазон с пустым концом выглядел
+      // бы тем же самым, но означал бы отбор ПО пустому значению, а не его отсутствие.
+      IF FromAt = 0DT THEN
+        Episode.SETFILTER("Started At",'<=%1',ToAt)
+      ELSE
+        Episode.SETRANGE("Started At",FromAt,ToAt);
+      IF Episode.FINDSET THEN
+        REPEAT
+          Counted := Counted + 1;
+          FoldOne(Line,Episode."NAV Table Name",Episode."NAV Key No.",Episode."Max Wait (ms)",
+                  Episode."On SIFT",Episode."Started At",Episode.Advice,AlertMs);
+        UNTIL Episode.NEXT = 0;
+      EXIT(Counted);
+    END;
+
+    LOCAL PROCEDURE FoldHistory@23(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;
+    VAR
+      Episode@1000000004 : Record 110238;
+      Counted@1000000005 : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETCURRENTKEY("NAV Table Name","Started At");
+      IF FromAt = 0DT THEN
+        Episode.SETFILTER("Started At",'<=%1',ToAt)
+      ELSE
+        Episode.SETRANGE("Started At",FromAt,ToAt);
+      IF Episode.FINDSET THEN
+        REPEAT
+          Counted := Counted + 1;
+          FoldOne(Line,Episode."NAV Table Name",Episode."NAV Key No.",Episode."Max Wait (ms)",
+                  Episode."On SIFT",Episode."Started At",Episode.Advice,AlertMs);
+        UNTIL Episode.NEXT = 0;
+      EXIT(Counted);
+    END;
+
+    LOCAL PROCEDURE FoldOne@24(VAR Line@1000000000 : Record 110234;TableName@1000000001 : Text[250];KeyNo@1000000002 : Integer;WaitMs@1000000003 : Integer;OnSift@1000000004 : Boolean;StartedAt@1000000005 : DateTime;Advice@1000000006 : Text[250];AlertMs@1000000007 : Integer);
+    BEGIN
+      // Одно место, где эпизод ложится в строку свода, - и оно одно нарочно: из журнала и
+      // из истории эпизоды складываются ОДИНАКОВО, иначе свод по обеим таблицам считал бы
+      // две разные величины и звал бы их одним именем.
+      IF NOT Line.GET(TableName,KeyNo) THEN BEGIN
+        Line.INIT;
+        Line."NAV Table Name" := TableName;
+        Line."NAV Key No." := KeyNo;
+        Line.INSERT;
+      END;
+      Line.Episodes := Line.Episodes + 1;
+      Line."Total Wait (ms)" := Line."Total Wait (ms)" + WaitMs;
+      IF (AlertMs > 0) AND (WaitMs >= AlertMs) THEN
+        Line."Over Threshold" := Line."Over Threshold" + 1;
+      IF OnSift THEN
+        Line."On SIFT" := TRUE;
+      IF StartedAt > Line."Last At" THEN
+        Line."Last At" := StartedAt;
+      // Совет строки - совет самого долгого эпизода группы. Первый эпизод берётся
+      // безусловно, а дальше только строго длиннее: при равенстве побеждает первый
+      // встреченный, и строка сводки не меняется от порядка чтения.
+      IF (Line.Episodes = 1) OR (WaitMs > Line."Max Wait (ms)") THEN BEGIN
+        Line."Max Wait (ms)" := WaitMs;
+        Line.Advice := Advice;
+      END;
+      Line.MODIFY;
     END;
 
     LOCAL PROCEDURE FindOpen@6(VAR Observed@1000000000 : Record 110231) : Boolean;

@@ -34,6 +34,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       UpdateTxt@1000000011 : TextConst 'ENU=updated %1, opened %2, rows in the journal %3;RUS=обновлено %1, открыто %2, строк в журнале %3';
       ChkCloseTxt@1000000012 : TextConst 'ENU=a waiter gone from the queue closes the episode, and the outcome is judged;RUS=ушедший из очереди закрывает эпизод, и исход при этом судится';
       CloseTxt@1000000013 : TextConst 'ENU=closed %1 of %2, of them granted %3, still open %4;RUS=закрыто %1 из %2, из них дождалось %3, осталось открытых %4';
+      ChkSummaryHistoryTxt@1000000060 : TextConst 'ENU=the summary counts history when asked to and leaves it out when not;RUS=свод считает историю, когда его просят, и не считает, когда не просят';
+      SummaryHistoryTxt@1000000061 : TextConst 'ENU=journal alone %1, with history %2, in history within the window %3;RUS=по журналу %1, с историей %2, в истории за окно %3';
       ChkFileTxt@1000000054 : TextConst 'ENU=history goes out to a file and comes back from it whole;RUS=история уходит в файл и возвращается из него целой';
       FileOkTxt@1000000055 : TextConst 'ENU=rows out %1, back %2, statement text survived;RUS=выгружено строк %1, вернулось %2, текст запроса уцелел';
       FileGapCountTxt@1000000056 : TextConst 'ENU=rows out %1, back %2;RUS=выгружено строк %1, вернулось %2';
@@ -110,6 +112,9 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       InHistoryBefore@1000000047 : Integer;
       MirrorNote@1000000053 : Text;
       FileNote@1000000059 : Text;
+      SummedJournal@1000000062 : Integer;
+      SummedBoth@1000000063 : Integer;
+      InHistoryNow@1000000064 : Integer;
       Worst@1000000017 : Integer;
       Line@1000000018 : TEMPORARY Record 110234;
       Lines@1000000019 : Integer;
@@ -166,7 +171,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // ровно то, что мерный прогон в него положил, - пятьсот закрытых эпизодов одной
       // таблицы и одного ключа. Обращений к SQL в сводке нет, поэтому и проверяется она
       // без стенда с блокировками.
-      Summed := Journal.Summarize(Line,0DT,CURRENTDATETIME,AlertUnderTest);
+      Summed := Journal.Summarize(Line,0DT,CURRENTDATETIME,AlertUnderTest,FALSE);
       Lines := Line.COUNT;
       Line.FINDFIRST;
       TotalWait := Line."Total Wait (ms)";
@@ -179,10 +184,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Порог и окно проверяются тем, что их СДВИГАЮТ. Одна сводка ничего не доказывает:
       // колонка "выше порога", равная числу эпизодов, одинаково выглядит и у настоящего
       // счёта, и у того, который порога не читает вовсе.
-      Journal.Summarize(Line,0DT,CURRENTDATETIME,SecondWaitMs + 1);
+      Journal.Summarize(Line,0DT,CURRENTDATETIME,SecondWaitMs + 1,FALSE);
       Line.FINDFIRST;
       OverHigh := Line."Over Threshold";
-      FutureLines := Journal.Summarize(Line,CURRENTDATETIME,CURRENTDATETIME,AlertUnderTest);
+      FutureLines := Journal.Summarize(Line,CURRENTDATETIME,CURRENTDATETIME,AlertUnderTest,FALSE);
       Lines := Line.COUNT;
       Check(Passed,Total,Report,ChkWindowTxt,
             (OverLow = Waiters) AND (OverHigh = 0) AND (FutureLines = 0) AND (Lines = 0),
@@ -276,6 +281,21 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Check(Passed,Total,Report,ChkFileTxt,
             FileNote = '',
             FileNote + FileOkNote(FileNote));
+
+      // Свод по истории. Проверяется он ЗДЕСЬ, а не рядом с остальными проверками свода:
+      // это единственный миг прогона, когда в истории заведомо что-то лежит - строки
+      // только что переехали туда сами.
+      //
+      // Разница считается против ЧИСЛА строк истории за окно, а не против числа
+      // переехавших: на стенде в истории могут лежать и настоящие эпизоды, и свод обязан
+      // сложить их тоже. Сравнение с числом переехавших прошло бы только на пустой истории
+      // и краснело бы у всякого, кто уже наблюдал.
+      SummedJournal := Journal.Summarize(Line,0DT,CURRENTDATETIME,0,FALSE);
+      SummedBoth := Journal.Summarize(Line,0DT,CURRENTDATETIME,0,TRUE);
+      InHistoryNow := HistoryRowsUpTo(CURRENTDATETIME);
+      Check(Passed,Total,Report,ChkSummaryHistoryTxt,
+            (SummedBoth - SummedJournal = InHistoryNow) AND (InHistoryNow > 0),
+            STRSUBSTNO(SummaryHistoryTxt,SummedJournal,SummedBoth,InHistoryNow));
 
       SweepMs := Sweep;
 
@@ -481,6 +501,15 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Episode.RESET;
       Episode.SETFILTER("Victim SPID",'<%1',0);
       EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE HistoryRowsUpTo@50(ToAt@1000000000 : DateTime) : Integer;
+    BEGIN
+      // Все строки истории за окно, а не только свои: свод складывает то, что там лежит,
+      // и мерка обязана считать ту же величину, что и он.
+      Moved.RESET;
+      Moved.SETFILTER("Started At",'<=%1',ToAt);
+      EXIT(Moved.COUNT);
     END;
 
     LOCAL PROCEDURE FileRoundTripGap@45() : Text;

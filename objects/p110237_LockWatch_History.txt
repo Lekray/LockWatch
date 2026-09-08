@@ -39,6 +39,23 @@ OBJECT Page 110237 LockWatch Episode History
                                  PAGE.RUN(PAGE::"LockWatch Episodes");
                                END;
                                 }
+      { 47      ;1   ;Action    ;
+                      Name=OpenSummary;
+                      CaptionML=[ENU=Summary;
+                                 RUS=Свод];
+                      ToolTipML=[ENU=Open the summary counted over the journal AND history: which tables and keys waited over the whole record, not over the last weeks alone.;
+                                 RUS=Открыть свод, посчитанный по журналу И истории: какие таблицы и ключи ждали за всё время наблюдения, а не за одни последние недели.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=StatisticsDocument;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 Summary@1000000000 : Page 110233;
+                               BEGIN
+                                 Summary.CountHistory(TRUE);
+                                 Summary.RUN;
+                               END;
+                                }
       { 42      ;1   ;Action    ;
                       Name=ShowBlockerStatement;
                       CaptionML=[ENU=Culprit Statement;
