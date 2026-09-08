@@ -130,41 +130,71 @@ SELECT COUNT(*) FROM (
 CROSS APPLY q.x.nodes('/RingBufferTarget/event[@name=''xml_deadlock_report'']') AS n(e);
 "@
 
+function CircleAttempts {
+    # Три. Одной мало - круг вероятностный; больше трёх значит, что не состоится он и на
+    # десятой: причина тогда не в невезении, а в устройстве опыта, и её надо искать.
+    return 3
+}
+function CircleHold {
+    # Десять секунд удержания первой блокировки - вдвое против прежних пяти. Столько
+    # держится окно, в которое обязана успеть вторая сторона; при пяти секундах она однажды
+    # не успела, и круг не состоялся вовсе.
+    return '00:00:10'
+}
 function Invoke-Deadlock([string]$why) {
-    $before = [int](Scalar $graphCount)
-    # Жертва назначается ключом: без него сервер выбирает по стоимости отката, и проверка
-    # "жертва та самая" стала бы угадыванием.
-    $a = "SET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'A1' WHERE [Server Instance Id]=-11`nWAITFOR DELAY '00:00:05'`nUPDATE $mark SET [Document No_]=N'A2' WHERE [Server Instance Id]=-12`nCOMMIT`n"
-    $b = "SET DEADLOCK_PRIORITY HIGH`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'B1' WHERE [Server Instance Id]=-12`nWAITFOR DELAY '00:00:05'`nUPDATE $mark SET [Document No_]=N'B2' WHERE [Server Instance Id]=-11`nCOMMIT`n"
-    $script:pa = Start-Sqlcmd 'dead-a.sql' $a
-    $script:pb = Start-Sqlcmd 'dead-b.sql' $b
-    $pa = $script:pa
-    $pb = $script:pb
+    # Круг - опыт ВЕРОЯТНОСТНЫЙ, и это его свойство, а не недоделка. Обе стороны обязаны
+    # взять свою первую блокировку прежде, чем первая пойдёт за второй; если одна из них
+    # запаздывает со стартом дольше паузы, круга не выйдет вовсе - обе отработают по
+    # очереди и выйдут с нулём. Ловилось на себе 08.09.2026: сметный прогон дал "граф в
+    # буфер не попал" там, где двумя заходами раньше выходило 13 из 13, и виноват был
+    # запуск процесса на занятой машине, а не инструмент.
+    #
+    # Лечится двумя вещами разом: пауза вдвое длиннее прежней и три попытки вместо одной.
+    # Одна попытка красит смету случайным цветом, а смета со случайным цветом хуже
+    # отсутствующей: её перестают читать.
+    for ($attempt = 1; $attempt -le (CircleAttempts); $attempt++) {
+        $before = [int](Scalar $graphCount)
+        # Жертва назначается ключом: без него сервер выбирает по стоимости отката, и проверка
+        # "жертва та самая" стала бы угадыванием.
+        $a = "SET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'A1' WHERE [Server Instance Id]=-11`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'A2' WHERE [Server Instance Id]=-12`nCOMMIT`n"
+        $b = "SET DEADLOCK_PRIORITY HIGH`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'B1' WHERE [Server Instance Id]=-12`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'B2' WHERE [Server Instance Id]=-11`nCOMMIT`n"
+        $script:pa = Start-Sqlcmd 'dead-a.sql' $a
+        $script:pb = Start-Sqlcmd 'dead-b.sql' $b
+        $pa = $script:pa
+        $pb = $script:pb
 
-    # Номера сеансов снимаются ПОКА они живы: после отката процесса нет, и связать строку
-    # журнала с опытом было бы нечем.
-    $victim = 0; $winner = 0
-    $deadline = (Get-Date).AddSeconds(20)
-    while ((Get-Date) -lt $deadline) {
-        $victim = [int](Scalar "SELECT TOP 1 CONVERT(varchar(11),session_id) FROM sys.dm_exec_sessions WHERE host_process_id = $($pa.Id);")
-        $winner = [int](Scalar "SELECT TOP 1 CONVERT(varchar(11),session_id) FROM sys.dm_exec_sessions WHERE host_process_id = $($pb.Id);")
-        if (($victim -gt 0) -and ($winner -gt 0)) { break }
-        Start-Sleep -Milliseconds 300
+        # Номера сеансов снимаются ПОКА они живы: после отката процесса нет, и связать строку
+        # журнала с опытом было бы нечем.
+        $victim = 0; $winner = 0
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline) {
+            $victim = [int](Scalar "SELECT TOP 1 CONVERT(varchar(11),session_id) FROM sys.dm_exec_sessions WHERE host_process_id = $($pa.Id);")
+            $winner = [int](Scalar "SELECT TOP 1 CONVERT(varchar(11),session_id) FROM sys.dm_exec_sessions WHERE host_process_id = $($pb.Id);")
+            if (($victim -gt 0) -and ($winner -gt 0)) { break }
+            Start-Sleep -Milliseconds 300
+        }
+
+        $pa.WaitForExit(60000) | Out-Null
+        $pb.WaitForExit(60000) | Out-Null
+
+        if (($victim -gt 0) -and ($winner -gt 0)) {
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline) {
+                if ([int](Scalar $graphCount) -gt $before) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            $after = [int](Scalar $graphCount)
+            if ($after -gt $before) {
+                $note = if ($attempt -gt 1) { ", попыток $attempt" } else { '' }
+                Write-Host "  $why - жертва $victim, победитель $winner, графов в буфере $after$note"
+                return @($victim, $winner)
+            }
+            Write-Host "  $why - круг с попытки $attempt не состоялся, графа в буфере нет" -ForegroundColor Yellow
+        } else {
+            Write-Host "  $why - сеансы опыта с попытки $attempt не опознаны" -ForegroundColor Yellow
+        }
     }
-    if (($victim -le 0) -or ($winner -le 0)) { Fail "$why - сеансы опыта не опознаны, круг не состоялся" }
-
-    $pa.WaitForExit(60000) | Out-Null
-    $pb.WaitForExit(60000) | Out-Null
-
-    $deadline = (Get-Date).AddSeconds(30)
-    while ((Get-Date) -lt $deadline) {
-        if ([int](Scalar $graphCount) -gt $before) { break }
-        Start-Sleep -Milliseconds 500
-    }
-    $after = [int](Scalar $graphCount)
-    if ($after -le $before) { Fail "$why - граф в буфер не попал, опыт не удался, инструмент тут ни при чём" }
-    Write-Host "  $why - жертва $victim, победитель $winner, графов в буфере $after"
-    return @($victim, $winner)
+    Fail "$why - круга не вышло за $(CircleAttempts) попытки, опыт не удался, инструмент тут ни при чём"
 }
 
 try {
