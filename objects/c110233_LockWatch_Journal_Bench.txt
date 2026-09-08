@@ -54,6 +54,14 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       LatchTxt@1000000035 : TextConst 'ENU=raised %1 of the expected %2, held back %3 of the expected %4, rows %5, episodes behind the first %6;RUS=поднято %1 при ожидаемых %2, придержано %3 при ожидаемых %4, строк %5, эпизодов за первой %6';
       ChkLatchWindowTxt@1000000036 : TextConst 'ENU=an alert older than the latch window does not hold back the next one;RUS=тревога старше окна защёлки следующую не придерживает';
       LatchWindowTxt@1000000037 : TextConst 'ENU=rows after the aged alert %1 of the expected %2;RUS=строк после состаренной тревоги %1 при ожидаемых %2';
+      ChkNameAgainTxt@1000000038 : TextConst 'ENU=an episode left without a name is asked again while it is still running;RUS=эпизод, оставшийся без имени, переспрашивается, пока идёт';
+      NameAgainTxt@1000000039 : TextConst 'ENU=picked the first time %1, picked again after an empty answer %2, expected 2 and 2;RUS=выбрано в первый раз %1, после пустого ответа %2, ожидалось 2 и 2';
+      ChkNameLateTxt@1000000040 : TextConst 'ENU=the attempt count survives the next observation, and a late name reaches the row;RUS=счёт попыток переживает следующий съём, а позднее имя доезжает до строки';
+      NameLateTxt@1000000041 : TextConst 'ENU=attempts after the observation %1 of the expected 1, culprit "%2", victim "%3", document "%4";RUS=попыток после съёма %1 при ожидаемой 1, виновник "%2", жертва "%3", документ "%4"';
+      ChkNameHeldTxt@1000000042 : TextConst 'ENU=a late empty answer erases nothing, and a named episode is not asked again;RUS=поздний пустой ответ ничего не стирает, а названный эпизод больше не спрашивают';
+      NameHeldTxt@1000000043 : TextConst 'ENU=culprit "%1", victim "%2", document "%3", picked again %4 of the expected 0;RUS=виновник "%1", жертва "%2", документ "%3", выбран снова %4 при ожидаемом 0';
+      ChkNameCeilingTxt@1000000044 : TextConst 'ENU=the questions stop at the declared ceiling instead of going on for as long as the episode does;RUS=вопросы прекращаются на объявленном потолке, а не идут столько же, сколько эпизод';
+      NameCeilingTxt@1000000045 : TextConst 'ENU=attempts %1 of the ceiling %2, picked after the ceiling %3 of the expected 0;RUS=попыток %1 при потолке %2, выбран после потолка %3 при ожидаемом 0';
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -107,6 +115,15 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       AlertLatched@1000000033 : Integer;
       AlertRows@1000000034 : Integer;
       AlertEpisodes@1000000035 : Integer;
+      NamePending@1000000036 : TEMPORARY Record 110231;
+      NameA@1000000037 : Integer;
+      NameB@1000000038 : Integer;
+      NamePickedFirst@1000000039 : Integer;
+      NamePickedAgain@1000000040 : Integer;
+      NameAttemptsA@1000000041 : Integer;
+      NameAttemptsB@1000000042 : Integer;
+      NamePickedNamed@1000000043 : Integer;
+      NamePickedCeiling@1000000044 : Integer;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -224,6 +241,66 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             STRSUBSTNO(TrimTxt,Removed,Backdated,BenchRowCount,Waiters));
 
       SweepMs := Sweep;
+
+      // Имена в истории. Проверяется на СВОИХ двух эпизодах и на пустом журнале - тот
+      // самый миг после уборки, когда в журнале нет ничего чужого и счёт выбранных строк
+      // можно сравнивать с числом, а не с "примерно столько".
+      //
+      // Смысл всех четырёх: разбор идёт не один раз. Отметку виновник кладёт тогда, когда
+      // трогает таблицу документа, а это бывает и позже начала ожидания; жертва
+      // отмечается, только когда сама что-то пишет. Один вопрос на эпизод оставлял в
+      // истории пустую колонку там, где ответ появлялся секундой позже.
+      NamePass(NameIndexA,NameIndexB);
+      NameA := EntryOfIndex(NameIndexA);
+      NameB := EntryOfIndex(NameIndexB);
+      NamePickedFirst := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
+      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'');
+      Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'');
+      NamePickedAgain := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
+      Check(Passed,Total,Report,ChkNameAgainTxt,
+            (NamePickedFirst = 2) AND (NamePickedAgain = 2),
+            STRSUBSTNO(NameAgainTxt,NamePickedFirst,NamePickedAgain));
+
+      NamePass(NameIndexA,NameIndexB);
+      Episode.GET(NameA);
+      NameAttemptsA := Episode."Name Attempts";
+      Journal.SetDocument(NameA,NameDocument,NameCulprit,Parse.DocSourceFromMark,'',NameVictim);
+      Episode.GET(NameA);
+      Check(Passed,Total,Report,ChkNameLateTxt,
+            (NameAttemptsA = 1) AND (Episode."User Name" = NameCulprit) AND
+            (Episode."Victim User Name" = NameVictim) AND (Episode."Document No." = NameDocument),
+            STRSUBSTNO(NameLateTxt,NameAttemptsA,Episode."User Name",
+                       Episode."Victim User Name",Episode."Document No."));
+
+      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'');
+      Episode.GET(NameA);
+      Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
+      NamePickedNamed := 0;
+      IF NamePending.GET(NameA) THEN
+        NamePickedNamed := 1;
+      Check(Passed,Total,Report,ChkNameHeldTxt,
+            (Episode."User Name" = NameCulprit) AND (Episode."Victim User Name" = NameVictim) AND
+            (Episode."Document No." = NameDocument) AND (NamePickedNamed = 0),
+            STRSUBSTNO(NameHeldTxt,Episode."User Name",Episode."Victim User Name",
+                       Episode."Document No.",NamePickedNamed));
+
+      // Второй эпизод так и остался без ответа: на нём и проверяется потолок. Без него
+      // вопрос повторялся бы столько же, сколько живёт эпизод, а живёт он и по часу.
+      Episode.GET(NameB);
+      WHILE Episode."Name Attempts" < Parse.MaxNameAttempts DO BEGIN
+        Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'');
+        Episode.GET(NameB);
+      END;
+      NameAttemptsB := Episode."Name Attempts";
+      Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
+      NamePickedCeiling := 0;
+      IF NamePending.GET(NameB) THEN
+        NamePickedCeiling := 1;
+      Check(Passed,Total,Report,ChkNameCeilingTxt,
+            (NameAttemptsB = Parse.MaxNameAttempts) AND (NamePickedCeiling = 0),
+            STRSUBSTNO(NameCeilingTxt,NameAttemptsB,Parse.MaxNameAttempts,NamePickedCeiling));
+
+      Sweep;
 
       Worst := OpenMs;
       IF UpdateMs > Worst THEN
@@ -504,6 +581,63 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     LOCAL PROCEDURE AlertThresholdMs@33() : Integer;
     BEGIN
       EXIT(5000);
+    END;
+
+    LOCAL PROCEDURE NamePass@34(FirstIndex@1000000000 : Integer;SecondIndex@1000000001 : Integer);
+    VAR
+      Observed@1000000002 : Record 110231;
+    BEGIN
+      // Оба ждущих обязаны приходить КАЖДЫМ проходом: FinishPass закрывает эпизод,
+      // которого в проходе не было, а закрытый эпизод не разбирается вовсе.
+      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest);
+      MakeObserved(Observed,FirstIndex,FirstWaitMs);
+      Journal.Observe(Observed);
+      MakeObserved(Observed,SecondIndex,FirstWaitMs);
+      Journal.Observe(Observed);
+      Journal.FinishPass;
+    END;
+
+    LOCAL PROCEDURE EntryOfIndex@35(Index@1000000000 : Integer) : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETRANGE("Victim SPID",-Index);
+      Episode.FINDFIRST;
+      EXIT(Episode."Entry No.");
+    END;
+
+    LOCAL PROCEDURE NameIndexA@36() : Integer;
+    BEGIN
+      // Далеко за числом ждущих основного замера: строки проверки имён не должны попасть
+      // ни под один его счёт, а метка "своей" строки - отрицательный номер сессии - у них
+      // та же, и уборка заберёт их вместе со всеми.
+      EXIT(901);
+    END;
+
+    LOCAL PROCEDURE NameIndexB@37() : Integer;
+    BEGIN
+      EXIT(902);
+    END;
+
+    LOCAL PROCEDURE NameCulprit@38() : Code[50];
+    BEGIN
+      EXIT('BENCH-CULPRIT');
+    END;
+
+    LOCAL PROCEDURE NameVictim@39() : Code[50];
+    BEGIN
+      EXIT('BENCH-VICTIM');
+    END;
+
+    LOCAL PROCEDURE NameDocument@40() : Code[20];
+    BEGIN
+      EXIT('BENCH-DOC');
+    END;
+
+    LOCAL PROCEDURE NoAnswerReason@41() : Text;
+    BEGIN
+      // Причина обязана быть НЕПУСТОЙ: пустая означает "ещё не спрашивали", и проверка
+      // мерила бы тогда не то, что собиралась.
+      EXIT('мерный прогон: ни одна дорога не ответила');
     END;
 
     LOCAL PROCEDURE MakeCounterReading@22(VAR Reading@1000000000 : TEMPORARY Record 110235;Waits@1000000001 : Integer;WaitMs@1000000002 : Integer;Escalations@1000000003 : Integer);

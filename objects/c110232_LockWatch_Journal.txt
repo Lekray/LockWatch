@@ -106,30 +106,68 @@ OBJECT Codeunit 110232 LockWatch Journal
     VAR
       Picked@1000000002 : Integer;
     BEGIN
-      // Кого разбирать до номера документа. Отбор строгий нарочно: только ИДУЩИЕ эпизоды,
-      // потому что мост к документу - это блокировка, которую виновник держит ПРЯМО СЕЙЧАС.
+      // Кого разбирать до номера документа и до имён. Отбор строгий нарочно: только ИДУЩИЕ
+      // эпизоды, потому что мост к ответу - это блокировка, которую держат ПРЯМО СЕЙЧАС.
       // На закрытом эпизоде разбирать уже нечего: ожидание кончилось ровно потому, что
       // блокировку отпустили, и в dm_tran_locks её больше нет.
       //
-      // "Причина не заполнена" - это отметка "ещё не пробовали". Без неё эпизод, у которого
-      // документа нет и не будет, разбирался бы заново каждый проход, и разбор из редкого
-      // стал бы постоянным.
+      // Спрашивается это НЕ один раз, и в этом вся разница для истории. Отметку виновник
+      // кладёт в тот миг, когда трогает таблицу документа, и миг этот приходит позже
+      // начала ожидания чаще, чем раньше; жертва отмечается только тогда, когда сама
+      // что-то пишет. Один вопрос на эпизод оставлял в журнале пустую колонку там, где
+      // ответ появлялся секундой позже, - и второго случая спросить уже не было.
+      //
+      // Порядок двух заходов не случаен: сперва те, кого не спрашивали ВОВСЕ. Иначе в
+      // шторм десяток мест разбора занимали бы старые эпизоды, переспрашиваемые по
+      // третьему разу, а только что открывшиеся не получили бы и первого вопроса.
       Buffer.RESET;
       Buffer.DELETEALL;
+      Picked := PickWithin(Buffer,0,0,MaxRows);
+      Picked := Picked + PickWithin(Buffer,1,Parse.MaxNameAttempts - 1,MaxRows - Picked);
+      EXIT(Picked);
+    END;
+
+    LOCAL PROCEDURE PickWithin@19(VAR Buffer@1000000000 : TEMPORARY Record 110231;FromAttempts@1000000001 : Integer;ToAttempts@1000000002 : Integer;MaxRows@1000000003 : Integer) : Integer;
+    VAR
+      Picked@1000000004 : Integer;
+    BEGIN
+      IF MaxRows <= 0 THEN
+        EXIT(0);
       Journal.RESET;
       Journal.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
       Journal.SETRANGE(Open,TRUE);
       Journal.SETFILTER("Blocker Transaction Id",'<>%1',0);
-      Journal.SETRANGE("Document Source",Journal."Document Source"::None);
-      Journal.SETRANGE("No Document Reason",'');
+      Journal.SETRANGE("Name Attempts",FromAttempts,ToAttempts);
       IF Journal.FINDSET THEN
         REPEAT
-          Buffer := Journal;
-          Buffer.INSERT;
-          Picked := Picked + 1;
+          IF Unanswered(Journal) THEN BEGIN
+            Buffer := Journal;
+            Buffer.INSERT;
+            Picked := Picked + 1;
+          END;
         UNTIL (Picked >= MaxRows) OR (Journal.NEXT = 0);
       Journal.RESET;
       EXIT(Picked);
+    END;
+
+    LOCAL PROCEDURE Unanswered@20(VAR Row@1000000000 : Record 110231) : Boolean;
+    BEGIN
+      // Три повода спросить ещё раз, и каждый из них - это "ответа пока нет".
+      //
+      // Первый: разбора не было вовсе. Второй: виновник не назван, а назвать его есть
+      // откуда - голова цепочки НЕ чужая, значит она сессия NAV и отметку положить может.
+      // Третий: не названа жертва, и она тоже сессия NAV.
+      //
+      // Чужой головы и не-NAV жертвы в этом списке нет нарочно: за ними нашего человека
+      // нет вовсе, переходник им отметок не кладёт, и переспрашивать про них значит
+      // платить чтением dm_tran_locks за заведомо пустой ответ.
+      IF (Row."Document Source" = Row."Document Source"::None) AND (Row."No Document Reason" = '') THEN
+        EXIT(TRUE);
+      IF (Row."User Name" = '') AND NOT Row."Head Is Foreign" THEN
+        EXIT(TRUE);
+      IF (Row."Victim User Name" = '') AND (Row."Victim Is NAV" = Row."Victim Is NAV"::Yes) THEN
+        EXIT(TRUE);
+      EXIT(FALSE);
     END;
 
     [External]
@@ -138,9 +176,20 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.RESET;
       IF NOT Journal.GET(EntryNo) THEN
         EXIT;
-      Journal."Document No." := DocumentNo;
-      Journal."Document Source" := Source;
-      Journal."No Document Reason" := COPYSTR(Reason,1,MAXSTRLEN(Journal."No Document Reason"));
+      // Ответ ПРИКЛАДЫВАЕТСЯ к строке, а не перекрывает её. Разбор идёт не один раз, и
+      // второй его заход вполне может промолчать там, где первый ответил: блокировку
+      // отпустили, отметку перезаписали, спорная строка теперь другая. Записать пустоту
+      // поверх известного значило бы терять ответ ровно так же, как его теряли раньше.
+      Journal."Name Attempts" := Journal."Name Attempts" + 1;
+      IF DocumentNo <> '' THEN BEGIN
+        Journal."Document No." := DocumentNo;
+        Journal."Document Source" := Source;
+        Journal."No Document Reason" := '';
+      END ELSE
+        // Причина пишется, только пока документа нет: у названного эпизода она была бы
+        // не объяснением, а противоречием соседней колонке.
+        IF Journal."Document Source" = Journal."Document Source"::None THEN
+          Journal."No Document Reason" := COPYSTR(Reason,1,MAXSTRLEN(Journal."No Document Reason"));
       IF UserName <> '' THEN BEGIN
         // Имя приходит из отметки контекста, то есть от самой транзакции виновника, а не
         // от платформы. Это НЕ то имя, которое обещано в разделе про EnableDeadlockMonitoring:
@@ -441,6 +490,9 @@ OBJECT Codeunit 110232 LockWatch Journal
       // писалось исправно и затиралось следующим же проходом через три секунды, а
       // выглядело это как "дорога к имени жертвы не работает вовсе".
       Journal."Victim User Name" := Keep."Victim User Name";
+      // Счётчик попыток - оттуда же, и по той же причине. Съём о нём не знает и приносит
+      // ноль, а ноль здесь значит "не спрашивали ни разу": переспрашивание стало бы вечным.
+      Journal."Name Attempts" := Keep."Name Attempts";
       // Совета в этом списке нет нарочно. Всё остальное здесь - то, что установлено ОДИН
       // раз и повторно не выясняется, а совет обязан идти за строкой: ожидание растёт,
       // класс меняется, и совет, поставленный при открытии, к закрытию был бы про другое.

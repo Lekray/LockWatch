@@ -285,6 +285,13 @@ OBJECT Page 110231 LockWatch Episodes
                 ApplicationArea=#All;
                 SourceExpr="Victim User Name" }
 
+    { 56  ;2   ;Field     ;
+                Name=VictimIsNAV;
+                ToolTipML=[ENU=Specifies whether a NAV session was kept waiting. Behind a session that is not NAV there is no person of ours at all: it leaves no context mark, and the name beside it stays empty for exactly that reason.;
+                           RUS=Определяет, ждала ли сессия NAV. За сессией, которая не NAV, нашего человека нет вовсе: отметки контекста она не оставляет, и соседняя колонка с именем пуста именно поэтому.];
+                ApplicationArea=#All;
+                SourceExpr="Victim Is NAV" }
+
     { 13  ;2   ;Field     ;
                 Name=VictimSPID;
                 ToolTipML=[ENU=Specifies the server session of the victim.;

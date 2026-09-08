@@ -112,6 +112,9 @@ OBJECT Table 110231 LockWatch Episode
     { 62  ;   ;Victim User Name    ;Code50        ;CaptionML=[ENU=Victim User Name;
                                                               RUS=Кто ждал];
                                                    Editable=No }
+    { 63  ;   ;Name Attempts       ;Integer       ;CaptionML=[ENU=Name Attempts;
+                                                              RUS=Попыток назвать];
+                                                   Editable=No }
     { 70  ;   ;Blocker Statement   ;Text250       ;CaptionML=[ENU=Blocker Statement;
                                                               RUS=Последний оператор виновника] }
     { 71  ;   ;NAV Object No.      ;Integer       ;CaptionML=[ENU=NAV Object No.;
