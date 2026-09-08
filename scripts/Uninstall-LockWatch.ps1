@@ -154,25 +154,34 @@ function Adapter-Rows {
     Count-Sql "SELECT COUNT(*) FROM [dbo].[Object] WHERE [ID] = $AdapterObjectNo;"
 }
 
-# GUID нашего меню берётся из той же заготовки, по которой врезка и ставилась: сверять
-# снятие по числу, набранному отдельно, значит сверять его с собственной опечаткой.
-function Our-Menu-Id {
-    if (-not (Test-Path $nodesFile)) { return '' }
+# GUID узлов берутся из той же заготовки, по которой врезка и ставилась: сверять снятие по
+# числу, набранному отдельно, значит сверять его с собственной опечаткой.
+#
+# Разбор тот же, что у слияния - из ЗАГОЛОВКА записи узла. Наивное 'ID=[{...}]' цепляется и
+# к ParentNodeID, и к NextNodeID, а первым в заготовке стоит нулевой GUID: он есть в любом
+# чужом объекте, и проверка "врезка снята" краснела бы ВСЕГДА. Ловилось на себе 08.09.2026,
+# и нашлось только тогда, когда снятие впервые погнали с врезкой на месте.
+function Our-Menu-Ids {
+    if (-not (Test-Path $nodesFile)) { return @() }
     $text = [IO.File]::ReadAllText($nodesFile, [Text.UTF8Encoding]::new($false))
-    $m = [regex]::Match($text, 'ID=\[\{([0-9A-Fa-f\-]+)\}\]')
-    if ($m.Success) { return $m.Groups[1].Value.ToUpper() }
-    return ''
+    $ids = @()
+    foreach ($m in [regex]::Matches($text, '(?m)^\s*\{\s*\S+\s*;\[\{([0-9A-Fa-f-]{36})\}\]')) {
+        $ids += $m.Groups[1].Value.ToUpper()
+    }
+    return $ids
 }
-function Menu-Has-Ours {
-    if ($MenuTargetId -le 0) { return $false }
-    $menuId = Our-Menu-Id
-    if (-not $menuId) { Fail "не разобрать GUID нашего меню в $nodesFile" }
+# Ищутся ВСЕ наши узлы, а не одно меню: врезка, снятая наполовину, оставила бы пункты без
+# меню - и одиночная проверка по меню назвала бы это чистотой.
+function Menu-Ours-Left {
+    if ($MenuTargetId -le 0) { return @() }
+    $ids = Our-Menu-Ids
+    if ($ids.Count -eq 0) { Fail "не разобрать GUID наших узлов в $nodesFile" }
     $dump = Join-Path $outDir 'uninstall-menu-check.txt'
     if (Test-Path $dump) { Remove-Item $dump -Force }
     Invoke-Finsql "Command=ExportObjects,File=`"$dump`",Filter=`"Type=MenuSuite;ID=$MenuTargetId`"" 'uninstall-menu-export.log'
     if (-not (Test-Path $dump)) { Fail "не выгрузился MenuSuite $MenuTargetId - сверить снятие врезки нечем" }
-    $text = [System.Text.Encoding]::GetEncoding(866).GetString([IO.File]::ReadAllBytes($dump))
-    return $text.ToUpper().Contains($menuId)
+    $up = ([System.Text.Encoding]::GetEncoding(866).GetString([IO.File]::ReadAllBytes($dump))).ToUpper()
+    return @($ids | Where-Object { $up.Contains($_) })
 }
 
 Write-Host "След инструмента в базе $Database"
@@ -201,7 +210,11 @@ if ($outside.Count -gt 0) {
     }
 }
 if ($AdapterObjectNo -gt 0) { Write-Host ("  собранный переходник {0}: {1}" -f $AdapterObjectNo, (Adapter-Rows)) }
-if ($MenuTargetId -gt 0)    { Write-Host ("  врезка в MenuSuite {0}: {1}" -f $MenuTargetId, $(if (Menu-Has-Ours) { 'стоит' } else { 'нет' })) }
+if ($MenuTargetId -gt 0) {
+    $ourNodes = @(Our-Menu-Ids)
+    $standing = @(Menu-Ours-Left)
+    Write-Host ("  врезка в MenuSuite {0}: наших узлов в объекте {1} из {2}" -f $MenuTargetId, $standing.Count, $ourNodes.Count)
+}
 
 if (-not $Yes) {
     Write-Host ''
@@ -211,11 +224,23 @@ if (-not $Yes) {
     exit 0
 }
 
+# ---------- 0. отказ, если снять получится только половину ----------
+# Таблицы без службы не снять: схему SQL меняет она, и finsql без её координат отвечает
+# "Unable to process table changes ... Management Port: 0". Измерено 08.09.2026: страницы и
+# кодюниты при этом УХОДЯТ, а семь таблиц с данными остаются - снятие делает полдела и
+# оставляет базу с таблицами без кода. Это хуже отказа, поэтому отказ стоит здесь, ДО
+# первого удаления, а не разбор последствий после него.
+$svc = Get-Service $service -ErrorAction SilentlyContinue
+if ((-not $svc) -or ($svc.Status -ne 'Running')) {
+    Fail ("экземпляр $Instance не запущен, а без него снимаются только страницы и кодюниты: " +
+          "схему SQL меняет служба, и таблицы с данными остались бы в базе без кода. " +
+          "Запустите экземпляр и повторите. Опись следа читается и без службы - тот же вызов без -Yes.")
+}
+
 # ---------- 1. сторож ----------
 Write-Host ''
 Write-Host 'Снимаю сторожа'
-$serviceUp = (Get-Service $service -ErrorAction SilentlyContinue) -and ((Get-Service $service).Status -eq 'Running')
-if ($serviceUp) {
+{
     # Сначала своим же путём: кодюнит гасит выключатель И снимает задачу, а прямое удаление
     # строки оставило бы включённый выключатель - и следующая выкладка завелась бы сама.
     $runner = Join-Path $outDir 'uninstall-stopwatch.ps1'
@@ -227,8 +252,6 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
     [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host '  свой путь не отработал - добираю строки задач напрямую' -ForegroundColor Yellow }
-} else {
-    Write-Host '  служба не поднята: своим путём сторожа не снять, иду напрямую' -ForegroundColor Yellow
 }
 $left = Task-Rows
 if ($left -gt 0) {
@@ -277,14 +300,21 @@ Write-Host 'Сверка по базе'
 # Первой мерится не пустота, а РАЗНИЦА. Все три проверки ниже проходят на базе, где
 # инструмент не стоял никогда: ноль объектов там и до снятия, и после. Прогон, который
 # на такой базе объявил бы "снято", доказывал бы не снятие, а собственную бесполезность.
-Check 'до снятия было что снимать' (($objectsBefore -gt 0) -or ($tablesBefore -gt 0)) `
-    "до снятия объектов $objectsBefore, таблиц SQL $tablesBefore"
+Check 'до снятия было что снимать' (($objectsBefore -gt 0) -or ($tablesBefore -gt 0) -or ($namedBefore -gt 0)) `
+    "до снятия объектов $objectsBefore, таблиц SQL $tablesBefore, с нашим именем $namedBefore"
 $objectsLeft = Objects-In-Range
 Check 'объектов инструмента в базе не осталось' ($objectsLeft -eq 0) `
     "в диапазоне $rangeFrom-$rangeTo осталось: $(Footprint)"
 $namedLeft = Named-Objects
-Check 'объектов с нашим именем не осталось нигде, и вне диапазона тоже' ($namedLeft -eq 0) `
-    "было $namedBefore, осталось $namedLeft$(if ($namedLeft -gt 0) { ': ' + ((Named-Outside) -join '; ') })"
+# Остаток бывает и ВНУТРИ диапазона, и вне его, и печатать надо тот, который есть: пустой
+# список при ненулевом счёте читается как сбой отчёта, а не как ответ.
+$outsideLeft = @(Named-Outside)
+$namedNote = "было $namedBefore, осталось $namedLeft"
+if ($namedLeft -gt 0) {
+    if ($outsideLeft.Count -gt 0) { $namedNote += ", вне диапазона: $($outsideLeft -join '; ')" }
+    else { $namedNote += ", в диапазоне: $(Footprint)" }
+}
+Check 'объектов с нашим именем не осталось нигде, и вне диапазона тоже' ($namedLeft -eq 0) $namedNote
 $tablesLeft = Sql-Tables
 Check 'таблиц SQL не осталось, и данные ушли с ними' ($tablesLeft -eq 0) `
     "таблиц с именем LockWatch $tablesLeft"
@@ -296,9 +326,9 @@ if ($AdapterObjectNo -gt 0) {
     Check 'собранный переходник удалён' ($adapterLeft -eq 0) "объектов с номером $AdapterObjectNo $adapterLeft"
 }
 if ($MenuTargetId -gt 0) {
-    $menuLeft = Menu-Has-Ours
-    Check 'врезки в чужом меню не осталось' (-not $menuLeft) `
-        "наш GUID в выгрузке MenuSuite $MenuTargetId $(if ($menuLeft) { 'НАЙДЕН' } else { 'не найден' })"
+    $menuLeft = @(Menu-Ours-Left)
+    Check 'врезки в чужом меню не осталось' ($menuLeft.Count -eq 0) `
+        "наших узлов в выгрузке MenuSuite $MenuTargetId $($menuLeft.Count) из $(@(Our-Menu-Ids).Count)"
 }
 
 Write-Host ''
