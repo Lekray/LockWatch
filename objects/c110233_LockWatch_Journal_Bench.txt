@@ -22,6 +22,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Coverage@1000000028 : Codeunit 110238;
       Alerts@1000000033 : Codeunit 110240;
       Episode@1000000002 : Record 110231;
+      Moved@1000000046 : Record 110238;
       PassedTxt@1000000003 : TextConst 'ENU=PASS;RUS=пройдено';
       FailedTxt@1000000004 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ ';
       VerdictTxt@1000000005 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
@@ -33,8 +34,13 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       UpdateTxt@1000000011 : TextConst 'ENU=updated %1, opened %2, rows in the journal %3;RUS=обновлено %1, открыто %2, строк в журнале %3';
       ChkCloseTxt@1000000012 : TextConst 'ENU=a waiter gone from the queue closes the episode, and the outcome is judged;RUS=ушедший из очереди закрывает эпизод, и исход при этом судится';
       CloseTxt@1000000013 : TextConst 'ENU=closed %1 of %2, of them granted %3, still open %4;RUS=закрыто %1 из %2, из них дождалось %3, осталось открытых %4';
-      ChkTrimTxt@1000000014 : TextConst 'ENU=retention removes what is older than the term and does not overflow on a month;RUS=срок хранения убирает то, что старше срока, и на месяце не переполняется';
-      TrimTxt@1000000015 : TextConst 'ENU=removed %1 of the %2 backdated, left %3 of %4;RUS=убрано %1 из %2 состаренных, осталось %3 из %4';
+      ChkMirrorTxt@1000000048 : TextConst 'ENU=history repeats the journal field for field;RUS=история повторяет журнал поле в поле';
+      MirrorOkTxt@1000000049 : TextConst 'ENU=lists match;RUS=списки совпадают';
+      MirrorCountTxt@1000000050 : TextConst 'ENU=fields in the journal %1, in history %2;RUS=полей в журнале %1, в истории %2';
+      MirrorMissingTxt@1000000051 : TextConst 'ENU=field %1 %2 is missing from history;RUS=поля %1 %2 в истории нет';
+      MirrorDifferTxt@1000000052 : TextConst 'ENU=field %1 differs: %2 against %3;RUS=поле %1 разное: %2 против %3';
+      ChkTrimTxt@1000000014 : TextConst 'ENU=what is older than the term leaves the journal for history, and nothing is lost on the way;RUS=что старше срока, уезжает из журнала в историю, и по дороге ничего не теряется';
+      TrimTxt@1000000015 : TextConst 'ENU=moved %1 of the %2 backdated, left %3 of %4, landed in history %5;RUS=переехало %1 из %2 состаренных, осталось %3 из %4, доехало до истории %5';
       ChkCostTxt@1000000016 : TextConst 'ENU=the NAV half of a pass fits into the declared ceiling;RUS=NAV-половина прохода укладывается в объявленный потолок';
       CostTxt@1000000017 : TextConst 'ENU=worst pass %1 ms against the ceiling %2;RUS=худший проход %1 мс против потолка %2';
       TimingTxt@1000000018 : TextConst 'ENU=%1: %2 ms for %3 rows, %4 us per row;RUS=%1: %2 мс на %3 строк, %4 мкс на строку';
@@ -96,6 +102,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       StillOpen@1000000014 : Integer;
       Backdated@1000000015 : Integer;
       Removed@1000000016 : Integer;
+      InHistoryBefore@1000000047 : Integer;
+      MirrorNote@1000000053 : Text;
       Worst@1000000017 : Integer;
       Line@1000000018 : TEMPORARY Record 110234;
       Lines@1000000019 : Integer;
@@ -234,11 +242,25 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             STRSUBSTNO(LatchWindowTxt,AlertRows,3));
       SweepAlerts;
 
+      // Переезд проверяется с ОБЕИХ сторон: сколько ушло из журнала и сколько доехало до
+      // истории. Половина проверки - "из журнала пропало" - прошла бы и на простом
+      // удалении, то есть на потере, ради недопущения которой всё и затевалось.
       Backdated := Backdate(BackdateRows,BackdateDays);
-      Removed := Journal.TrimOldEntries(RetentionUnderTest,Waiters);
+      InHistoryBefore := MovedRowCount;
+      Removed := Journal.MoveOldEntries(RetentionUnderTest,Waiters);
       Check(Passed,Total,Report,ChkTrimTxt,
-            (Removed = Backdated) AND (Backdated = BackdateRows) AND (BenchRowCount = Waiters - BackdateRows),
-            STRSUBSTNO(TrimTxt,Removed,Backdated,BenchRowCount,Waiters));
+            (Removed = Backdated) AND (Backdated = BackdateRows) AND
+            (BenchRowCount = Waiters - BackdateRows) AND
+            (MovedRowCount - InHistoryBefore = Backdated),
+            STRSUBSTNO(TrimTxt,Removed,Backdated,BenchRowCount,Waiters,MovedRowCount - InHistoryBefore));
+
+      // Зеркало сверяется КАЖДЫМ прогоном, а не глазами при правке. Список полей истории
+      // списан с журнала, и разойтись он может только молча: добавленное поле просто не
+      // доедет при переезде, и заметят это через месяц, когда понадобится.
+      MirrorNote := MirrorGap;
+      Check(Passed,Total,Report,ChkMirrorTxt,
+            MirrorNote = '',
+            MirrorNote + MirrorOkNote(MirrorNote));
 
       SweepMs := Sweep;
 
@@ -414,6 +436,12 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Episode.RESET;
       Episode.SETFILTER("Victim SPID",'<%1',0);
       Episode.DELETEALL;
+      // Своё убирается и из ИСТОРИИ - по той же метке. Мерный прогон гонит туда строки
+      // нарочно, а история чужого удаления не терпит: тронуть в ней можно только то, что
+      // сам же и положил, и отличается это отрицательным номером сессии.
+      Moved.RESET;
+      Moved.SETFILTER("Victim SPID",'<%1',0);
+      Moved.DELETEALL;
       COMMIT;
       Elapsed := CURRENTDATETIME - Started;
       Milliseconds := Elapsed;
@@ -438,6 +466,56 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Episode.RESET;
       Episode.SETFILTER("Victim SPID",'<%1',0);
       EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE MirrorGap@43() : Text;
+    VAR
+      JournalRef@1000000000 : RecordRef;
+      HistoryRef@1000000001 : RecordRef;
+      Here@1000000002 : FieldRef;
+      There@1000000003 : FieldRef;
+      Index@1000000004 : Integer;
+    BEGIN
+      // История обязана принимать строку журнала целиком, и списки полей обязаны совпадать.
+      // Список списан с журнала слово в слово, но разойтись он может молча - на первом же
+      // поле, добавленном в журнал и забытом здесь. Сверяются номер, имя, тип и длина:
+      // одного имени мало (Text50 против Text250 прошло бы), одного типа тоже (обрезание
+      // при переезде выглядело бы как усечённый текст, а не как поломка).
+      JournalRef.OPEN(DATABASE::"LockWatch Episode");
+      HistoryRef.OPEN(DATABASE::"LockWatch Episode History");
+      IF JournalRef.FIELDCOUNT <> HistoryRef.FIELDCOUNT THEN
+        EXIT(STRSUBSTNO(MirrorCountTxt,JournalRef.FIELDCOUNT,HistoryRef.FIELDCOUNT));
+      FOR Index := 1 TO JournalRef.FIELDCOUNT DO BEGIN
+        Here := JournalRef.FIELDINDEX(Index);
+        IF NOT HistoryRef.FIELDEXIST(Here.NUMBER) THEN
+          EXIT(STRSUBSTNO(MirrorMissingTxt,Here.NUMBER,Here.NAME));
+        There := HistoryRef.FIELD(Here.NUMBER);
+        IF (Here.NAME <> There.NAME) OR (FORMAT(Here.TYPE) <> FORMAT(There.TYPE)) OR
+           (Here.LENGTH <> There.LENGTH) THEN
+          EXIT(STRSUBSTNO(MirrorDifferTxt,Here.NUMBER,
+                          Here.NAME + ' ' + FORMAT(Here.TYPE) + FORMAT(Here.LENGTH),
+                          There.NAME + ' ' + FORMAT(There.TYPE) + FORMAT(There.LENGTH)));
+      END;
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE MirrorOkNote@44(Gap@1000000000 : Text) : Text;
+    BEGIN
+      // Отчёт обязан что-то сказать и при удаче: пустая строка рядом с "пройдено" читается
+      // как недоделанная проверка.
+      IF Gap = '' THEN
+        EXIT(MirrorOkTxt);
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE MovedRowCount@42() : Integer;
+    BEGIN
+      // Считаются только СВОИ строки в истории: отрицательный номер сессии настоящему
+      // наблюдению не достаётся никогда. Считать историю целиком нельзя - на стенде в ней
+      // лежат настоящие эпизоды, и замер начал бы зависеть от того, сколько их накопилось.
+      Moved.RESET;
+      Moved.SETFILTER("Victim SPID",'<%1',0);
+      EXIT(Moved.COUNT);
     END;
 
     LOCAL PROCEDURE CountOutcomes@9(VAR Granted@1000000000 : Integer;VAR StillOpen@1000000001 : Integer);

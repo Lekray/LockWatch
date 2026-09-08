@@ -133,9 +133,10 @@ OBJECT Codeunit 110235 LockWatch Pass
       // кто может сказать, какую долю происходящего журнал вообще видит.
       Note := Note + CollectCoverage(Setup,State);
 
-      // Чистка порционная и внутри того же прохода: отдельное задание уборки - это ещё
-      // один объект, который забудут включить, и журнал будет расти молча.
-      Journal.TrimOldEntries(Setup."Retention (Days)",TrimRowsPerPass);
+      // Переезд порционный и внутри того же прохода: отдельное задание уборки - это ещё
+      // один объект, который забудут включить, и горячая таблица будет расти молча.
+      // Строка не уничтожается: срок в настройке - срок ПЕРЕЕЗДА в историю.
+      Journal.MoveOldEntries(Setup."Retention (Days)",TrimRowsPerPass);
 
       Truncated := (Setup."Max Rows per Pass" > 0) AND (RowCount >= Setup."Max Rows per Pass");
       Elapsed := CURRENTDATETIME - StartedAt;
@@ -246,10 +247,11 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF Setup."Alert Channel" = Setup."Alert Channel"::Off THEN
         EXIT('');
       Picked := Journal.PickAlerting(Pending,Setup."Alert Threshold (ms)",Parse.MaxAlertsPerPass);
-      // Чистка тревог идёт тем же сроком и той же порцией, что и чистка эпизодов, но
-      // ВНЕ условия "нашлось кого тревожить": иначе на тихом сервере старые тревоги
-      // лежали бы вечно ровно потому, что новых нет.
-      AlertMgt.TrimOldEntries(Setup."Retention (Days)",TrimRowsPerPass);
+      // Тревоги фоном НЕ чистятся, и это решение, а не забывчивость. Тревога - запись о
+      // том, что наружу ушло сообщение; стереть её значит расписаться за чужой разговор с
+      // мониторингом. Строк здесь на порядки меньше, чем эпизодов: тревога поднимается на
+      // голову цепочки один раз за окно защёлки, а не на каждое ожидание. Убирает их
+      // человек кнопкой на странице тревог - там же, где их и читает.
       IF Picked = 0 THEN
         EXIT('');
       AlertMgt.BeginPass;

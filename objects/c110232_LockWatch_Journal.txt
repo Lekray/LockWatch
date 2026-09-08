@@ -15,6 +15,7 @@ OBJECT Codeunit 110232 LockWatch Journal
     VAR
       Parse@1000000000 : Codeunit 110230;
       Journal@1000000001 : Record 110231;
+      History@1000000012 : Record 110238;
       PassAt@1000000002 : DateTime;
       PassPeriodMs@1000000003 : Integer;
       PassAlertMs@1000000011 : Integer;
@@ -280,6 +281,35 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
+    PROCEDURE HistoryStatementText@21(EntryNo@1000000000 : Integer;Blocker@1000000001 : Boolean) : Text;
+    VAR
+      Row@1000000002 : Record 110238;
+      InStr@1000000003 : InStream;
+      Body@1000000004 : BigText;
+      Result@1000000005 : Text;
+    BEGIN
+      // То же самое, но из истории. Общей процедуры на две таблицы в C/AL не выходит:
+      // тип записи в параметре фиксирован, а RecordRef блоб потоком не отдаёт. Дублируются
+      // тут двадцать строк без единого решения внутри - и это дешевле, чем переносить
+      // блобы в третью таблицу ради красоты.
+      IF NOT Row.GET(EntryNo) THEN
+        EXIT('');
+      IF Blocker THEN BEGIN
+        Row.CALCFIELDS("Blocker Statement Text");
+        IF NOT Row."Blocker Statement Text".HASVALUE THEN
+          EXIT('');
+        Row."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END ELSE BEGIN
+        Row.CALCFIELDS("Victim Statement");
+        IF NOT Row."Victim Statement".HASVALUE THEN
+          EXIT('');
+        Row."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END;
+      Body.READ(InStr);
+      Body.GETSUBTEXT(Result,1,Body.LENGTH);
+      EXIT(Result);
+    END;
+
     PROCEDURE StatementText@18(EntryNo@1000000000 : Integer;Blocker@1000000001 : Boolean) : Text;
     VAR
       Row@1000000002 : Record 110231;
@@ -406,15 +436,19 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE TrimOldEntries@5(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    PROCEDURE MoveOldEntries@5(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
     VAR
       Threshold@1000000002 : DateTime;
       Age@1000000003 : Duration;
-      Removed@1000000004 : Integer;
+      Moved@1000000004 : Integer;
     BEGIN
-      // Срок хранения объявленный, и чистка порционная: журнал показывает чужие учётные
-      // записи, а разовое DELETEALL на месяц накопленного - это блокировка собственной
-      // таблицы посреди прохода, то есть ровно то, что мы ловим.
+      // Строка не уничтожается, а ПЕРЕЕЗЖАЕТ в историю. Из журнала она уходит затем, что
+      // журнал горячий: в него пишет каждый проход и в нём же ищутся открытые эпизоды.
+      // Из истории её не удаляет ничто - ни проход, ни задача, ни срок; инструмент, тихо
+      // стирающий то, ради чего его поставили, стоит меньше, чем ничего.
+      //
+      // Переезд порционный: перенос месяца накопленного одним COMMIT - это блокировка
+      // собственной таблицы посреди прохода, то есть ровно то, что мы ловим.
       IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
         EXIT(0);
       Age := RetentionDays * Parse.MsPerDay;
@@ -426,10 +460,22 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.SETFILTER("Started At",'<%1',Threshold);
       IF Journal.FINDSET(TRUE) THEN
         REPEAT
+          // Блоб сам не приезжает: FINDSET его не читает, и TRANSFERFIELDS перенёс бы
+          // пустоту. Текст запроса - самое ценное, что есть в старом эпизоде, и потерять
+          // его при переезде значило бы обессмыслить сам переезд.
+          Journal.CALCFIELDS("Victim Statement","Blocker Statement Text");
+          History.INIT;
+          History.TRANSFERFIELDS(Journal);
+          History."Entry No." := Journal."Entry No.";
+          IF NOT History.INSERT THEN
+            // Строка с этим номером в истории уже есть: переезд однажды прервался между
+            // вставкой и удалением. Номера сквозные и выдаются один раз, поэтому двойник -
+            // это тот же самый эпизод; переписываем его свежим и идём дальше.
+            History.MODIFY;
           Journal.DELETE;
-          Removed := Removed + 1;
-        UNTIL (Removed >= MaxRows) OR (Journal.NEXT = 0);
-      EXIT(Removed);
+          Moved := Moved + 1;
+        UNTIL (Moved >= MaxRows) OR (Journal.NEXT = 0);
+      EXIT(Moved);
     END;
 
     LOCAL PROCEDURE FindOpen@6(VAR Observed@1000000000 : Record 110231) : Boolean;
@@ -533,6 +579,7 @@ OBJECT Codeunit 110232 LockWatch Journal
     LOCAL PROCEDURE NextNo@10() : Integer;
     VAR
       Last@1000000000 : Record 110231;
+      LastMoved@1000000002 : Record 110238;
     BEGIN
       // Номер снимается с конца ОДИН раз за жизнь экземпляра кодюнита, а не на каждую
       // строку: в шторм это полтысячи лишних чтений последней страницы за проход.
@@ -541,6 +588,13 @@ OBJECT Codeunit 110232 LockWatch Journal
         Last.RESET;
         IF Last.FINDLAST THEN
           NextEntryNo := Last."Entry No.";
+        // Конец ищется по ОБЕИМ таблицам. Журнал может опустеть целиком - на тихом сервере
+        // однажды все его строки становятся старше срока и уезжают, - и счёт, начатый
+        // заново с единицы, столкнулся бы с номерами, которые в истории уже заняты.
+        LastMoved.RESET;
+        IF LastMoved.FINDLAST THEN
+          IF LastMoved."Entry No." > NextEntryNo THEN
+            NextEntryNo := LastMoved."Entry No.";
       END;
       NextEntryNo := NextEntryNo + 1;
       EXIT(NextEntryNo);

@@ -63,6 +63,21 @@ OBJECT Page 110231 LockWatch Episodes
                                  CurrPage.UPDATE(FALSE);
                                END;
                                 }
+      { 60      ;1   ;Action    ;
+                      Name=OpenHistory;
+                      CaptionML=[ENU=History;
+                                 RUS=История];
+                      ToolTipML=[ENU=Open the history: episodes older than the term from the setup move there and stay. Nothing deletes them - not a pass, not a task, not a term - only a person, by hand.;
+                                 RUS=Открыть историю: эпизоды старше срока из настройки переезжают туда и остаются. Их не удаляет ничто - ни проход, ни задача, ни срок - только человек, руками.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=History;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Episode History");
+                               END;
+                                }
       { 44      ;1   ;Action    ;
                       Name=OpenSummary;
                       CaptionML=[ENU=Summary;

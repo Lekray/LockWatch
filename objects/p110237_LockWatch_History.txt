@@ -1,0 +1,291 @@
+OBJECT Page 110237 LockWatch Episode History
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Episode History;
+               RUS=История эпизодов блокировок];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    Editable=No;
+    SourceTable=Table110238;
+    SourceTableView=SORTING(Started At)
+                    ORDER(Descending);
+    PageType=List;
+    ActionList=ACTIONS
+    {
+      { 40      ;    ;ActionContainer;
+                      Name=HistoryActions;
+                      ActionContainerType=ActionItems }
+      { 41      ;1   ;Action    ;
+                      Name=OpenJournal;
+                      CaptionML=[ENU=Journal;
+                                 RUS=Журнал];
+                      ToolTipML=[ENU=Open the journal: what is happening now and what happened recently. An episode moves here from there once it is older than the term in the setup.;
+                                 RUS=Открыть журнал: что идёт сейчас и что было недавно. Сюда эпизод переезжает оттуда, когда становится старше срока из настройки.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Journal;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PAGE.RUN(PAGE::"LockWatch Episodes");
+                               END;
+                                }
+      { 42      ;1   ;Action    ;
+                      Name=ShowBlockerStatement;
+                      CaptionML=[ENU=Culprit Statement;
+                                 RUS=Запрос виновника];
+                      ToolTipML=[ENU=Show the statement the culprit was running, in full and with scrolling. It is kept only if the setup had statement collection on at the moment the episode opened.;
+                                 RUS=Показать запрос, который исполнял виновник, целиком и с прокруткой. Хранится он только если в момент открытия эпизода в настройке был включён сбор операторов.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=ViewDetails;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowStatement(TRUE);
+                               END;
+                                }
+      { 43      ;1   ;Action    ;
+                      Name=ShowVictimStatement;
+                      CaptionML=[ENU=Victim Statement;
+                                 RUS=Запрос жертвы];
+                      ToolTipML=[ENU=Show the statement the victim was waiting on.;
+                                 RUS=Показать запрос, на котором стояла жертва.];
+                      ApplicationArea=#All;
+                      Image=ViewDetails;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowStatement(FALSE);
+                               END;
+                                }
+      { 44      ;1   ;Action    ;
+                      Name=PurgeShown;
+                      CaptionML=[ENU=Delete What Is Shown;
+                                 RUS=Удалить показанное];
+                      ToolTipML=[ENU=Delete exactly the entries this list is showing right now. This is the only place in the tool where history is ever deleted, and a person has to press it: nothing removes history on its own - not a pass, not a task, not a term.;
+                                 RUS=Удалить ровно те строки, которые список показывает сейчас. Это единственное место во всём инструменте, где история вообще удаляется, и нажать его должен человек: сама по себе она не убывает - ни от прохода, ни от задачи, ни по сроку.];
+                      ApplicationArea=#All;
+                      Image=Delete;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PurgeShown;
+                               END;
+                               }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                Name=StartedAt;
+                ToolTipML=[ENU=Specifies when the wait began.;
+                           RUS=Определяет, когда ожидание началось.];
+                ApplicationArea=#All;
+                SourceExpr="Started At" }
+
+    { 4   ;2   ;Field     ;
+                Name=EndedAt;
+                ToolTipML=[ENU=Specifies the last instant the wait was certainly still going. The exact end is not knowable: the victim vanishes from the queue somewhere between two observations.;
+                           RUS=Определяет последний миг, когда ожидание ТОЧНО ещё шло. Точный конец знать неоткуда: жертва исчезает из очереди где-то между двумя наблюдениями.];
+                ApplicationArea=#All;
+                SourceExpr="Ended At" }
+
+    { 5   ;2   ;Field     ;
+                Name=MaxWait;
+                ToolTipML=[ENU=Specifies how long the wait lasted, in milliseconds. The number comes from the server counter and not from the difference of two observations.;
+                           RUS=Определяет, сколько ожидание длилось, в миллисекундах. Число взято у счётчика сервера, а не из разницы двух наблюдений.];
+                ApplicationArea=#All;
+                SourceExpr="Max Wait (ms)" }
+
+    { 6   ;2   ;Field     ;
+                Name=Class;
+                ToolTipML=[ENU=Specifies what kind of trouble this is. The classes are cured differently.;
+                           RUS=Определяет, какого рода эта беда. Лечатся классы по-разному.];
+                ApplicationArea=#All;
+                SourceExpr=Class }
+
+    { 7   ;2   ;Field     ;
+                Name=Outcome;
+                ToolTipML=[ENU=Specifies how the wait ended. Undetermined is an honest answer and not a gap.;
+                           RUS=Определяет, чем ожидание кончилось. "Не определён" - честный ответ, а не пропуск.];
+                ApplicationArea=#All;
+                SourceExpr=Outcome }
+
+    { 8   ;2   ;Field     ;
+                Name=NavTableName;
+                ToolTipML=[ENU=Specifies the NAV table the fight was over. The name is taken from the SQL name of the object the lock sat on.;
+                           RUS=Определяет таблицу NAV, за которую шёл спор. Имя снято с имени объекта SQL, на котором стояла блокировка.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Table Name" }
+
+    { 9   ;2   ;Field     ;
+                Name=NavKeyNo;
+                ToolTipML=[ENU=Specifies the NAV key number. There are two parsing rules, not one: for a table it is the suffix of the index name, for a SIFT view it is the number after the marker.;
+                           RUS=Определяет номер ключа NAV. Правил разбора два, а не одно: у таблицы это суффикс имени индекса, у представления SIFT - число после метки.];
+                ApplicationArea=#All;
+                SourceExpr="NAV Key No." }
+
+    { 10  ;2   ;Field     ;
+                Name=DocumentNo;
+                ToolTipML=[ENU=Specifies the document the fight was over. Empty is explained in the next column, not left silent.;
+                           RUS=Определяет документ, за который шёл спор. Пустота объясняется соседней колонкой, а не оставляется молчанием.];
+                ApplicationArea=#All;
+                SourceExpr="Document No." }
+
+    { 11  ;2   ;Field     ;
+                Name=NoDocumentReason;
+                ToolTipML=[ENU=Specifies why the document could not be named.;
+                           RUS=Определяет, почему документ назвать не удалось.];
+                ApplicationArea=#All;
+                SourceExpr="No Document Reason" }
+
+    { 12  ;2   ;Field     ;
+                Name=UserName;
+                ToolTipML=[ENU=Specifies the NAV account behind the culprit. It comes from the context mark, and only a NAV session lays one down.;
+                           RUS=Определяет учётную запись NAV за виновником. Приходит она из отметки контекста, а отметку кладёт только сессия NAV.];
+                ApplicationArea=#All;
+                SourceExpr="User Name" }
+
+    { 13  ;2   ;Field     ;
+                Name=VictimUserName;
+                ToolTipML=[ENU=Specifies who was kept waiting, from the victim's own context mark.;
+                           RUS=Определяет, кого задержали, - из собственной отметки жертвы.];
+                ApplicationArea=#All;
+                SourceExpr="Victim User Name" }
+
+    { 14  ;2   ;Field     ;
+                Name=BlockerLogin;
+                ToolTipML=[ENU=Specifies the SQL login of the session that held the lock. For an outside connection this is the only answer to "who" there is.;
+                           RUS=Определяет логин SQL сеанса, который держал блокировку. Для чужого соединения это единственный возможный ответ на вопрос "кто".];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Login" }
+
+    { 15  ;2   ;Field     ;
+                Name=BlockerProgram;
+                ToolTipML=[ENU=Specifies how the blocking session introduced itself to the server. Often it says more than the login.;
+                           RUS=Определяет, как держащий сеанс представился серверу. Часто это говорит больше логина.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Program" }
+
+    { 16  ;2   ;Field     ;
+                Name=BlockerHost;
+                ToolTipML=[ENU=Specifies the machine the blocking session came from.;
+                           RUS=Определяет машину, с которой пришёл держащий сеанс.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Host" }
+
+    { 17  ;2   ;Field     ;
+                Name=VictimsBehindHead;
+                ToolTipML=[ENU=Specifies how many were waiting behind the head of the chain. This is what tells a nuisance from a stoppage.;
+                           RUS=Определяет, сколько ждало за головой цепочки. Именно это и отличает досаду от остановки.];
+                ApplicationArea=#All;
+                SourceExpr="Victims Behind Head" }
+
+    { 18  ;2   ;Field     ;
+                Name=HeldMode;
+                ToolTipML=[ENU=Specifies the mode of the lock that was held.;
+                           RUS=Определяет режим блокировки, которую держали.];
+                ApplicationArea=#All;
+                SourceExpr="Held Mode" }
+
+    { 19  ;2   ;Field     ;
+                Name=Advice;
+                ToolTipML=[ENU=Specifies what to do about this kind of trouble. The advice follows from the class and the outcome, not from a guess.;
+                           RUS=Определяет, что с этой бедой делать. Совет следует из класса и исхода, а не из догадки.];
+                ApplicationArea=#All;
+                SourceExpr=Advice }
+
+    { 20  ;2   ;Field     ;
+                Name=BlockerStatement;
+                ToolTipML=[ENU=Specifies the beginning of the culprit's statement. The full text is behind the button above.;
+                           RUS=Определяет начало запроса виновника. Целиком он - за кнопкой наверху.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Statement" }
+
+    { 21  ;2   ;Field     ;
+                Name=EntryNo;
+                ToolTipML=[ENU=Specifies the entry number. It travels with the episode from the journal: an episode keeps the number it was given, wherever it lies.;
+                           RUS=Определяет номер записи. Он переезжает вместе с эпизодом из журнала: номер выдаётся один раз и остаётся при нём, где бы тот ни лежал.];
+                ApplicationArea=#All;
+                SourceExpr="Entry No." }
+  }
+  CODE
+  {
+    VAR
+      Journal@1000000000 : Codeunit 110232;
+      BlockerTxt@1000000001 : TextConst 'ENU=Culprit, SPID %1;RUS=Виновник, сеанс %1';
+      VictimTxt@1000000002 : TextConst 'ENU=Victim, SPID %1;RUS=Жертва, сеанс %1';
+      NoStatementErr@1000000003 : TextConst 'ENU=There is no statement text in this entry. The journal keeps it only when Collect Statement Values is on in the setup, and only from the moment it was switched on.;RUS=Текста запроса в этой строке нет. Журнал хранит его только при включённом признаке "Собирать значения в операторах" и только с мига, когда его включили.';
+      NothingShownTxt@1000000004 : TextConst 'ENU=The list is showing nothing, so there is nothing to delete.;RUS=Список сейчас ничего не показывает, значит и удалять нечего.';
+      ConfirmPurgeTxt@1000000005 : TextConst 'ENU=Delete %1 entries from history? This is what the list is showing right now, and it cannot be undone.;RUS=Удалить из истории %1 записей? Это ровно то, что список показывает сейчас, и вернуть их будет неоткуда.';
+      PurgedTxt@1000000006 : TextConst 'ENU=Deleted from history: %1.;RUS=Удалено из истории: %1.';
+
+    LOCAL PROCEDURE ShowStatement@1(Blocker@1000000000 : Boolean);
+    VAR
+      Viewer@1000000001 : Page 110236;
+      Body@1000000002 : Text;
+      Whose@1000000003 : Text;
+    BEGIN
+      Body := Journal.HistoryStatementText("Entry No.",Blocker);
+      // Пустой текст объясняется словами, а не пустым окном. Причин у пустоты две, и обе
+      // не ошибка: признак выключен, либо эпизод открылся раньше, чем его включили.
+      IF Body = '' THEN
+        ERROR(NoStatementErr);
+      IF Blocker THEN
+        Whose := STRSUBSTNO(BlockerTxt,"Blocker SPID")
+      ELSE
+        Whose := STRSUBSTNO(VictimTxt,"Victim SPID");
+      Viewer.SetStatement(Whose,Body);
+      Viewer.RUNMODAL;
+    END;
+
+    LOCAL PROCEDURE PurgeShown@2();
+    VAR
+      Doomed@1000000000 : Record 110238;
+      Rows@1000000001 : Integer;
+    BEGIN
+      // Единственное место во всём инструменте, где история удаляется, и нажать его должен
+      // человек. Отбор берётся С ЭКРАНА: что человек видит, то и уйдёт. Кнопка "удалить
+      // старше N дней" спрашивала бы число вслепую, и промах в ней виден только потом.
+      //
+      // Число называется ДО вопроса, а не после: "удалить показанное" без счёта - это
+      // предложение согласиться неизвестно на что.
+      Doomed.COPYFILTERS(Rec);
+      Rows := Doomed.COUNT;
+      IF Rows = 0 THEN BEGIN
+        MESSAGE(NothingShownTxt);
+        EXIT;
+      END;
+      IF NOT CONFIRM(ConfirmPurgeTxt,FALSE,Rows) THEN
+        EXIT;
+      Doomed.DELETEALL;
+      CurrPage.UPDATE(FALSE);
+      MESSAGE(PurgedTxt,Rows);
+    END;
+
+    BEGIN
+    {
+      История отдельной страницей, а не отбором на журнале, потому что смотрят их по
+      разным поводам. Журнал открывают с вопросом "что происходит и что было только что";
+      историю - с вопросом "было ли это раньше и повторяется ли". Колонки здесь под второй
+      вопрос: когда, сколько, за что, кто - и ни одной про "идёт ли сейчас", потому что в
+      истории не идёт ничего.
+
+      Удаление тут одно и ручное. Всё остальное в инструменте историю только пополняет.
+    }
+    END.
+  }
+}
