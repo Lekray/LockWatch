@@ -1,0 +1,321 @@
+OBJECT XMLport 110230 LockWatch History File
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch History File;
+               RUS=Файл истории блокировок];
+    Direction=Both;
+    Encoding=UTF-8;
+  }
+  ELEMENTS
+  {
+    { [{2BAE776E-28EB-4E96-9755-12507FAF5681}];  ;LockWatchHistory    ;Element ;Text     }
+
+    { [{ED34C887-5B48-4323-A291-0961C1D006C6}];1 ;Episode             ;Element ;Table   ;
+                                                  VariableName=Episode;
+                                                  SourceTable=Table110238;
+                                                  AutoReplace=Yes }
+
+    { [{3419911F-B7D1-4AAE-B23E-7FA410AC456D}];2 ;EntryNo             ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Entry No. }
+
+    { [{5C5E3D5E-9767-4E00-8548-74DAC4D5DF5B}];2 ;VictimSPID          ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Victim SPID }
+
+    { [{7A1BEE47-161B-4223-BE7E-9CED7ECE735D}];2 ;VictimTransactionId ;Element ;Field   ;
+                                                  DataType=BigInteger;
+                                                  SourceField=Episode::Victim Transaction Id }
+
+    { [{900D2E9E-B48D-4A18-A5E1-214BCBA28DB9}];2 ;VictimIsNAV         ;Element ;Field   ;
+                                                  DataType=Option;
+                                                  SourceField=Episode::Victim Is NAV }
+
+    { [{158C4F24-07C3-436E-944C-69F0DB2F20EE}];2 ;VictimHost          ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Victim Host }
+
+    { [{95541D66-B18D-4A5C-8B0C-8E4FD08568C8}];2 ;VictimProcessId     ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Victim Process Id }
+
+    { [{50160C55-7C19-447B-9F60-A78C0A558E90}];2 ;BlockerSPID         ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Blocker SPID }
+
+    { [{DDCE0BE5-E15D-4E7D-A40C-522372656551}];2 ;BlockerTransactionId;Element ;Field   ;
+                                                  DataType=BigInteger;
+                                                  SourceField=Episode::Blocker Transaction Id }
+
+    { [{B114F412-47BC-42B9-B35E-C6B50A279106}];2 ;HeadSPID            ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Head SPID }
+
+    { [{1B1BE76A-DEF5-49E4-8AA6-F78B54F6C795}];2 ;ChainDepth          ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Chain Depth }
+
+    { [{09BD3495-71D2-4262-BFE4-37AA89427BD9}];2 ;VictimsBehindHead   ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Victims Behind Head }
+
+    { [{90BD32EC-1BAD-4AC8-9CEE-BBBEBC598B52}];2 ;ChainRing           ;Element ;Field   ;
+                                                  DataType=Boolean;
+                                                  SourceField=Episode::Chain Ring }
+
+    { [{1808E056-A639-44C3-B766-2A739FDFF959}];2 ;HeadIsForeign       ;Element ;Field   ;
+                                                  DataType=Boolean;
+                                                  SourceField=Episode::Head Is Foreign }
+
+    { [{BA7826BF-A284-4C69-8A46-E4A8EE95130B}];2 ;SQLObjectId         ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::SQL Object Id }
+
+    { [{D76F2111-A657-4C9B-8DEE-78763DF7D6FD}];2 ;ResourceKind        ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  SourceField=Episode::Resource Kind }
+
+    { [{476C643F-F10E-4804-B797-1965AF3391A6}];2 ;HobtId              ;Element ;Field   ;
+                                                  DataType=BigInteger;
+                                                  SourceField=Episode::Hobt Id }
+
+    { [{1BA30DE4-5BB3-4D47-95B4-2F2B1E99B10E}];2 ;DatabaseId          ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Database Id }
+
+    { [{FDB9B973-6F5B-4907-8A45-AA32D93147A9}];2 ;HeldMode            ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  SourceField=Episode::Held Mode }
+
+    { [{4EE06C45-15D0-4179-8B26-4571DBA9AD20}];2 ;WaitType            ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  SourceField=Episode::Wait Type }
+
+    { [{0314F929-1413-405D-9A66-E8A6738560A8}];2 ;SQLObjectName       ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::SQL Object Name }
+
+    { [{4460354D-6296-4EBB-8AAB-10EFEDD48DA1}];2 ;NAVTableName        ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::NAV Table Name }
+
+    { [{C0A1AD30-8659-4503-945C-FA49D620FEE0}];2 ;NAVKeyNo            ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::NAV Key No. }
+
+    { [{2359D94E-EA7A-4287-93A3-945DF5CD767B}];2 ;OnSIFT              ;Element ;Field   ;
+                                                  DataType=Boolean;
+                                                  SourceField=Episode::On SIFT }
+
+    { [{1200BCE9-5874-44A4-9F36-17E5136BC1C6}];2 ;ResourceUnresolved  ;Element ;Field   ;
+                                                  DataType=Boolean;
+                                                  SourceField=Episode::Resource Unresolved }
+
+    { [{31BDED5A-57B8-4F01-8747-00FDFA7F214F}];2 ;StartedAt           ;Element ;Field   ;
+                                                  DataType=DateTime;
+                                                  SourceField=Episode::Started At }
+
+    { [{7C499B1E-467D-431D-A414-5955255830EB}];2 ;EndedAt             ;Element ;Field   ;
+                                                  DataType=DateTime;
+                                                  SourceField=Episode::Ended At }
+
+    { [{4A83514C-8498-4FCE-96C6-2044F0C223FE}];2 ;LastSeenAt          ;Element ;Field   ;
+                                                  DataType=DateTime;
+                                                  SourceField=Episode::Last Seen At }
+
+    { [{EB3D4D2C-3377-40D1-A199-3165BB082D2A}];2 ;MaxWaitms           ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Max Wait (ms) }
+
+    { [{B916D6D0-625D-43CF-AFB4-C0E6131BDBBA}];2 ;LastWaitms          ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Last Wait (ms) }
+
+    { [{6ADB1170-EF8E-402D-911E-BB7438221ADD}];2 ;BlockerTranBeganAt  ;Element ;Field   ;
+                                                  DataType=DateTime;
+                                                  SourceField=Episode::Blocker Tran Began At }
+
+    { [{A397AAD8-12EA-4D6F-97EB-1A1B48A20B34}];2 ;Open                ;Element ;Field   ;
+                                                  DataType=Boolean;
+                                                  SourceField=Episode::Open }
+
+    { [{C2A0C3D9-0944-428E-B7BF-C691A33F2769}];2 ;Outcome             ;Element ;Field   ;
+                                                  DataType=Option;
+                                                  SourceField=Episode::Outcome }
+
+    { [{299E4782-84A6-4634-ABBF-2B760E9FE788}];2 ;Class               ;Element ;Field   ;
+                                                  DataType=Option;
+                                                  SourceField=Episode::Class }
+
+    { [{550FF149-F90D-4EDE-995D-EE38196DF23D}];2 ;DeadlockId          ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  SourceField=Episode::Deadlock Id }
+
+    { [{A29DC0CB-E119-4445-9446-E5BAC65B8F8F}];2 ;DocumentNo          ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  SourceField=Episode::Document No. }
+
+    { [{834D880C-B77D-4FA2-9FF9-6B25ABF0510B}];2 ;DocumentSource      ;Element ;Field   ;
+                                                  DataType=Option;
+                                                  SourceField=Episode::Document Source }
+
+    { [{AE4A6179-D4F5-4428-8113-B66D9A3F67E7}];2 ;NoDocumentReason    ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::No Document Reason }
+
+    { [{2AD3427D-7A74-40EA-BD87-E48110FB115E}];2 ;UserName            ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  SourceField=Episode::User Name }
+
+    { [{C37B49EA-C78C-4208-AF2F-2BF34404CD5E}];2 ;UserSource          ;Element ;Field   ;
+                                                  DataType=Option;
+                                                  SourceField=Episode::User Source }
+
+    { [{79302811-F0F8-4F5F-8AE8-2688806B587F}];2 ;VictimUserName      ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  SourceField=Episode::Victim User Name }
+
+    { [{FD167122-35CD-4226-83F6-76CECC7D7CCE}];2 ;NameAttempts        ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::Name Attempts }
+
+    { [{DB6706DB-644E-4B8F-807C-64966C119F0F}];2 ;BlockerLogin        ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Blocker Login }
+
+    { [{D6998593-F8CC-40BA-9D5C-7E8697C1A817}];2 ;BlockerHost         ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Blocker Host }
+
+    { [{79EB91F3-8B78-4228-90C1-E3BCF5734280}];2 ;BlockerProgram      ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Blocker Program }
+
+    { [{94E5F18E-197F-485A-BD87-0234B0623882}];2 ;BlockerStatement    ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Blocker Statement }
+
+    { [{D98F2E8D-83C4-4B89-B87D-DAABF27D005F}];2 ;NAVObjectNo         ;Element ;Field   ;
+                                                  DataType=Integer;
+                                                  SourceField=Episode::NAV Object No. }
+
+    { [{6AD975F1-DB92-4AA2-9E85-0F128CA785BE}];2 ;BlockerALScope      ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Blocker AL Scope }
+
+    { [{1F37DDEE-4B07-49FC-9FDD-B3864CFAE6B0}];2 ;Advice              ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Advice }
+
+    { [{D4806F3C-C7BE-4BA7-ADAB-4EBD92E9086A}];2 ;AdviceEvidence      ;Element ;Field   ;
+                                                  DataType=Text;
+                                                  SourceField=Episode::Advice Evidence }
+
+    { [{00ADB93C-2941-4C16-8184-123D410D113F}];2 ;VictimStatement     ;Element ;Text    ;
+                                                  VariableName=VictimFull;
+                                                  MinOccurs=Zero;
+                                                  Export::OnBeforePassVariable=BEGIN
+                                                                                 VictimFull := ReadBlob(FALSE);
+                                                                               END;
+
+                                                  Import::OnAfterAssignVariable=BEGIN
+                                                                                  WriteBlob(FALSE,VictimFull);
+                                                                                END;
+                                                   }
+
+    { [{3C9CED0E-7F0E-4CFE-81DC-50B62AB27638}];2 ;BlockerStatementText;Element ;Text    ;
+                                                  VariableName=BlockerFull;
+                                                  MinOccurs=Zero;
+                                                  Export::OnBeforePassVariable=BEGIN
+                                                                                 BlockerFull := ReadBlob(TRUE);
+                                                                               END;
+
+                                                  Import::OnAfterAssignVariable=BEGIN
+                                                                                  WriteBlob(TRUE,BlockerFull);
+                                                                                END;
+                                                   }
+  }
+  EVENTS
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    LOCAL PROCEDURE ReadBlob@1(Blocker@1000000000 : Boolean) : Text;
+    VAR
+      InStr@1000000001 : InStream;
+      Body@1000000002 : BigText;
+      Result@1000000003 : Text;
+    BEGIN
+      // Блоб сам не приезжает: выборка его не читает, и без CALCFIELDS выгрузка увезла бы
+      // пустоту вместо текста запроса - молча, потому что пустой текст не отличить от
+      // выключенного сбора операторов. Это самое ценное, что есть в старом эпизоде.
+      IF Blocker THEN BEGIN
+        Episode.CALCFIELDS("Blocker Statement Text");
+        IF NOT Episode."Blocker Statement Text".HASVALUE THEN
+          EXIT('');
+        Episode."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END ELSE BEGIN
+        Episode.CALCFIELDS("Victim Statement");
+        IF NOT Episode."Victim Statement".HASVALUE THEN
+          EXIT('');
+        Episode."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END;
+      Body.READ(InStr);
+      Body.GETSUBTEXT(Result,1,Body.LENGTH);
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE WriteBlob@2(Blocker@1000000000 : Boolean;Body@1000000001 : Text);
+    VAR
+      OutStr@1000000002 : OutStream;
+    BEGIN
+      // Пишется ДО сохранения строки: элементы разбираются по порядку, а запись в таблицу
+      // случается на закрытии табличного элемента, и блоб уезжает в базу вместе с ней.
+      IF Body = '' THEN
+        EXIT;
+      IF Blocker THEN BEGIN
+        Episode."Blocker Statement Text".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+        OutStr.WRITETEXT(Body);
+      END ELSE BEGIN
+        Episode."Victim Statement".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+        OutStr.WRITETEXT(Body);
+      END;
+    END;
+
+    BEGIN
+    {
+      Выгрузка истории в файл и возврат её из файла. Нужна она ради одного случая, и случай
+      этот неизбежен: снятие инструмента сносит историю вместе со всеми его таблицами. Год
+      наблюдений уходит вместе с объектами, и записи об этом в документе мало - нужна кнопка.
+
+      Направление ОБА нарочно. Выгрузка без возврата - это не сохранение, а утешение:
+      проверить её можно только тем, что она вставляется обратно.
+
+      AutoReplace=Yes: строка с тем же номером записи в истории - это тот же самый эпизод,
+      номера выдаются один раз и живут с ним. Возврат поверх существующей строки обязан её
+      заменить, а не отказаться на ключе.
+
+      Текст запроса едет отдельными элементами, привязанными к переменным: типа данных под
+      BLOB у XMLport нет вовсе. Молча выбросить его было бы худшим из решений - выгрузка
+      выглядела бы полной.
+    }
+    END.
+  }
+}

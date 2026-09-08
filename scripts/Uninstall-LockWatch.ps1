@@ -281,7 +281,11 @@ Write-Host 'Удаляю объекты инструмента'
 # Координаты службы нужны таблицам: их снятие - это изменение схемы SQL, и проводит его
 # служба. Без них finsql падает с "Management Port: 0" уже после удаления страниц.
 $navServerArgs = ",NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort"
-foreach ($type in 'Page', 'Codeunit', 'Table') {
+# Порядок не случайный, и XMLport стоит в нём ПЕРЕД таблицей: он на неё ссылается, а
+# удалённая таблица оставила бы ссылку в никуда. Список типов - место, о котором забывают:
+# новый тип объекта в проекте появляется раз в полгода, а снятие его не заметит и уйдёт
+# зелёным, оставив объект в чужой базе. Сверка ниже ловит это по диапазону, а не по списку.
+foreach ($type in 'Page', 'XMLport', 'Codeunit', 'Table') {
     Write-Host "  $type"
     Invoke-Finsql "Command=DeleteObjects,Filter=`"Type=$type;ID=$rangeFrom..$rangeTo`",SynchronizeSchemaChanges=Force$navServerArgs" "uninstall-$type.log"
 }

@@ -66,6 +66,34 @@ OBJECT Page 110237 LockWatch Episode History
                                  ShowStatement(FALSE);
                                END;
                                 }
+      { 45      ;1   ;Action    ;
+                      Name=SaveToFile;
+                      CaptionML=[ENU=Save to File;
+                                 RUS=Выгрузить в файл];
+                      ToolTipML=[ENU=Save what the list is showing into a file. Uninstalling the tool drops history together with its other tables, and a year of observation goes with them - so this is done before, not after. The file goes back in with the button next to this one.;
+                                 RUS=Сохранить в файл то, что показывает список. Снятие инструмента сносит историю вместе с остальными его таблицами, и год наблюдений уходит вместе с ними - поэтому выгружать надо ДО, а не после. Возвращается файл соседней кнопкой.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Export;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 SaveToFile;
+                               END;
+                                }
+      { 46      ;1   ;Action    ;
+                      Name=LoadFromFile;
+                      CaptionML=[ENU=Load from File;
+                                 RUS=Загрузить из файла];
+                      ToolTipML=[ENU=Put a saved file back into history. An entry that is already here is replaced by the one from the file: the entry number is given once and stays with the episode, so the same number is the same episode.;
+                                 RUS=Вернуть сохранённый файл в историю. Запись, которая здесь уже есть, заменяется той, что в файле: номер записи выдаётся один раз и живёт с эпизодом, поэтому тот же номер - тот же эпизод.];
+                      ApplicationArea=#All;
+                      Image=Import;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 LoadFromFile;
+                               END;
+                                }
       { 44      ;1   ;Action    ;
                       Name=PurgeShown;
                       CaptionML=[ENU=Delete What Is Shown;
@@ -232,6 +260,7 @@ OBJECT Page 110237 LockWatch Episode History
       NothingShownTxt@1000000004 : TextConst 'ENU=The list is showing nothing, so there is nothing to delete.;RUS=Список сейчас ничего не показывает, значит и удалять нечего.';
       ConfirmPurgeTxt@1000000005 : TextConst 'ENU=Delete %1 entries from history? This is what the list is showing right now, and it cannot be undone.;RUS=Удалить из истории %1 записей? Это ровно то, что список показывает сейчас, и вернуть их будет неоткуда.';
       PurgedTxt@1000000006 : TextConst 'ENU=Deleted from history: %1.;RUS=Удалено из истории: %1.';
+      ConfirmSaveTxt@1000000007 : TextConst 'ENU=Save %1 entries to a file? This is what the list is showing right now.;RUS=Выгрузить в файл %1 записей? Это то, что список показывает сейчас.';
 
     LOCAL PROCEDURE ShowStatement@1(Blocker@1000000000 : Boolean);
     VAR
@@ -250,6 +279,32 @@ OBJECT Page 110237 LockWatch Episode History
         Whose := STRSUBSTNO(VictimTxt,"Victim SPID");
       Viewer.SetStatement(Whose,Body);
       Viewer.RUNMODAL;
+    END;
+
+    LOCAL PROCEDURE SaveToFile@3();
+    VAR
+      Shown@1000000000 : Record 110238;
+      Rows@1000000001 : Integer;
+    BEGIN
+      // Выгружается то, что ПОКАЗАНО: отбор на экране и есть ответ на вопрос "что именно
+      // сохранить". Число называется до выгрузки - по размеру файла человек его не узнает.
+      Shown.COPYFILTERS(Rec);
+      Rows := Shown.COUNT;
+      IF Rows = 0 THEN BEGIN
+        MESSAGE(NothingShownTxt);
+        EXIT;
+      END;
+      IF NOT CONFIRM(ConfirmSaveTxt,TRUE,Rows) THEN
+        EXIT;
+      XMLPORT.RUN(XMLPORT::"LockWatch History File",FALSE,FALSE,Shown);
+    END;
+
+    LOCAL PROCEDURE LoadFromFile@4();
+    BEGIN
+      // Возврат ничего не спрашивает про отбор: что лежит в файле, то и вернётся. Строка с
+      // тем же номером заменяется - номер выдаётся один раз и живёт с эпизодом.
+      XMLPORT.RUN(XMLPORT::"LockWatch History File",FALSE,TRUE);
+      CurrPage.UPDATE(FALSE);
     END;
 
     LOCAL PROCEDURE PurgeShown@2();
