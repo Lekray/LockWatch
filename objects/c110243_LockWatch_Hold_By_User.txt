@@ -1,0 +1,100 @@
+OBJECT Codeunit 110243 LockWatch Hold By User
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      NoContextErr@1000000000 : TextConst 'ENU=No context table is switched on. The holder locks a row of the very table the tool was told to watch, and without such a table there is nothing to hold.;RUS=Ни одна таблица контекста не включена. Держатель берёт строку той самой таблицы, за которой велено следить, и без неё держать нечего.';
+      NoRowErr@1000000001 : TextConst 'ENU=Row %1 is not in table %2. It is put down by the run itself: the tool never writes into a live document.;RUS=Строки %1 в таблице %2 нет. Её кладёт сам прогон: в живой документ инструмент не пишет никогда.';
+      HeldTxt@1000000002 : TextConst 'ENU=LOCKHELD user %1 session %2 table %3 document %4 mark %5 ms %6;RUS=LOCKHELD user %1 session %2 table %3 document %4 mark %5 ms %6';
+
+    [External]
+    PROCEDURE Hold@1();
+    VAR
+      Context@1000000003 : Record 110232;
+      Mark@1000000007 : Record 110233;
+      RecRef@1000000004 : RecordRef;
+      DocField@1000000005 : FieldRef;
+      Waited@1000000006 : Integer;
+      MarkSeen@1000000008 : Text[3];
+    BEGIN
+      // Блокировку берёт СЕССИЯ NAV, и берёт её записью в строку - так же, как берёт её
+      // человек, нажавший кнопку. В этом весь смысл держателя: отметку контекста кладёт не
+      // он сам, а ПЕРЕХОДНИК, подписанный на события этой таблицы, и кладёт он в неё USERID
+      // той сессии, что правит строку. Соединением sqlcmd этого не проверить вовсе:
+      // переходник живёт внутри NAV и о чужих соединениях не знает.
+      Context.SETRANGE(Enabled,TRUE);
+      IF NOT Context.FINDFIRST THEN
+        ERROR(NoContextErr);
+
+      RecRef.OPEN(Context."Table No.");
+      RecRef.LOCKTABLE;
+      DocField := RecRef.FIELD(Context."Document Field No.");
+      DocField.SETRANGE(HoldDocumentNo);
+      IF NOT RecRef.FINDFIRST THEN
+        ERROR(NoRowErr,HoldDocumentNo,Context."Table Name");
+
+      // MODIFY без триггеров нарочно. Событие OnAfterModifyEvent платформа поднимает в
+      // любом случае - переходник подписан на СОБЫТИЕ, а не на триггер, - а вот триггер
+      // чужой таблицы это чужой код, и запускать его ради показа незачем.
+      RecRef.MODIFY;
+
+      // Отметка ищется СВОЯ - по номеру экземпляра и сеанса. Ответ едет в сообщении не для
+      // красоты: без него отказ дороги к имени и молчание переходника выглядят одинаково,
+      // а это разные беды - в первом случае чинить инструмент, во втором ставить подписку.
+      MarkSeen := 'no';
+      IF Mark.GET(SERVICEINSTANCEID,SESSIONID) THEN
+        MarkSeen := 'yes';
+
+      // COMMIT здесь не делается нарочно: транзакция держится открытой, и вместе с ней
+      // держатся ОБЕ блокировки - на строке документа и на отметке контекста. Отпустит их
+      // платформа сама, когда вызов кончится.
+      Waited := HoldMs;
+      SLEEP(Waited);
+      MESSAGE(HeldTxt,USERID,SESSIONID,Context."Table No.",HoldDocumentNo,MarkSeen,Waited);
+    END;
+
+    LOCAL PROCEDURE HoldMs@2() : Integer;
+    BEGIN
+      // Полторы минуты. Больше предела ожидания NAV в 10 000 мс - чтобы ждущая СЕССИЯ NAV
+      // успела отвалиться по нему и эпизод получил честный исход, - и достаточно, чтобы
+      // человек успел открыть журнал и увидеть блокировку живой, а не по следам.
+      EXIT(90000);
+    END;
+
+    LOCAL PROCEDURE HoldDocumentNo@3() : Code[20];
+    BEGIN
+      // Номер мишени, и он же обещание: в живой документ инструмент не пишет никогда.
+      // Строку с этим номером кладёт показ, он же её и убирает.
+      EXIT('LOCKWATCH-LIVE');
+    END;
+
+    BEGIN
+    {
+      Держатель блокировки ОТ ИМЕНИ ЧЕЛОВЕКА.
+
+      Codeunit 110242 держит блокировку на своей же таблице отметок и отвечает на вопрос
+      "видит ли штатная карта транзакций сессию NAV". Этот отвечает на другой, и он дороже:
+      "назовёт ли журнал ЧЕЛОВЕКА, который держит строку документа".
+
+      Разница в том, кто кладёт отметку. Здесь её не кладёт никто из своих: держатель просто
+      правит строку, а отметку пишет переходник, подписанный на события этой таблицы, и
+      пишет он USERID той сессии, что правит. Поэтому запускать держателя надо от имени
+      того человека, чьё имя хочется увидеть в журнале, - Invoke-NAVCodeunit под его
+      учётной записью, - а ждущим остаётся всё тот же sqlcmd.
+
+      Объект мерный, как и Codeunit 110233: в бою он не нужен и вреда не приносит - без
+      строки-мишени он отказывается работать вовсе.
+    }
+    END.
+  }
+}
