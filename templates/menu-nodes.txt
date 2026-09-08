@@ -37,6 +37,16 @@
                                                                 RunObjectID=110231;
                                                                 ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
                                                                 Visible=Yes;
+                                                                NextNodeID=[{56A84B94-8FA9-420E-A4DE-3897A3EB08E2}] }
+    { MenuItem       ;[{56A84B94-8FA9-420E-A4DE-3897A3EB08E2}] ;Name=History;
+                                                                CaptionML=[ENU=History;
+                                                                           RUS=История эпизодов];
+                                                                ApplicationArea=#All;
+                                                                MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
+                                                                RunObjectType=Page;
+                                                                RunObjectID=110237;
+                                                                ParentNodeID=[{B81160DE-A6C3-47AF-99E4-C95154E2A094}];
+                                                                Visible=Yes;
                                                                 NextNodeID=[{DF665592-1103-478C-9D45-0DEE7DF1574D}] }
     { MenuItem       ;[{DF665592-1103-478C-9D45-0DEE7DF1574D}] ;Name=Summary;
                                                                 CaptionML=[ENU=Summary;
