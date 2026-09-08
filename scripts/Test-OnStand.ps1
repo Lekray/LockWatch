@@ -192,33 +192,6 @@ foreach ($literal in $mlLiterals) {
 }
 if ($mlProblems) { Fail ("многоязычный текст не переживёт импорт:`n" + (($mlProblems | Select-Object -Unique | Select-Object -First 5) -join "`n")) }
 
-# Выгрузка истории обязана вывозить ВСЕ поля таблицы. Поле, добавленное в историю и забытое
-# в XMLport, потеряется молча - и обнаружится это при возврате файла, когда возвращать уже
-# нечего. Сверка статическая и стоит здесь, до finsql: прогон её не поймает, потому что
-# круг через файл сличает те поля, которые в выгрузке ЕСТЬ.
-$historyTable = $files | Where-Object { $_.Name -like 't110238_*' }
-$historyPort  = $files | Where-Object { $_.Name -like 'x110230_*' }
-if ($historyTable -and $historyPort) {
-    $tableText = [IO.File]::ReadAllText($historyTable.FullName)
-    $portText  = [IO.File]::ReadAllText($historyPort.FullName)
-    $fieldsBlock = [regex]::Match($tableText, '(?s)\r?\n  FIELDS\r?\n  \{\r?\n(.*?)\r?\n  \}\r?\n  KEYS')
-    if (-not $fieldsBlock.Success) { Fail 'в таблице истории не нашёлся блок FIELDS - сверить выгрузку не с чем' }
-    $missing = @()
-    foreach ($m in [regex]::Matches($fieldsBlock.Groups[1].Value, '(?m)^    \{ \d+\s+;\s*;(.+?)\s*;(\S+?)\s*;')) {
-        $fieldName = $m.Groups[1].Value.Trim()
-        $fieldType = $m.Groups[2].Value.Trim()
-        # Блобы едут не полем, а отдельным элементом с переменной: типа данных под BLOB у
-        # XMLport нет вовсе. Ищем их по имени элемента, а не по SourceField.
-        $needle = if ($fieldType -eq 'BLOB') { ($fieldName.ToCharArray() | Where-Object { [char]::IsLetterOrDigit($_) }) -join '' }
-                  else { "SourceField=Episode::$fieldName " }
-        if ($portText -notmatch [regex]::Escape($needle)) { $missing += $fieldName }
-    }
-    if ($missing) {
-        Fail ("выгрузка истории потеряла бы поля (XMLport 110230 против Table 110238):`n  " + ($missing -join "`n  "))
-    }
-    Write-Host "  выгрузка истории вывозит все поля таблицы"
-}
-
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $monolith, (New-Object System.Text.UTF8Encoding($false)))

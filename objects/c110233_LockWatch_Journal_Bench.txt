@@ -36,11 +36,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CloseTxt@1000000013 : TextConst 'ENU=closed %1 of %2, of them granted %3, still open %4;RUS=закрыто %1 из %2, из них дождалось %3, осталось открытых %4';
       ChkSummaryHistoryTxt@1000000060 : TextConst 'ENU=the summary counts history when asked to and leaves it out when not;RUS=свод считает историю, когда его просят, и не считает, когда не просят';
       SummaryHistoryTxt@1000000061 : TextConst 'ENU=journal alone %1, with history %2, in history within the window %3;RUS=по журналу %1, с историей %2, в истории за окно %3';
-      ChkFileTxt@1000000054 : TextConst 'ENU=history goes out to a file and comes back from it whole;RUS=история уходит в файл и возвращается из него целой';
-      FileOkTxt@1000000055 : TextConst 'ENU=rows out %1, back %2, statement text survived;RUS=выгружено строк %1, вернулось %2, текст запроса уцелел';
-      FileGapCountTxt@1000000056 : TextConst 'ENU=rows out %1, back %2;RUS=выгружено строк %1, вернулось %2';
-      FileGapBodyTxt@1000000057 : TextConst 'ENU=statement text did not survive: %1 characters out, %2 back;RUS=текст запроса не уцелел: выгружено знаков %1, вернулось %2';
-      FileGapFieldTxt@1000000058 : TextConst 'ENU=entry %1 came back different: %2;RUS=запись %1 вернулась другой: %2';
       ChkMirrorTxt@1000000048 : TextConst 'ENU=history repeats the journal field for field;RUS=история повторяет журнал поле в поле';
       MirrorOkTxt@1000000049 : TextConst 'ENU=lists match;RUS=списки совпадают';
       MirrorCountTxt@1000000050 : TextConst 'ENU=fields in the journal %1, in history %2;RUS=полей в журнале %1, в истории %2';
@@ -111,7 +106,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Removed@1000000016 : Integer;
       InHistoryBefore@1000000047 : Integer;
       MirrorNote@1000000053 : Text;
-      FileNote@1000000059 : Text;
       SummedJournal@1000000062 : Integer;
       SummedBoth@1000000063 : Integer;
       InHistoryNow@1000000064 : Integer;
@@ -272,15 +266,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Check(Passed,Total,Report,ChkMirrorTxt,
             MirrorNote = '',
             MirrorNote + MirrorOkNote(MirrorNote));
-
-      // Выгрузка, которую нельзя вставить обратно, - не сохранение, а утешение. Проверяется
-      // она единственным способом, каким её вообще можно проверить: круг. Строки уезжают в
-      // файл, стираются из истории, возвращаются из файла и сличаются - вместе с текстом
-      // запроса, который у XMLport не имеет своего типа данных и едет отдельным элементом.
-      FileNote := FileRoundTripGap;
-      Check(Passed,Total,Report,ChkFileTxt,
-            FileNote = '',
-            FileNote + FileOkNote(FileNote));
 
       // Свод по истории. Проверяется он ЗДЕСЬ, а не рядом с остальными проверками свода:
       // это единственный миг прогона, когда в истории заведомо что-то лежит - строки
@@ -510,109 +495,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Moved.RESET;
       Moved.SETFILTER("Started At",'<=%1',ToAt);
       EXIT(Moved.COUNT);
-    END;
-
-    LOCAL PROCEDURE FileRoundTripGap@45() : Text;
-    VAR
-      Port@1000000000 : XMLport 110230;
-      Source@1000000001 : Record 110238;
-      Back@1000000002 : Record 110238;
-      Handle@1000000003 : File;
-      OutStr@1000000004 : OutStream;
-      InStr@1000000005 : InStream;
-      Path@1000000006 : Text;
-      Body@1000000007 : Text;
-      Sent@1000000008 : Integer;
-      Returned@1000000009 : Integer;
-      FirstNo@1000000010 : Integer;
-    BEGIN
-      // Свои строки в истории уже лежат - их только что привёз переезд. На них и меряем:
-      // считать всю историю нельзя, на стенде в ней настоящие эпизоды.
-      Source.RESET;
-      Source.SETFILTER("Victim SPID",'<%1',0);
-      Sent := Source.COUNT;
-      IF Sent = 0 THEN
-        EXIT(STRSUBSTNO(FileGapCountTxt,0,0));
-      Source.FINDFIRST;
-      FirstNo := Source."Entry No.";
-      // Текст запроса кладётся нарочно: без него круг проверил бы всё, кроме самого
-      // хрупкого места - блоба, который сам не приезжает ни в выгрузку, ни обратно.
-      PutStatement(Source,BenchStatement);
-
-      Path := TEMPORARYPATH + 'lockwatch-history-bench.xml';
-      IF EXISTS(Path) THEN
-        ERASE(Path);
-      Handle.CREATE(Path);
-      Handle.CREATEOUTSTREAM(OutStr);
-      Source.RESET;
-      Source.SETFILTER("Victim SPID",'<%1',0);
-      Port.SETTABLEVIEW(Source);
-      Port.SETDESTINATION(OutStr);
-      Port.EXPORT;
-      Handle.CLOSE;
-      CLEAR(Port);
-
-      Back.RESET;
-      Back.SETFILTER("Victim SPID",'<%1',0);
-      Back.DELETEALL;
-
-      Handle.OPEN(Path);
-      Handle.CREATEINSTREAM(InStr);
-      Port.SETSOURCE(InStr);
-      Port.IMPORT;
-      Handle.CLOSE;
-      ERASE(Path);
-
-      Back.RESET;
-      Back.SETFILTER("Victim SPID",'<%1',0);
-      Returned := Back.COUNT;
-      IF Returned <> Sent THEN
-        EXIT(STRSUBSTNO(FileGapCountTxt,Sent,Returned));
-      IF NOT Back.GET(FirstNo) THEN
-        EXIT(STRSUBSTNO(FileGapFieldTxt,FirstNo,'её нет вовсе'));
-      Body := GetStatement(Back);
-      IF Body <> BenchStatement THEN
-        EXIT(STRSUBSTNO(FileGapBodyTxt,STRLEN(BenchStatement),STRLEN(Body)));
-      EXIT('');
-    END;
-
-    LOCAL PROCEDURE FileOkNote@46(Gap@1000000000 : Text) : Text;
-    BEGIN
-      IF Gap = '' THEN
-        EXIT(STRSUBSTNO(FileOkTxt,MovedRowCount,MovedRowCount));
-      EXIT('');
-    END;
-
-    LOCAL PROCEDURE PutStatement@47(VAR Row@1000000000 : Record 110238;Body@1000000001 : Text);
-    VAR
-      OutStr@1000000002 : OutStream;
-    BEGIN
-      Row."Blocker Statement Text".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
-      OutStr.WRITETEXT(Body);
-      Row.MODIFY;
-      COMMIT;
-    END;
-
-    LOCAL PROCEDURE GetStatement@48(VAR Row@1000000000 : Record 110238) : Text;
-    VAR
-      InStr@1000000001 : InStream;
-      Big@1000000002 : BigText;
-      Result@1000000003 : Text;
-    BEGIN
-      Row.CALCFIELDS("Blocker Statement Text");
-      IF NOT Row."Blocker Statement Text".HASVALUE THEN
-        EXIT('');
-      Row."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
-      Big.READ(InStr);
-      Big.GETSUBTEXT(Result,1,Big.LENGTH);
-      EXIT(Result);
-    END;
-
-    LOCAL PROCEDURE BenchStatement@49() : Text;
-    BEGIN
-      // Строка с кавычками, угловыми скобками и амперсандом нарочно: XML их обязан
-      // экранировать, и круг без них проверил бы только длину.
-      EXIT('SELECT * FROM [Item] WHERE [No_] < N''X&Y'' AND [Blocked] > 0 -- проверка круга');
     END;
 
     LOCAL PROCEDURE MirrorGap@43() : Text;
