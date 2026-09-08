@@ -115,6 +115,15 @@ OBJECT Table 110231 LockWatch Episode
     { 63  ;   ;Name Attempts       ;Integer       ;CaptionML=[ENU=Name Attempts;
                                                               RUS=Попыток назвать];
                                                    Editable=No }
+    { 64  ;   ;Blocker Login       ;Text128       ;CaptionML=[ENU=Blocker SQL Login;
+                                                              RUS=Логин SQL виновника];
+                                                   Editable=No }
+    { 65  ;   ;Blocker Host        ;Text80        ;CaptionML=[ENU=Blocker Host;
+                                                              RUS=Узел виновника];
+                                                   Editable=No }
+    { 66  ;   ;Blocker Program     ;Text128       ;CaptionML=[ENU=Blocker Program;
+                                                              RUS=Программа виновника];
+                                                   Editable=No }
     { 70  ;   ;Blocker Statement   ;Text250       ;CaptionML=[ENU=Blocker Statement;
                                                               RUS=Последний оператор виновника] }
     { 71  ;   ;NAV Object No.      ;Integer       ;CaptionML=[ENU=NAV Object No.;

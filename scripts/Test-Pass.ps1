@@ -228,12 +228,13 @@ SELECT TOP 1
   CONVERT(varchar(11),[Victim Is NAV]) + '|' + CONVERT(varchar(11),[Open]) + '|' +
   CONVERT(varchar(11),[Max Wait (ms)]) + '|' + [Wait Type] + '|' +
   [Document No_] + '|' + CONVERT(varchar(11),[Document Source]) + '|' +
-  [User Name] + '|' + CONVERT(varchar(11),[User Source]) + '|' + [No Document Reason]
+  [User Name] + '|' + CONVERT(varchar(11),[User Source]) + '|' + [No Document Reason] + '|' +
+  [Blocker Login] + '|' + [Blocker Host] + '|' + [Blocker Program]
 FROM $episode ORDER BY [Entry No_] DESC;
 "@
     if (-not $row) { Fail 'в журнале пусто - дальше проверять нечего' }
     $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
-    if ($f.Count -lt 19) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
+    if ($f.Count -lt 22) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
 
     Check 'жертва и виновник те самые' ((([int]$f[0]) -eq $waiterSpid) -and (([int]$f[2]) -eq $blockerSpid)) `
         "жертва $($f[0]) при ожидаемой $waiterSpid, виновник $($f[2]) при ожидаемом $blockerSpid"
@@ -301,6 +302,17 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # стоит в Test-Document.ps1, где спорят за строку настоящей таблицы установки.
     Check 'виновник назван по имени, без права платформы' (($f[16] -eq 'STAND') -and ($f[17] -eq '1')) `
         "учётная запись [$($f[16])], откуда $($f[17]) при ожидаемом 1 (по отметке)"
+
+    # Второй ответ на "кто", и он о ДРУГОМ. Учётную запись NAV даёт отметка, а её кладёт
+    # только сессия NAV; за чужим соединением - утилитой, заданием, чьим-то окном запросов -
+    # никакой учётной записи NAV нет и быть не может. Сервер же знает о держателе логин,
+    # узел и программу с самого начала: соединение с sys.dm_exec_sessions ради него уже
+    # сделано, и молчать было нечем оправдаться. Здесь держит sqlcmd, и он себя называет.
+    # На прежнем коде: этих трёх полей не было вовсе, столбец "кто" у чужого держателя
+    # оставался пустым, и пустота читалась как "инструмент не знает".
+    Check 'сервер назвал держателя: логин, узел, программа' `
+        (($f[19] -ne '') -and ($f[20] -ne '') -and ($f[21] -match '(?i)sqlcmd')) `
+        "логин [$($f[19])], узел [$($f[20])], программа [$($f[21])] при ожидаемой sqlcmd"
 
     Write-Host 'Отпускаю блокировку и делаю второй проход'
     Stop-Sqlcmd $blocker

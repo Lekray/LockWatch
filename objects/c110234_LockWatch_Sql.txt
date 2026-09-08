@@ -147,6 +147,19 @@ OBJECT Codeunit 110234 LockWatch Sql
           Observed."Victim Process Id" := ReaderInt(SqlReader,6);
           Observed."Blocker SPID" := Blocker[RowCount];
           Observed."Blocker Transaction Id" := ReaderBigInt(SqlReader,9);
+          // Кто держит - тем, что о нём знает сам сервер. Соединение с sys.dm_exec_sessions
+          // для виновника уже сделано, и программа его уже читается колонкой 11 (по ней
+          // решается, наш ли это сеанс); логин и узел из ТОЙ ЖЕ строки не стоят ничего.
+          // Для чужого соединения - утилиты, задания, чьего-то SSMS - это единственный
+          // возможный ответ на "кто": отметку контекста кладёт только сессия NAV. Для самой
+          // сессии NAV логин здесь общий, учётной записи службы, и человеком он не
+          // притворяется - на то и отдельные поля, а не колонка "Пользователь".
+          Observed."Blocker Login" :=
+            COPYSTR(ReaderText(SqlReader,21),1,MAXSTRLEN(Observed."Blocker Login"));
+          Observed."Blocker Host" :=
+            COPYSTR(ReaderText(SqlReader,22),1,MAXSTRLEN(Observed."Blocker Host"));
+          Observed."Blocker Program" :=
+            COPYSTR(ReaderText(SqlReader,11),1,MAXSTRLEN(Observed."Blocker Program"));
           // Колонки 15 и 16, а не 14 и 15. На единицу раньше лежит признак "у виновника
           // есть исполняемый запрос", и он уходил в ДНИ: журнал показывал начало
           // транзакции 1900-01-02, а класс эпизода считался по миллисекундам вместо
@@ -767,6 +780,15 @@ OBJECT Codeunit 110234 LockWatch Sql
         Found."Max Wait (ms)" := Found."Last Wait (ms)";
         Found."Blocker SPID" := ReaderInt(SqlReader,8);
         Found."Head Is Foreign" := NOT IsNavProgram(ReaderText(SqlReader,9));
+        // Граф взаимоблокировки называет участников сам: узел, логин и программу он держит
+        // прямо в узле процесса. Программа тут уже читается - по ней решается, наш ли это
+        // сеанс, - и выбрасывать её после одной проверки было бы расточительством.
+        Found."Blocker Program" :=
+          COPYSTR(ReaderText(SqlReader,9),1,MAXSTRLEN(Found."Blocker Program"));
+        Found."Blocker Host" :=
+          COPYSTR(ReaderText(SqlReader,24),1,MAXSTRLEN(Found."Blocker Host"));
+        Found."Blocker Login" :=
+          COPYSTR(ReaderText(SqlReader,25),1,MAXSTRLEN(Found."Blocker Login"));
         Found."Blocker Transaction Id" := ReaderBigInt(SqlReader,10);
         Found."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,11),ReaderInt(SqlReader,12));
         Found."Resource Kind" := COPYSTR(UPPERCASE(ReaderText(SqlReader,13)),1,MAXSTRLEN(Found."Resource Kind"));
@@ -930,6 +952,10 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' + CONVERT(varchar(20),res.HobtId) + ' + Q + '|' + Q +
         ' + vp.n' + XVal('@waitresource','varchar(120)') + ',' +
         Statement +
+        // Дописано ПОСЛЕ Statement нарочно: он всегда ровно три столбца - и под галкой на
+        // тексты, и без неё, - значит хвост неподвижен и ни один прежний номер не поехал.
+        ', bp.n' + XVal('@hostname','nvarchar(80)') + ',' +
+        ' bp.n' + XVal('@loginname','nvarchar(128)') +
         ' FROM res' +
         ' CROSS APPLY res.G.nodes(' + Q + '/deadlock/process-list/process[@id' + Eq +
         'sql:column("res.VictimId")]' + Q + ') AS vp(n)' +
@@ -1127,6 +1153,11 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' ELSE DATEDIFF(ms,CONVERT(date,ba.transaction_begin_time),' +
         ' ba.transaction_begin_time) END' +
         Cols +
+        // Дописано ПОСЛЕ Cols нарочно, и это не небрежность. Cols - всегда ровно четыре
+        // столбца (при выключенных текстах он отдаёт четыре пустышки), поэтому хвост
+        // неподвижен и ни один прежний номер колонки не поехал. Сдвиг на единицу в этом
+        // же запросе уже стоил нам молчаливой поломки - заметка о ней выше по коду.
+        ', bs.login_name, bs.host_name' +
         ' FROM sys.dm_os_waiting_tasks wt' +
         ' JOIN sys.dm_exec_sessions vs ON vs.session_id = wt.session_id' +
         ' LEFT JOIN sys.dm_tran_session_transactions vt ON vt.session_id = wt.session_id' +

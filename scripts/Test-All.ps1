@@ -78,13 +78,13 @@ $runs = @(
     }
     @{
         Name = 'pass'; Script = 'Test-Pass.ps1'; Extra = @()
-        Checks = 18; WithInstance = $true
+        Checks = 19; WithInstance = $true
         Why = 'кратчайшая дорога до живого эпизода: сломан проход - дальше всё шум'
         What = 'проход на настоящей блокировке, дорога к документу по очереди сервера'
     }
     @{
         Name = 'pass-context'; Script = 'Test-Pass.ps1'; Extra = @('-ContextRoad')
-        Checks = 18; WithInstance = $true
+        Checks = 19; WithInstance = $true
         Why = 'та же блокировка, но документ берётся отметкой переходника, а не очередью'
         What = 'вторая дорога к документу'
     }

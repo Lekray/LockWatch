@@ -341,6 +341,27 @@ OBJECT Page 110231 LockWatch Episodes
                 ApplicationArea=#All;
                 SourceExpr="Chain Ring" }
 
+    { 57  ;2   ;Field     ;
+                Name=BlockerLogin;
+                ToolTipML=[ENU=Specifies the SQL login of the session holding the lock. For an outside connection - a utility, a job, somebody's SSMS - this is the only answer to "who" there is, because only a NAV session lays down a context mark. For a NAV session it is the service account and names nobody.;
+                           RUS=Определяет логин SQL сеанса, который держит блокировку. Для чужого соединения - утилиты, задания, чьего-то SSMS - это единственный возможный ответ на вопрос "кто": отметку контекста кладёт только сессия NAV. Для сессии NAV здесь учётная запись службы, и она не называет никого.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Login" }
+
+    { 58  ;2   ;Field     ;
+                Name=BlockerHost;
+                ToolTipML=[ENU=Specifies the machine the blocking session came from.;
+                           RUS=Определяет машину, с которой пришёл держащий сеанс.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Host" }
+
+    { 59  ;2   ;Field     ;
+                Name=BlockerProgram;
+                ToolTipML=[ENU=Specifies how the blocking session introduced itself to the server. Often it says more than the login: a job step and a person with a query console share an account but not a remedy.;
+                           RUS=Определяет, как держащий сеанс представился серверу. Часто это говорит больше логина: шаг задания и человек с окном запросов ходят под одной учётной записью, а лечатся по-разному.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker Program" }
+
     { 20  ;2   ;Field     ;
                 Name=HeadIsForeign;
                 ToolTipML=[ENU=Specifies whether the head of the chain is not a NAV session. Cleared when it cannot be told: hinting that the culprit is outside when it is not known would send people looking in the wrong place.;

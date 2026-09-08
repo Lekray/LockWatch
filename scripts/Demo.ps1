@@ -363,6 +363,12 @@ $docWords     = "CASE [Document Source] WHEN 0 THEN 'нет' WHEN 1 THEN 'по �
 $userWords    = "CASE [User Source] WHEN 0 THEN 'нет' WHEN 1 THEN 'из отметки' WHEN 2 THEN 'от платформы' ELSE '?' END"
 
 function Last-Episode {
+    # Сценам нужен ИХ эпизод, а не просто последняя строка журнала. Круги приезжают из
+    # кольцевого буфера в тот проход, когда сторож до него дошёл, и номер записи у них
+    # больше: круг, устроенный в начале показа, приезжал посреди третьей сцены и
+    # пересказывался под её заголовком - взаимоблокировка вместо очереди из троих.
+    # Поэтому круги здесь отсекаются (у них своя сцена и свой запрос), а открытая строка
+    # идёт вперёд закрытой: сцена рассказывает о том, что происходит ПРЯМО СЕЙЧАС.
     return Fields @"
 SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' + [Held Mode] + '|' +
   [Wait Type] + '|' + $classWords + '|' + $outcomeWords + '|' +
@@ -370,25 +376,32 @@ SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
   CASE WHEN [Document No_] = '' THEN '-' ELSE [Document No_] END + '|' + $docWords + '|' +
   CASE WHEN [User Name] = '' THEN '-' ELSE [User Name] END + '|' + $userWords + '|' +
   CASE WHEN [Advice] = '' THEN '-' ELSE [Advice] END + '|' +
+  CASE WHEN [Blocker Login] = '' THEN '-' ELSE [Blocker Login] END + '|' +
+  CASE WHEN [Blocker Program] = '' THEN '-' ELSE [Blocker Program] END + '|' +
   CONVERT(varchar(11),[Victim SPID]) + '|' + CONVERT(varchar(11),[Head SPID]) + '|' +
   CONVERT(varchar(11),[Victims Behind Head]) + '|' +
   CASE WHEN [No Document Reason] = '' THEN '-' ELSE [No Document Reason] END + '|' +
   CONVERT(varchar(11),ISNULL(DATALENGTH([Blocker Statement Text]),0)) + '|' +
   CONVERT(varchar(11),ISNULL(DATALENGTH([Victim Statement]),0)) + '|' +
   CONVERT(varchar(11),[Entry No_])
-FROM $episode ORDER BY [Entry No_] DESC;
+FROM $episode WHERE [Class] <> 3 ORDER BY [Open] DESC, [Entry No_] DESC;
 "@
 }
 
 function Tell-Episode($f) {
-    if ($f.Count -lt 19) { Warn 'в журнале пусто'; return }
+    if ($f.Count -lt 21) { Warn 'в журнале пусто'; return }
     Say "журнал: таблица [$($f[0])], ключ NAV $($f[1]), режим $($f[2]), ожидание $($f[3])"
     Say "        эпизод $($f[4]), исход - $($f[5]), ждали $($f[6]) мс"
-    if ($f[7] -ne '-') { Say "        документ $($f[7]) ($($f[8]))" } else { Say "        документ не назван: $($f[15])" }
+    if ($f[7] -ne '-') { Say "        документ $($f[7]) ($($f[8]))" } else { Say "        документ не назван: $($f[17])" }
     if ($f[9] -ne '-') { Say "        учётная запись $($f[9]) ($($f[10]))" }
-    Say "        жертва $($f[12]), голова цепочки $($f[13]), за головой жертв: $($f[14])"
+    # Учётная запись NAV и логин SQL - разные ответы на разные вопросы, и порознь они
+    # честнее. Отметку кладёт только сессия NAV; за чужим соединением - утилитой, заданием,
+    # чьим-то окном запросов - учётной записи NAV нет и быть не может, зато сервер знает о
+    # нём логин и программу, и это единственный ответ на "кто", какой вообще возможен.
+    if ($f[12] -ne '-') { Say "        держит: логин SQL $($f[12]), программа $($f[13])" }
+    Say "        жертва $($f[14]), голова цепочки $($f[15]), за головой жертв: $($f[16])"
     Say "        совет: $($f[11])"
-    Say "        оператор виновника $($f[16]) байт, оператор жертвы $($f[17]) байт"
+    Say "        оператор виновника $($f[18]) байт, оператор жертвы $($f[19]) байт"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -856,7 +869,9 @@ SELECT CONVERT(varchar(11),[Entry No_]) + '|' + CONVERT(varchar(8),[Started At],
   LEFT([NAV Table Name],24) + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
   $classWords + '|' + $outcomeWords + '|' + CONVERT(varchar(11),[Max Wait (ms)]) + '|' +
   CASE WHEN [Document No_] = '' THEN '-' ELSE [Document No_] END + '|' +
-  CASE WHEN [User Name] = '' THEN '-' ELSE [User Name] END
+  CASE WHEN [User Name] <> '' THEN [User Name]
+       WHEN [Blocker Login] <> '' THEN [Blocker Login]
+       ELSE '-' END
 FROM $episode ORDER BY [Entry No_];
 "@
 foreach ($line in $lines) {
