@@ -200,12 +200,21 @@ OBJECT Page 110230 LockWatch Setup
 
     { 9   ;2   ;Field     ;
                 Name=Retention;
-                CaptionML=[ENU=Retention (Days);
-                           RUS=Срок хранения, дней];
-                ToolTipML=[ENU=Specifies how long an episode stays in the journal. The term is declared and enforced: the journal names other people accounts, and keeping it forever is a separate conversation with security.;
-                           RUS=Определяет, сколько эпизод живёт в журнале. Срок объявленный и соблюдаемый: журнал называет чужие учётные записи, и бессрочное хранение - отдельный разговор со службой безопасности.];
+                CaptionML=[ENU=Days before an episode moves to history;
+                           RUS=Через сколько дней эпизод уезжает в историю];
+                ToolTipML=[ENU=Specifies how long an episode stays in the journal. Older than that it MOVES to history and is not deleted - nothing in the tool deletes history except a person pressing the button.;
+                           RUS=Определяет, сколько эпизод живёт в журнале. Старше срока он ПЕРЕЕЗЖАЕТ в историю, а не удаляется: историю не чистит ничто, кроме человека с кнопкой.];
                 ApplicationArea=#All;
                 SourceExpr="Retention (Days)" }
+
+    { 57  ;2   ;Field     ;
+                Name=JournalRowsCeiling;
+                CaptionML=[ENU=Journal Rows Ceiling;
+                           RUS=Потолок строк в журнале];
+                ToolTipML=[ENU=Specifies how many rows the journal may hold before the oldest closed episodes move to history. The term alone cannot hold a hot table - in a storm everything in the journal is younger than the term. Zero means no ceiling.;
+                           RUS=Определяет, сколько строк держит журнал, прежде чем самые старые закрытые эпизоды уедут в историю. Одним сроком горячую таблицу не удержать - в шторм всё, что в ней лежит, моложе срока. Ноль означает, что потолка нет.];
+                ApplicationArea=#All;
+                SourceExpr="Journal Rows Ceiling" }
 
     { 10  ;2   ;Field     ;
                 Name=AlertThreshold;

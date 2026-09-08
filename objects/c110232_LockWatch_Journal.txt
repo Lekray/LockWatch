@@ -406,10 +406,8 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE MoveOldEntries@5(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    PROCEDURE MoveOldEntries@5(RetentionDays@1000000000 : Integer;RowCeiling@1000000013 : Integer;MaxRows@1000000001 : Integer) : Integer;
     VAR
-      Threshold@1000000002 : DateTime;
-      Age@1000000003 : Duration;
       Moved@1000000004 : Integer;
     BEGIN
       // Строка не уничтожается, а ПЕРЕЕЗЖАЕТ в историю. Из журнала она уходит затем, что
@@ -417,8 +415,31 @@ OBJECT Codeunit 110232 LockWatch Journal
       // Из истории её не удаляет ничто - ни проход, ни задача, ни срок; инструмент, тихо
       // стирающий то, ради чего его поставили, стоит меньше, чем ничего.
       //
+      // Пределов ДВА, и оба нужны. Срок отвечает на "давно ли", потолок - на "сколько их",
+      // и подменить один другим нельзя: тридцать дней на тихой базе это сотня строк, а в
+      // шторм - сотни тысяч, и все они моложе срока.
+      //
+      // Порядок не случайный: сперва по сроку, потом по потолку. Срок - это объявленное
+      // правило установки, а потолок - защита от переполнения, и защита обязана срабатывать
+      // на том, что осталось ПОСЛЕ правила, а не вместо него.
+      //
       // Переезд порционный: перенос месяца накопленного одним COMMIT - это блокировка
-      // собственной таблицы посреди прохода, то есть ровно то, что мы ловим.
+      // собственной таблицы посреди прохода, то есть ровно то, что мы ловим. Потолок за
+      // проход делится между обоими пределами - иначе проход стоил бы вдвое дороже
+      // объявленного ровно в тот день, когда сработали оба.
+      IF MaxRows <= 0 THEN
+        EXIT(0);
+      Moved := MoveOlderThan(RetentionDays,MaxRows);
+      Moved := Moved + MoveOverCeiling(RowCeiling,MaxRows - Moved);
+      EXIT(Moved);
+    END;
+
+    LOCAL PROCEDURE MoveOlderThan@25(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    VAR
+      Threshold@1000000002 : DateTime;
+      Age@1000000003 : Duration;
+      Moved@1000000004 : Integer;
+    BEGIN
       IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
         EXIT(0);
       Age := RetentionDays * Parse.MsPerDay;
@@ -430,22 +451,66 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.SETFILTER("Started At",'<%1',Threshold);
       IF Journal.FINDSET(TRUE) THEN
         REPEAT
-          // Блоб сам не приезжает: FINDSET его не читает, и TRANSFERFIELDS перенёс бы
-          // пустоту. Текст запроса - самое ценное, что есть в старом эпизоде, и потерять
-          // его при переезде значило бы обессмыслить сам переезд.
-          Journal.CALCFIELDS("Victim Statement","Blocker Statement Text");
-          History.INIT;
-          History.TRANSFERFIELDS(Journal);
-          History."Entry No." := Journal."Entry No.";
-          IF NOT History.INSERT THEN
-            // Строка с этим номером в истории уже есть: переезд однажды прервался между
-            // вставкой и удалением. Номера сквозные и выдаются один раз, поэтому двойник -
-            // это тот же самый эпизод; переписываем его свежим и идём дальше.
-            History.MODIFY;
-          Journal.DELETE;
+          MoveCurrent;
           Moved := Moved + 1;
         UNTIL (Moved >= MaxRows) OR (Journal.NEXT = 0);
       EXIT(Moved);
+    END;
+
+    LOCAL PROCEDURE MoveOverCeiling@26(RowCeiling@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    VAR
+      Surplus@1000000002 : Integer;
+      Moved@1000000003 : Integer;
+    BEGIN
+      // Потолок считается по ВСЕМУ журналу, а уезжают только закрытые. Открытый эпизод
+      // ведёт текущий проход: увезти его значило бы разорвать одну строку на две таблицы,
+      // а следующий проход, не найдя её в журнале, открыл бы эпизод заново.
+      //
+      // Отсюда следует, что журнал, переполненный ИДУЩИМИ эпизодами, потолку не подчинится.
+      // Это честно: они ещё происходят, и молча превратить наблюдение в историю хуже, чем
+      // на время превысить потолок.
+      //
+      // COUNT здесь один на проход и по кластерному индексу. Дешевле было бы вести счётчик
+      // строкой состояния, но счётчик, разошедшийся с таблицей, врёт молча и навсегда, а
+      // COUNT ошибиться не может.
+      IF (RowCeiling <= 0) OR (MaxRows <= 0) THEN
+        EXIT(0);
+      Journal.RESET;
+      Surplus := Journal.COUNT - RowCeiling;
+      IF Surplus <= 0 THEN
+        EXIT(0);
+      IF Surplus > MaxRows THEN
+        Surplus := MaxRows;
+
+      Journal.SETCURRENTKEY("Started At");
+      Journal.SETRANGE(Open,FALSE);
+      IF Journal.FINDSET(TRUE) THEN
+        REPEAT
+          MoveCurrent;
+          Moved := Moved + 1;
+        UNTIL (Moved >= Surplus) OR (Journal.NEXT = 0);
+      EXIT(Moved);
+    END;
+
+    LOCAL PROCEDURE MoveCurrent@27();
+    BEGIN
+      // Одна строка едет в историю. Кусок общий у обоих пределов нарочно: разойдясь, они
+      // перевозили бы эпизод по-разному, и какой из двух потерял поле, выяснялось бы через
+      // месяц - по тому, которого не хватает.
+      //
+      // Блоб сам не приезжает: FINDSET его не читает, и TRANSFERFIELDS перенёс бы пустоту.
+      // Текст запроса - самое ценное, что есть в старом эпизоде, и потерять его при
+      // переезде значило бы обессмыслить сам переезд.
+      Journal.CALCFIELDS("Victim Statement","Blocker Statement Text");
+      History.INIT;
+      History.TRANSFERFIELDS(Journal);
+      History."Entry No." := Journal."Entry No.";
+      IF NOT History.INSERT THEN
+        // Строка с этим номером в истории уже есть: переезд однажды прервался между
+        // вставкой и удалением. Номера сквозные и выдаются один раз, поэтому двойник -
+        // это тот же самый эпизод; переписываем его свежим и идём дальше.
+        History.MODIFY;
+      Journal.DELETE;
     END;
 
     LOCAL PROCEDURE FoldJournal@22(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;

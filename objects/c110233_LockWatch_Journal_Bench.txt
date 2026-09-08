@@ -41,6 +41,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       MirrorCountTxt@1000000050 : TextConst 'ENU=fields in the journal %1, in history %2;RUS=полей в журнале %1, в истории %2';
       MirrorMissingTxt@1000000051 : TextConst 'ENU=field %1 %2 is missing from history;RUS=поля %1 %2 в истории нет';
       MirrorDifferTxt@1000000052 : TextConst 'ENU=field %1 differs: %2 against %3;RUS=поле %1 разное: %2 против %3';
+      ChkCeilingTxt@1000000062 : TextConst 'ENU=the journal comes down to its row ceiling, the oldest go first, and an open episode stays;RUS=журнал опускается до своего потолка строк, старшие уезжают первыми, а идущий эпизод остаётся';
+      CeilingTxt@1000000063 : TextConst 'ENU=moved %1 of the %2 over the ceiling, journal %3 against the ceiling %4, the open %5 stayed;RUS=переехало %1 из %2 сверх потолка, в журнале %3 при потолке %4, идущий %5 остался';
       ChkTrimTxt@1000000014 : TextConst 'ENU=what is older than the term leaves the journal for history, and nothing is lost on the way;RUS=что старше срока, уезжает из журнала в историю, и по дороге ничего не теряется';
       TrimTxt@1000000015 : TextConst 'ENU=moved %1 of the %2 backdated, left %3 of %4, landed in history %5;RUS=переехало %1 из %2 состаренных, осталось %3 из %4, доехало до истории %5';
       ChkCostTxt@1000000016 : TextConst 'ENU=the NAV half of a pass fits into the declared ceiling;RUS=NAV-половина прохода укладывается в объявленный потолок';
@@ -105,6 +107,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Backdated@1000000015 : Integer;
       Removed@1000000016 : Integer;
       InHistoryBefore@1000000047 : Integer;
+      HeldNo@1000000065 : Integer;
+      OldestClosed@1000000066 : Integer;
+      RowsBefore@1000000067 : Integer;
+      MovedByCeiling@1000000068 : Integer;
       MirrorNote@1000000053 : Text;
       SummedJournal@1000000062 : Integer;
       SummedBoth@1000000063 : Integer;
@@ -252,12 +258,35 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // удалении, то есть на потере, ради недопущения которой всё и затевалось.
       Backdated := Backdate(BackdateRows,BackdateDays);
       InHistoryBefore := MovedRowCount;
-      Removed := Journal.MoveOldEntries(RetentionUnderTest,Waiters);
+      Removed := Journal.MoveOldEntries(RetentionUnderTest,0,Waiters);
       Check(Passed,Total,Report,ChkTrimTxt,
             (Removed = Backdated) AND (Backdated = BackdateRows) AND
             (BenchRowCount = Waiters - BackdateRows) AND
             (MovedRowCount - InHistoryBefore = Backdated),
             STRSUBSTNO(TrimTxt,Removed,Backdated,BenchRowCount,Waiters,MovedRowCount - InHistoryBefore));
+
+      // Второй предел - потолок СТРОК, и нужен он ровно там, где срок бессилен: в шторм
+      // всё, что лежит в журнале, моложе срока, и одним сроком горячую таблицу не удержать.
+      //
+      // Срок здесь передаётся нулём нарочно: проверка обязана мерить потолок, а не то, что
+      // за неё доделал возраст. Потолок ставится НИЖЕ текущего числа строк на известную
+      // величину, и уехать обязано ровно это число - не больше и не меньше.
+      //
+      // Самая старая строка перед этим метится идущей. Она первый кандидат на переезд по
+      // возрасту - и обязана остаться: увезти открытый эпизод значило бы разорвать одну
+      // строку на две таблицы. Проверка без неё прошла бы и на переезде, который этого
+      // не различает.
+      HeldNo := HoldOldest;
+      RowsBefore := JournalRowCount;
+      OldestClosed := OldestClosedNo;
+      MovedByCeiling := Journal.MoveOldEntries(0,RowsBefore - CeilingSurplus,Waiters);
+      Check(Passed,Total,Report,ChkCeilingTxt,
+            (MovedByCeiling = CeilingSurplus) AND
+            (JournalRowCount = RowsBefore - CeilingSurplus) AND
+            (NOT InJournal(OldestClosed)) AND InHistory(OldestClosed) AND
+            InJournal(HeldNo),
+            STRSUBSTNO(CeilingTxt,MovedByCeiling,CeilingSurplus,JournalRowCount,
+                       RowsBefore - CeilingSurplus,HeldNo));
 
       // Зеркало сверяется КАЖДЫМ прогоном, а не глазами при правке. Список полей истории
       // списан с журнала, и разойтись он может только молча: добавленное поле просто не
@@ -355,7 +384,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         Timing(OpenPhaseTxt,OpenMs,Waiters) +
         Timing(UpdatePhaseTxt,UpdateMs,Waiters) +
         Timing(ClosePhaseTxt,CloseMs,Waiters) +
-        Timing(SweepPhaseTxt,SweepMs,Waiters - BackdateRows);
+        Timing(SweepPhaseTxt,SweepMs,Waiters - BackdateRows - CeilingSurplus);
     END;
 
     LOCAL PROCEDURE PassOfWaiters@3(Waiters@1000000000 : Integer;WaitMs@1000000001 : Integer;VAR Opened@1000000002 : Integer;VAR Updated@1000000003 : Integer;VAR Closed@1000000004 : Integer;VAR Restarted@1000000005 : Integer) : Integer;
@@ -495,6 +524,66 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Moved.RESET;
       Moved.SETFILTER("Started At",'<=%1',ToAt);
       EXIT(Moved.COUNT);
+    END;
+
+    LOCAL PROCEDURE JournalRowCount@51() : Integer;
+    BEGIN
+      // По ВСЕМУ журналу, а не по своим строкам: потолок меряет размер горячей таблицы, и
+      // мерка обязана считать ту же величину, что и он. Чужих строк здесь и нет - без этого
+      // мерный прогон отказывается идти вовсе (RefuseIfJournalUsed).
+      Episode.RESET;
+      EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE HoldOldest@52() : Integer;
+    VAR
+      Held@1000000000 : Record 110231;
+    BEGIN
+      // Самая старая строка метится ИДУЩЕЙ. Открытый эпизод ведёт текущий проход, и увезти
+      // его значило бы разорвать одну строку на две таблицы, а следующий проход, не найдя
+      // её в журнале, открыл бы эпизод заново.
+      Held.RESET;
+      Held.SETCURRENTKEY("Started At");
+      Held.FINDFIRST;
+      Held.Open := TRUE;
+      Held.MODIFY;
+      COMMIT;
+      EXIT(Held."Entry No.");
+    END;
+
+    LOCAL PROCEDURE OldestClosedNo@53() : Integer;
+    VAR
+      Row@1000000000 : Record 110231;
+    BEGIN
+      // Та самая строка, которую переезд обязан взять первой: ключ у мерки и у переезда
+      // один, поэтому "первый по ключу" здесь не примерно, а ровно тот же самый. Даты у
+      // строк одного прохода совпадают, и без общего ключа сравнивать было бы нечего.
+      Row.RESET;
+      Row.SETCURRENTKEY("Started At");
+      Row.SETRANGE(Open,FALSE);
+      Row.FINDFIRST;
+      EXIT(Row."Entry No.");
+    END;
+
+    LOCAL PROCEDURE InJournal@54(EntryNo@1000000000 : Integer) : Boolean;
+    VAR
+      Row@1000000001 : Record 110231;
+    BEGIN
+      EXIT(Row.GET(EntryNo));
+    END;
+
+    LOCAL PROCEDURE InHistory@55(EntryNo@1000000000 : Integer) : Boolean;
+    VAR
+      Row@1000000001 : Record 110238;
+    BEGIN
+      EXIT(Row.GET(EntryNo));
+    END;
+
+    LOCAL PROCEDURE CeilingSurplus@56() : Integer;
+    BEGIN
+      // Семь строк сверх потолка. Не десять: состаренных ровно десять, и совпади числа -
+      // подмена одного предела другим прошла бы проверку незамеченной.
+      EXIT(7);
     END;
 
     LOCAL PROCEDURE MirrorGap@43() : Text;

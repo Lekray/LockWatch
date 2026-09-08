@@ -36,6 +36,9 @@ OBJECT Table 110230 LockWatch Setup
                                                    MinValue=1 }
     { 15  ;   ;SQL Server          ;Text100       ;CaptionML=[ENU=SQL Server;
                                                               RUS=Сервер SQL] }
+    { 16  ;   ;Journal Rows Ceiling;Integer       ;CaptionML=[ENU=Journal rows before the oldest move to history;
+                                                              RUS=Сколько строк в журнале, прежде чем старые уедут в историю];
+                                                   MinValue=0 }
     { 20  ;   ;Collect Statement Values;Boolean   ;CaptionML=[ENU=Collect Statement Values;
                                                               RUS=Собирать значения в операторах] }
     { 21  ;   ;Alert Threshold (ms);Integer       ;CaptionML=[ENU=Alert Threshold (ms);
@@ -142,6 +145,7 @@ OBJECT Table 110230 LockWatch Setup
       "Max Rows per Pass" := DefaultMaxRows;
       "Max Pass (ms)" := DefaultMaxPassMs;
       "Retention (Days)" := DefaultRetentionDays;
+      "Journal Rows Ceiling" := DefaultJournalRows;
       "Alert Threshold (ms)" := DefaultAlertMs;
       "Collect Statement Values" := FALSE;
       "Deadlocks Enabled" := TRUE;
@@ -202,6 +206,23 @@ OBJECT Table 110230 LockWatch Setup
       // службой безопасности. Раньше этот разговор решался за них тихим удалением; теперь
       // он решается ими: историю чистит человек кнопкой, зная, что именно стирает.
       EXIT(30);
+    END;
+
+    LOCAL PROCEDURE DefaultJournalRows@9() : Integer;
+    BEGIN
+      // Второй предел рядом со сроком, и нужен он ровно там, где срок бессилен: тридцать
+      // дней на тихой базе - сотня строк, а в шторм - сотни тысяч, и ВСЕ они моложе срока.
+      // Одним сроком горячую таблицу не удержать, потому что срок про возраст, а место
+      // кончается от количества.
+      //
+      // Двадцать тысяч - это две минуты объявленного шторма: пятьсот строк за проход
+      // (DefaultMaxRows) каждые три секунды (DefaultPollPeriodMs) дают десять тысяч в
+      // минуту. Всё, что старше двух минут ПОЛНОГО шторма, - уже не "сейчас и в последнее
+      // время", а история, которая просто ещё не уехала.
+      //
+      // Ноль означает "потолка нет". Это осознанный выбор установки, а не умолчание: с
+      // умолчанием в ноль второй предел был бы написан и выключен.
+      EXIT(20000);
     END;
 
     LOCAL PROCEDURE DefaultEventSource@8() : Text[50];

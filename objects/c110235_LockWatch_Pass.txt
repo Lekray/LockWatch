@@ -33,6 +33,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       ReadFailedTxt@1000000008 : TextConst 'ENU=The queue could not be read: %1;RUS=Очередь прочитать не удалось: %1';
       DeadlockFailedTxt@1000000032 : TextConst 'ENU=Deadlocks are not read: %1;RUS=Взаимоблокировки не прочитаны: %1';
       DeadlocksTxt@1000000033 : TextConst 'ENU=Deadlocks added %1.;RUS=Взаимоблокировок добавлено %1.';
+      MovedTxt@1000000042 : TextConst 'ENU=Moved to history %1.;RUS=Уехало в историю %1.';
       DeadlockLostTxt@1000000034 : TextConst 'ENU=The ring buffer evicted events newer than the mark, some deadlocks are lost.;RUS=Буфер вытеснил события новее отметки, часть взаимоблокировок потеряна.';
       NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
       CoverageFailedTxt@1000000037 : TextConst 'ENU=Coverage counters are not read: %1;RUS=Счётчики охвата не прочитаны: %1';
@@ -136,7 +137,13 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Переезд порционный и внутри того же прохода: отдельное задание уборки - это ещё
       // один объект, который забудут включить, и горячая таблица будет расти молча.
       // Строка не уничтожается: срок в настройке - срок ПЕРЕЕЗДА в историю.
-      Journal.MoveOldEntries(Setup."Retention (Days)",TrimRowsPerPass);
+      //
+      // Пределов два, и второй нужен ровно там, где первый бессилен: в шторм всё, что
+      // лежит в журнале, моложе срока. Сколько уехало - в строке сторожа: ненайденный
+      // вчерашний эпизод без объяснения стоит часа поисков.
+      Note := Note + MovedNote(Journal.MoveOldEntries(Setup."Retention (Days)",
+                                                      Setup."Journal Rows Ceiling",
+                                                      TrimRowsPerPass(Setup."Max Rows per Pass")));
 
       Truncated := (Setup."Max Rows per Pass" > 0) AND (RowCount >= Setup."Max Rows per Pass");
       Elapsed := CURRENTDATETIME - StartedAt;
@@ -382,12 +389,35 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(FALSE);
     END;
 
-    LOCAL PROCEDURE TrimRowsPerPass@5() : Integer;
+    LOCAL PROCEDURE TrimRowsPerPass@5(RowsPerPass@1000000000 : Integer) : Integer;
     BEGIN
       // Потолок уборки за проход. Месяц журнала за один COMMIT - это блокировка
       // собственной таблицы посреди наблюдения, то есть ровно то, что мы ловим.
-      // Двести строк за проход разбирают суточный завал за минуты и никому не мешают.
+      //
+      // Но и меньше потолка НАБЛЮДЕНИЯ уборка быть не может. Если за проход приезжает
+      // строк больше, чем уезжает, потолок журнала не выполняется никогда: журнал растёт
+      // по построению, и второй предел оказывается написанным зря. Потолок наблюдения
+      // живёт в настройке и его поднимают - значит и уборка меряется им, а не своим числом.
+      IF RowsPerPass > TrimRowsFloor THEN
+        EXIT(RowsPerPass);
+      EXIT(TrimRowsFloor);
+    END;
+
+    LOCAL PROCEDURE TrimRowsFloor@13() : Integer;
+    BEGIN
+      // Пол уборки: двести строк за проход разбирают суточный завал за минуты и никому не
+      // мешают. Ниже него уборка не опускается, даже если потолок наблюдения занижен до
+      // единиц: тогда завал не разобрался бы вовсе.
       EXIT(200);
+    END;
+
+    LOCAL PROCEDURE MovedNote@14(Moved@1000000000 : Integer) : Text;
+    BEGIN
+      // Ноль не пишется. Строку сторожа читают каждым проходом, и постоянное "уехало 0"
+      // заслонило бы в ней то, ради чего её читают.
+      IF Moved = 0 THEN
+        EXIT('');
+      EXIT(' ' + STRSUBSTNO(MovedTxt,Moved));
     END;
 
     BEGIN
