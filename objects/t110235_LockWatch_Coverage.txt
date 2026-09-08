@@ -10,7 +10,7 @@ OBJECT Table 110235 LockWatch Coverage
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Coverage;
-               RUS=Охват LockWatch];
+               RUS=Охват сторожа];
   }
   FIELDS
   {

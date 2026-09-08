@@ -10,7 +10,7 @@ OBJECT Page 110235 LockWatch Alerts
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Alerts;
-               RUS=Тревоги LockWatch];
+               RUS=Тревоги сторожа];
     InsertAllowed=No;
     DeleteAllowed=No;
     ModifyAllowed=No;

@@ -10,7 +10,7 @@ OBJECT Page 110230 LockWatch Setup
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Setup;
-               RUS=Настройка LockWatch];
+               RUS=Настройка сторожа блокировок];
     InsertAllowed=No;
     DeleteAllowed=No;
     SourceTable=Table110230;

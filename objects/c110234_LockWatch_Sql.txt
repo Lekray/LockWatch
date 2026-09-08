@@ -15,7 +15,7 @@ OBJECT Codeunit 110234 LockWatch Sql
     VAR
       Parse@1000000000 : Codeunit 110230;
       LastError@1000000001 : Text;
-      NoServerErr@1000000002 : TextConst 'ENU=The SQL server name is not filled in the LockWatch setup. The platform does not tell it to C/AL: Active Session carries the NAV server, not the database one.;RUS=В настройке LockWatch не заполнено имя сервера SQL. Платформа его коду не отдаёт: в Active Session записан сервер NAV, а не сервер базы.';
+      NoServerErr@1000000002 : TextConst 'ENU=The SQL server name is not filled in the LockWatch setup. The platform does not tell it to C/AL: Active Session carries the NAV server, not the database one.;RUS=В настройке сторожа блокировок не заполнено имя сервера SQL. Платформа его коду не отдаёт: в Active Session записан сервер NAV, а не сервер базы.';
       NoClockErr@1000000004 : TextConst 'ENU=The server did not return the observation moment. Substituting the NAV clock here would silently shift every episode start.;RUS=Сервер не отдал момент наблюдения. Подставить сюда часы NAV значило бы молча сдвинуть начало каждого эпизода.';
       NoDatabaseErr@1000000003 : TextConst 'ENU=The database name is not known: the current session is missing from Active Session.;RUS=Имя базы неизвестно: текущего сеанса нет в Active Session.';
 
@@ -264,6 +264,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       TranList@1000000010 : Text;
       HobtList@1000000011 : Text;
       SpidList@1000000017 : Text;
+      HeadList@1000000018 : Text;
       Slot@1000000012 : Integer;
       Answered@1000000013 : Boolean;
     BEGIN
@@ -273,15 +274,15 @@ OBJECT Codeunit 110234 LockWatch Sql
       // держит. Читать представление дважды значило бы платить дважды за один и тот же
       // скан, а он дорог: 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не
       // помогает вовсе.
-      BuildLockLists(Buffer,TranList,HobtList,SpidList);
-      IF (TranList = '') AND (SpidList = '') THEN
+      BuildLockLists(Buffer,TranList,HobtList,SpidList,HeadList);
+      IF (TranList = '') AND (SpidList = '') AND (HeadList = '') THEN
         EXIT;
 
       SqlConn := SqlConn.SqlConnection(ConnString);
       SqlConn.Open;
       SqlCmd := SqlConn.CreateCommand;
       SqlCmd.CommandTimeout := ReadTimeoutSec;
-      SqlCmd.CommandText := LocksOfInterestSql(TranList,HobtList,SpidList);
+      SqlCmd.CommandText := LocksOfInterestSql(TranList,HobtList,SpidList,HeadList);
       SqlReader := SqlCmd.ExecuteReader;
       WHILE SqlReader.Read AND (Locks < MaxLocks) DO BEGIN
         Locks := Locks + 1;
@@ -298,19 +299,24 @@ OBJECT Codeunit 110234 LockWatch Sql
       Buffer.RESET;
       IF Buffer.FINDSET(TRUE) THEN
         REPEAT
-          // Порядок дорог не случаен. Первая отвечает "за какой документ ИДЁТ СПОР" -
-          // это ровно тот вопрос, ради которого инструмент и заводился. Вторая отвечает
-          // "чем занят виновник", и она нужна там, где первая молчит: у страничной
-          // блокировки строки нет вовсе, а читающий виновник отметки не оставляет.
+          // Дороги отвечают на РАЗНЫЕ вопросы, и потому спрашиваются обе. Первая говорит,
+          // за какую строку идёт спор, - ровно тот вопрос, ради которого инструмент и
+          // заводился. Вторая говорит, КТО виновник и чем он занят.
+          //
+          // Раньше вторая шла только там, где промолчала первая, и это стоило человека:
+          // имя есть ТОЛЬКО у отметки, а на таблице, объявленной таблицей документа,
+          // первая дорога отвечает всегда - и журнал оставался с документом, но без
+          // человека. Стоит исправление одного запроса и только там, где отметка есть:
+          // без переходника блокировок на таблице отметок не бывает вовсе, и вторая
+          // дорога до SQL не доходит.
           Answered := FALSE;
           Slot := FindWaitedLock(LockKind,LockSpid,LockHobt,Locks,Buffer."Victim SPID",Buffer."Hobt Id");
           IF Slot > 0 THEN
             Answered := ByContendedRow(SqlConn,Buffer,Context,LockObject[Slot],LockIndex[Slot],LockHash[Slot]);
-          IF NOT Answered THEN BEGIN
-            Slot := FindMarkLock(LockKind,LockTran,LockObject,Locks,Buffer."Blocker Transaction Id");
-            IF Slot > 0 THEN
-              ByContextMark(SqlConn,Buffer,LockObject[Slot],LockIndex[Slot],LockHash[Slot]);
-          END;
+          Slot := FindMarkLock(LockKind,LockSpid,LockTran,LockObject,Locks,
+                               Buffer."Head SPID",Buffer."Blocker Transaction Id");
+          IF Slot > 0 THEN
+            ByContextMark(SqlConn,Buffer,LockObject[Slot],LockIndex[Slot],LockHash[Slot],Answered);
         UNTIL Buffer.NEXT = 0;
       Buffer.RESET;
       SqlConn.Close;
@@ -348,7 +354,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE ByContextMark@33(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";VAR Buffer@1000000001 : TEMPORARY Record 110231;ObjectName@1000000002 : Text;IndexName@1000000003 : Text;LockHash@1000000004 : Text) : Boolean;
+    LOCAL PROCEDURE ByContextMark@33(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";VAR Buffer@1000000001 : TEMPORARY Record 110231;ObjectName@1000000002 : Text;IndexName@1000000003 : Text;LockHash@1000000004 : Text;DocumentKnown@1000000009 : Boolean) : Boolean;
     VAR
       SqlCmd@1000000005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
       SqlReader@1000000006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
@@ -369,12 +375,27 @@ OBJECT Codeunit 110234 LockWatch Sql
         UserId := ReaderText(SqlReader,1);
       END;
       SqlReader.Close;
-      IF DocumentNo = '' THEN
+      IF (DocumentNo = '') AND (UserId = '') THEN
         EXIT(FALSE);
 
-      Buffer."Document No." := COPYSTR(DocumentNo,1,MAXSTRLEN(Buffer."Document No."));
-      Buffer."User Name" := COPYSTR(UserId,1,MAXSTRLEN(Buffer."User Name"));
-      Buffer."Document Source" := Parse.DocSourceFromMark;
+      // Имя человека берётся ВСЕГДА, даже когда документ уже назван первой дорогой:
+      // другой дороги к имени у инструмента нет вовсе. Отметку положил сам виновник в
+      // своей же транзакции - это его имя, а не догадка по времени.
+      IF UserId <> '' THEN
+        Buffer."User Name" := COPYSTR(UserId,1,MAXSTRLEN(Buffer."User Name"));
+
+      IF DocumentNo <> '' THEN BEGIN
+        IF NOT DocumentKnown THEN BEGIN
+          Buffer."Document No." := COPYSTR(DocumentNo,1,MAXSTRLEN(Buffer."Document No."));
+          Buffer."Document Source" := Parse.DocSourceFromMark;
+        END ELSE BEGIN
+          // Обе дороги назвали документ. Совпали - остаётся спорная строка: она и есть
+          // ответ на вопрос "за что спор". Разошлись - об этом сказано вслух, отдельным
+          // значением: виновник держит одну строку, а спор идёт за другую.
+          IF Buffer."Document No." <> COPYSTR(DocumentNo,1,MAXSTRLEN(Buffer."Document No.")) THEN
+            Buffer."Document Source" := Parse.DocSourceDisagree;
+        END;
+      END;
       Buffer.MODIFY;
       EXIT(TRUE);
     END;
@@ -412,43 +433,68 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(0);
     END;
 
-    LOCAL PROCEDURE FindMarkLock@36(VAR LockKind@1000000007 : ARRAY [40] OF Integer;VAR LockTran@1000000000 : ARRAY [40] OF BigInteger;VAR LockObject@1000000001 : ARRAY [40] OF Text;Locks@1000000002 : Integer;TranId@1000000003 : BigInteger) : Integer;
+    LOCAL PROCEDURE FindMarkLock@36(VAR LockKind@1000000007 : ARRAY [40] OF Integer;VAR LockSpid@1000000008 : ARRAY [40] OF Integer;VAR LockTran@1000000000 : ARRAY [40] OF BigInteger;VAR LockObject@1000000001 : ARRAY [40] OF Text;Locks@1000000002 : Integer;HeadSpid@1000000009 : Integer;TranId@1000000003 : BigInteger) : Integer;
     VAR
       Index@1000000004 : Integer;
-      Name@1000000005 : Text;
-      Suffix@1000000006 : Text;
     BEGIN
       // Отметку виновник ДЕРЖИТ, а не просит: она поставлена его же записью внутри той же
       // транзакции. Невыполненная просьба на таблице отметок значила бы обратное - что
       // виновник сам чего-то ждёт, - и документом из неё отвечать нельзя.
-      IF TranId = 0 THEN
-        EXIT(0);
-      Suffix := MarkTableSuffix;
-      FOR Index := 1 TO Locks DO
-        IF (LockKind[Index] = KindGranted) AND (LockTran[Index] = TranId) THEN BEGIN
-          Name := LockObject[Index];
-          IF STRLEN(Name) >= STRLEN(Suffix) THEN
-            IF COPYSTR(Name,STRLEN(Name) - STRLEN(Suffix) + 1) = Suffix THEN
+      //
+      // Спрашивается она у ГОЛОВЫ цепочки, а не у непосредственного блокирующего, и это
+      // не мелочь. В очереди A -> B -> C непосредственный виновник у C - это B, который
+      // сам стоит за A: у B своя отметка, и она про то, чем занят ПОСТРАДАВШИЙ. Назвать
+      // его тем, кто держит, - ошибка того же рода, что назвать виновным пострадавшего,
+      // только правдоподобнее: имя-то настоящее, живого человека. Держит строку голова,
+      // она же и оставила отметку.
+      //
+      // Проверено очередью из трёх жертв: на прежнем коде имя получал ровно ОДИН эпизод
+      // из трёх - тот, чей непосредственный виновник и был головой.
+      IF HeadSpid <> 0 THEN
+        FOR Index := 1 TO Locks DO
+          IF (LockKind[Index] = KindGranted) AND (LockSpid[Index] = HeadSpid) THEN
+            IF IsMarkTable(LockObject[Index]) THEN
               EXIT(Index);
-        END;
+      // Головы не знаем - остаётся непосредственный блокирующий. На цепочке глубиной в
+      // единицу это одно и то же лицо, а глубже без головы отвечать всё равно нечем.
+      IF TranId <> 0 THEN
+        FOR Index := 1 TO Locks DO
+          IF (LockKind[Index] = KindGranted) AND (LockTran[Index] = TranId) THEN
+            IF IsMarkTable(LockObject[Index]) THEN
+              EXIT(Index);
       EXIT(0);
     END;
 
-    LOCAL PROCEDURE BuildLockLists@37(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR TranList@1000000001 : Text;VAR HobtList@1000000002 : Text;VAR SpidList@1000000004 : Text);
+    LOCAL PROCEDURE IsMarkTable@28(Name@1000000000 : Text) : Boolean;
+    VAR
+      Suffix@1000000001 : Text;
+    BEGIN
+      // Имя таблицы приходит с ПРЕФИКСОМ компании, и сравнивать его целиком нельзя:
+      // компаний в базе много, а таблица отметок у каждой своя.
+      Suffix := MarkTableSuffix;
+      IF STRLEN(Name) < STRLEN(Suffix) THEN
+        EXIT(FALSE);
+      EXIT(COPYSTR(Name,STRLEN(Name) - STRLEN(Suffix) + 1) = Suffix);
+    END;
+
+    LOCAL PROCEDURE BuildLockLists@37(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR TranList@1000000001 : Text;VAR HobtList@1000000002 : Text;VAR SpidList@1000000004 : Text;VAR HeadList@1000000005 : Text);
     VAR
       Seen@1000000003 : Integer;
     BEGIN
-      // Три списка на один запрос: транзакции виновников - для отметок, номера сеансов
-      // жертв вместе с hobt - для спорных строк. Отбор по номеру сеанса обязателен: без
-      // него в ответ попали бы невыполненные просьбы всей базы.
+      // Четыре списка на один запрос: транзакции виновников и сеансы ГОЛОВ цепочек - для
+      // отметок, номера сеансов жертв вместе с hobt - для спорных строк. Отбор по номеру
+      // сеанса обязателен: без него в ответ попали бы невыполненные просьбы всей базы.
       TranList := '';
       HobtList := '';
       SpidList := '';
+      HeadList := '';
       Buffer.RESET;
       IF Buffer.FINDSET THEN
         REPEAT
           IF Buffer."Blocker Transaction Id" <> 0 THEN BEGIN
             TranList := AppendId(TranList,FORMAT(Buffer."Blocker Transaction Id"));
+            IF Buffer."Head SPID" <> 0 THEN
+              HeadList := AppendId(HeadList,FORMAT(Buffer."Head SPID"));
             IF (Buffer."Hobt Id" <> 0) AND (Buffer."Victim SPID" <> 0) THEN BEGIN
               HobtList := AppendId(HobtList,FORMAT(Buffer."Hobt Id"));
               SpidList := AppendId(SpidList,FORMAT(Buffer."Victim SPID"));
@@ -459,12 +505,13 @@ OBJECT Codeunit 110234 LockWatch Sql
       Buffer.RESET;
     END;
 
-    LOCAL PROCEDURE LocksOfInterestSql@38(TranList@1000000000 : Text;HobtList@1000000001 : Text;SpidList@1000000004 : Text) : Text;
+    LOCAL PROCEDURE LocksOfInterestSql@38(TranList@1000000000 : Text;HobtList@1000000001 : Text;SpidList@1000000004 : Text;HeadList@1000000007 : Text) : Text;
     VAR
       Sql@1000000002 : Text;
       Hobts@1000000003 : Text;
       Spids@1000000005 : Text;
       Trans@1000000006 : Text;
+      Heads@1000000008 : Text;
     BEGIN
       // Пустой список пришлось бы отдавать как IN (), а это синтаксическая ошибка.
       // Заведомо несуществующий номер дешевле ветвления.
@@ -477,6 +524,9 @@ OBJECT Codeunit 110234 LockWatch Sql
       Trans := TranList;
       IF Trans = '' THEN
         Trans := '-1';
+      Heads := HeadList;
+      IF Heads = '' THEN
+        Heads := '-1';
       // Первая половина условия - НЕВЫПОЛНЕННЫЕ просьбы жертв: они называют спорную строку.
       // Вторая - ВЫДАННЫЕ блокировки виновников на таблице отметок. Знак "не равно" в
       // тексте запроса собран отрицанием равенства: равенство здесь и без того живёт
@@ -499,7 +549,8 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' AND l.resource_associated_entity_id IN (' + Hobts + '))' +
         ' OR (l.request_status ' + Eq + ' ' + Q + 'GRANT' + Q +
         ' AND l.request_owner_type ' + Eq + ' ' + Q + 'TRANSACTION' + Q +
-        ' AND l.request_owner_id IN (' + Trans + ')' +
+        ' AND (l.request_owner_id IN (' + Trans + ')' +
+        ' OR l.request_session_id IN (' + Heads + '))' +
         ' AND o.name LIKE ' + Q + Wildcard + MarkTableSuffix + Q + '));';
       EXIT(Sql);
     END;

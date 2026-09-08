@@ -24,7 +24,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       UpdatedCount@1000000007 : Integer;
       ClosedCount@1000000008 : Integer;
       RestartedCount@1000000009 : Integer;
-      NoPassErr@1000000010 : TextConst 'ENU=LockWatch: an episode was offered outside a pass. A pass is opened by BeginPass and closed by FinishPass.;RUS=LockWatch: эпизод предложен вне прохода. Проход открывается процедурой BeginPass и закрывается FinishPass.';
+      NoPassErr@1000000010 : TextConst 'ENU=LockWatch: an episode was offered outside a pass. A pass is opened by BeginPass and closed by FinishPass.;RUS=Сторож блокировок: эпизод предложен вне прохода. Проход открывается процедурой BeginPass и закрывается FinishPass.';
 
     [External]
     PROCEDURE BeginPass@1(ObservedAt@1000000000 : DateTime;PeriodMs@1000000001 : Integer;AlertMs@1000000012 : Integer);

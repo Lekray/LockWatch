@@ -22,7 +22,7 @@ OBJECT Codeunit 110240 LockWatch Alert
       WriteFailedTxt@1000000006 : TextConst 'ENU=The Windows event log refused the entry, the alert stayed in the journal: %1;RUS=Журнал событий Windows запись не принял, тревога осталась в журнале: %1';
       WrittenTxt@1000000007 : TextConst 'ENU=Written to the Windows event log, source %1.;RUS=Записана в журнал событий Windows, источник %1.';
       OffTxt@1000000008 : TextConst 'ENU=The channel outwards is switched off in the setup, the alert is in the journal only.;RUS=Канал наружу выключен в настройке, тревога только в журнале.';
-      EntryTxt@1000000009 : TextConst 'ENU=LockWatch: a lock has been waiting %1 ms, over the threshold of %2 ms. Head of the chain: session %3. Table %4, key %5. Document %6, user %7. %8;RUS=LockWatch: блокировка держит уже %1 мс при пороге %2 мс. Голова цепочки - сеанс %3. Таблица %4, ключ %5. Документ %6, пользователь %7. %8';
+      EntryTxt@1000000009 : TextConst 'ENU=LockWatch: a lock has been waiting %1 ms, over the threshold of %2 ms. Head of the chain: session %3. Table %4, key %5. Document %6, user %7. %8;RUS=Сторож блокировок: блокировка держит уже %1 мс при пороге %2 мс. Голова цепочки - сеанс %3. Таблица %4, ключ %5. Документ %6, пользователь %7. %8';
 
     [External]
     PROCEDURE BeginPass@1();

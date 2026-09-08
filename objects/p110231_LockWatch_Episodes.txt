@@ -167,7 +167,7 @@ OBJECT Page 110231 LockWatch Episodes
                       CaptionML=[ENU=Setup;
                                  RUS=Настройка];
                       ToolTipML=[ENU=Open the LockWatch setup and its watchdog line.;
-                                 RUS=Открыть настройку LockWatch и строку её сторожа.];
+                                 RUS=Открыть настройку сторожа блокировок и его сообщение.];
                       ApplicationArea=#All;
                       Promoted=Yes;
                       Image=Setup;

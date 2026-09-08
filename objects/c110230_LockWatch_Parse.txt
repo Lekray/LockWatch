@@ -29,7 +29,7 @@ OBJECT Codeunit 110230 LockWatch Parse
       EvQueueTxt@1000000015 : TextConst 'ENU=%1 victims behind one head;RUS=жертв за одной головой %1';
       EvTimedOutTxt@1000000016 : TextConst 'ENU=refused on the limit, %1 ms;RUS=отказ по пределу, %1 мс';
       EvLongWaitTxt@1000000017 : TextConst 'ENU=%1 ms against the threshold of %2 ms;RUS=%1 мс при пороге %2 мс';
-      CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено LockWatch, весь оператор %1 знаков, оставлено %2';
+      CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено сторожем блокировок, весь оператор %1 знаков, оставлено %2';
 
     [External]
     PROCEDURE NavLockTimeoutMs@10() : Integer;
@@ -91,6 +91,16 @@ OBJECT Codeunit 110230 LockWatch Parse
     PROCEDURE DocSourceFromMark@33() : Integer;
     BEGIN
       EXIT(2);
+    END;
+
+    [External]
+    PROCEDURE DocSourceDisagree@62() : Integer;
+    BEGIN
+      // Дороги назвали РАЗНЫЕ документы. Это не ошибка ни одной из них: виновник держит
+      // строку одного документа, а спор идёт за строку другого - так бывает, когда одна
+      // транзакция трогает несколько документов. Молча выбрать один значило бы соврать
+      // уверенно, поэтому у журнала есть слово и на этот случай.
+      EXIT(3);
     END;
 
     [External]

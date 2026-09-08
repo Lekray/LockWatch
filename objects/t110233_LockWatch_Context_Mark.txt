@@ -10,7 +10,7 @@ OBJECT Table 110233 LockWatch Context Mark
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Context Mark;
-               RUS=Отметка контекста LockWatch];
+               RUS=Отметка контекста сторожа];
   }
   FIELDS
   {

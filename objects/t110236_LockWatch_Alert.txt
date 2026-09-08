@@ -10,7 +10,7 @@ OBJECT Table 110236 LockWatch Alert
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Alert;
-               RUS=Тревога LockWatch];
+               RUS=Тревога сторожа];
   }
   FIELDS
   {

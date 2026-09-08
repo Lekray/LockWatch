@@ -623,13 +623,21 @@ WHERE x.e.value('(@timestamp)[1]','datetime') > DATEADD(minute,-2,GETUTCDATE());
     if (-not $circleMade) { Warn 'круга не вышло за все попытки - взаимоблокировку в этом показе не увидим' }
 
     # -----------------------------------------------------------------------------------
-    Head 'Сцена 1. За какой документ идёт спор'
+    Head 'Сцена 1. За какой документ идёт спор - и кто его держит'
     Say "виновник держит строку документа $docHash, жертва тянется за той же строкой"
+    Say 'виновник оставляет и отметку контекста - ровно так, как её оставляет переходник'
+    Say 'обе дороги отвечают: документ приходит по хэшу спорной строки, человек - из отметки'
     $where = Get-KeyPredicate $sqlTable $docColumn $docHash
     if (-not $where) { Fail 'первичный ключ таблицы документа не определён' }
-    # Держатель НИЧЕГО НЕ МЕНЯЕТ: UPDLOCK на строке даёт ту же блокировку рода KEY, что и
-    # запись, но не трогает данные установки.
-    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
+    Invoke-Sql @"
+DELETE FROM $mark WHERE [Server Instance Id] = -1;
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+VALUES (-1,-1,N'$demoUser',N'$Company',$TableNo,N'$docHash',GETDATE());
+"@ | Out-Null
+    # В таблице УСТАНОВКИ держатель ничего не меняет: UPDLOCK даёт ту же блокировку рода
+    # KEY, что и запись, но данных не трогает. Правится только своя строка отметки - её и
+    # правит переходник, в той же транзакции, чем и держит на ней блокировку.
+    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'$docHash' WHERE [Server Instance Id]=-1`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
     $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'demo-doc-hold.sql' $hold
     $script:scenePids += $blocker

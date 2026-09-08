@@ -10,7 +10,7 @@ OBJECT Table 110234 LockWatch Summary Line
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Summary Line;
-               RUS=Строка сводки LockWatch];
+               RUS=Строка сводки сторожа];
   }
   FIELDS
   {

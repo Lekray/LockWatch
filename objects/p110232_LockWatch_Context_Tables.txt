@@ -10,7 +10,7 @@ OBJECT Page 110232 LockWatch Context Tables
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Context Tables;
-               RUS=Таблицы контекста LockWatch];
+               RUS=Таблицы контекста сторожа];
     SourceTable=Table110232;
     PageType=List;
     ActionList=ACTIONS
@@ -41,7 +41,7 @@ OBJECT Page 110232 LockWatch Context Tables
                       CaptionML=[ENU=Setup;
                                  RUS=Настройка];
                       ToolTipML=[ENU=Open the LockWatch setup.;
-                                 RUS=Открыть настройку LockWatch.];
+                                 RUS=Открыть настройку сторожа блокировок.];
                       ApplicationArea=#All;
                       Promoted=Yes;
                       Image=Setup;

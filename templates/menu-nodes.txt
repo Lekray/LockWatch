@@ -13,7 +13,7 @@
 # пунктов рядом с первым, и убрать его можно было бы только руками.
     { Menu           ;[{E7B801BA-33D6-4F3A-B984-0937536E2F21}] ;Name=LockWatch;
                                                                 CaptionML=[ENU=LockWatch;
-                                                                           RUS=LockWatch];
+                                                                           RUS=Сторож блокировок];
                                                                 ParentNodeID=[{00000000-0000-0000-0000-000000000000}];
                                                                 Image=1;
                                                                 IsShortcut=No;
@@ -80,7 +80,7 @@
                                                                 NextNodeID=[{3F625FC4-CF59-4F1C-B1B5-DC4BB77B507C}] }
     { MenuItem       ;[{3F625FC4-CF59-4F1C-B1B5-DC4BB77B507C}] ;Name=Setup;
                                                                 CaptionML=[ENU=Setup;
-                                                                           RUS=Настройка LockWatch];
+                                                                           RUS=Настройка сторожа];
                                                                 ApplicationArea=#All;
                                                                 MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
                                                                 RunObjectType=Page;
