@@ -278,6 +278,13 @@ OBJECT Page 110231 LockWatch Episodes
                 ApplicationArea=#All;
                 SourceExpr="User Name" }
 
+    { 55  ;2   ;Field     ;
+                Name=VictimUserName;
+                ToolTipML=[ENU=Specifies who was kept waiting. The name comes from the victim's own context mark - the one its transaction put down before it queued up. Without it the sufferer is named by a session number, which is to say not named at all.;
+                           RUS=Определяет, кого задержали. Имя приходит из СОБСТВЕННОЙ отметки жертвы - той, что её транзакция положила до того, как встала в очередь. Без неё пострадавший назван номером сеанса, то есть не назван вовсе.];
+                ApplicationArea=#All;
+                SourceExpr="Victim User Name" }
+
     { 13  ;2   ;Field     ;
                 Name=VictimSPID;
                 ToolTipML=[ENU=Specifies the server session of the victim.;

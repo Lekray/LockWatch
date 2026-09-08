@@ -109,6 +109,9 @@ OBJECT Table 110231 LockWatch Episode
                                                    OptionCaptionML=[ENU=None,From context mark,From platform;
                                                                     RUS=Нет,По отметке контекста,От платформы];
                                                    OptionString=None,FromMark,FromPlatform }
+    { 62  ;   ;Victim User Name    ;Code50        ;CaptionML=[ENU=Victim User Name;
+                                                              RUS=Кто ждал];
+                                                   Editable=No }
     { 70  ;   ;Blocker Statement   ;Text250       ;CaptionML=[ENU=Blocker Statement;
                                                               RUS=Последний оператор виновника] }
     { 71  ;   ;NAV Object No.      ;Integer       ;CaptionML=[ENU=NAV Object No.;

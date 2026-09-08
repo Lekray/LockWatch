@@ -133,7 +133,7 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE SetDocument@13(EntryNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20];UserName@1000000002 : Code[50];Source@1000000003 : Integer;Reason@1000000004 : Text);
+    PROCEDURE SetDocument@13(EntryNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20];UserName@1000000002 : Code[50];Source@1000000003 : Integer;Reason@1000000004 : Text;VictimUserName@1000000005 : Code[50]);
     BEGIN
       Journal.RESET;
       IF NOT Journal.GET(EntryNo) THEN
@@ -148,6 +148,10 @@ OBJECT Codeunit 110232 LockWatch Journal
         Journal."User Name" := UserName;
         Journal."User Source" := Journal."User Source"::FromMark;
       END;
+      // Имя жертвы кладётся отдельным полем и БЕЗ признака источника: источник у него
+      // ровно один - её собственная отметка. Появится второй - будет и признак.
+      IF VictimUserName <> '' THEN
+        Journal."Victim User Name" := VictimUserName;
       Journal.MODIFY;
     END;
 
@@ -433,6 +437,10 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal."No Document Reason" := Keep."No Document Reason";
       Journal."User Name" := Keep."User Name";
       Journal."User Source" := Keep."User Source";
+      // Имя жертвы - из того же списка, и забыть его тут стоило дороже всего: оно
+      // писалось исправно и затиралось следующим же проходом через три секунды, а
+      // выглядело это как "дорога к имени жертвы не работает вовсе".
+      Journal."Victim User Name" := Keep."Victim User Name";
       // Совета в этом списке нет нарочно. Всё остальное здесь - то, что установлено ОДИН
       // раз и повторно не выясняется, а совет обязан идти за строкой: ожидание растёт,
       // класс меняется, и совет, поставленный при открытии, к закрытию был бы про другое.

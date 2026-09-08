@@ -15,7 +15,10 @@ OBJECT Codeunit 110243 LockWatch Hold By User
     VAR
       NoContextErr@1000000000 : TextConst 'ENU=No context table is switched on. The holder locks a row of the very table the tool was told to watch, and without such a table there is nothing to hold.;RUS=Ни одна таблица контекста не включена. Держатель берёт строку той самой таблицы, за которой велено следить, и без неё держать нечего.';
       NoRowErr@1000000001 : TextConst 'ENU=Row %1 is not in table %2. It is put down by the run itself: the tool never writes into a live document.;RUS=Строки %1 в таблице %2 нет. Её кладёт сам прогон: в живой документ инструмент не пишет никогда.';
+      NoMarkErr@1000000016 : TextConst 'ENU=The session modified its own row, but the context mark is not there. The adapter for that table is either missing or switched off, and without the mark the journal cannot name anyone.;RUS=Сеанс правил свою строку, а отметки контекста нет. Переходника на эту таблицу нет или он выключен, а без отметки журналу некого называть.';
       HeldTxt@1000000002 : TextConst 'ENU=LOCKHELD user %1 session %2 table %3 document %4 mark %5 ms %6;RUS=LOCKHELD user %1 session %2 table %3 document %4 mark %5 ms %6';
+      WaitedTxt@1000000012 : TextConst 'ENU=LOCKWAITED user %1 session %2 document %3 mark %4 error %5;RUS=LOCKWAITED user %1 session %2 document %3 mark %4 error %5';
+      TookTxt@1000000013 : TextConst 'ENU=LOCKTOOK user %1 session %2 document %3 mark %4;RUS=LOCKTOOK user %1 session %2 document %3 mark %4';
 
     [External]
     PROCEDURE Hold@1();
@@ -61,6 +64,61 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       Waited := HoldMs;
       SLEEP(Waited);
       MESSAGE(HeldTxt,USERID,SESSIONID,Context."Table No.",HoldDocumentNo,MarkSeen,Waited);
+    END;
+
+    [External]
+    PROCEDURE Wait@4();
+    VAR
+      Context@1000000009 : Record 110232;
+      Mark@1000000014 : Record 110233;
+      RecRef@1000000010 : RecordRef;
+      DocField@1000000011 : FieldRef;
+      MarkSeen@1000000015 : Text[3];
+    BEGIN
+      // Жертва - тоже человек, и у неё тоже есть отметка. Кладёт её переходник ровно так
+      // же: жертва сперва правит СВОЮ строку (своё дело, своя транзакция), и только потом
+      // тянется за спорной. Без первого шага отметки у неё нет вовсе, и журнал назовёт её
+      // номером сеанса - то есть не назовёт.
+      Context.SETRANGE(Enabled,TRUE);
+      IF NOT Context.FINDFIRST THEN
+        ERROR(NoContextErr);
+
+      RecRef.OPEN(Context."Table No.");
+      RecRef.LOCKTABLE;
+      DocField := RecRef.FIELD(Context."Document Field No.");
+      DocField.SETRANGE(WaitDocumentNo);
+      IF NOT RecRef.FINDFIRST THEN
+        ERROR(NoRowErr,WaitDocumentNo,Context."Table Name");
+      RecRef.MODIFY;
+
+      // Своя отметка проверяется СРАЗУ и громко. Без неё опыт бессмыслен: ожидание будет
+      // настоящим, а имени в журнале всё равно не появится, и разбираться придётся вслепую.
+      IF NOT Mark.GET(SERVICEINSTANCEID,SESSIONID) THEN
+        ERROR(NoMarkErr);
+      MarkSeen := 'yes';
+
+      // Дальше - за спорной строкой. Ожидание настоящее, и кончится оно ПРЕДЕЛОМ: у NAV
+      // это 10 000 мс, и сессию снесёт отказом. Отказ здесь ожидаемый конец опыта, а не
+      // беда: эпизод к тому времени уже в журнале, потому что сторож ходит раз в три
+      // секунды.
+      //
+      // Попытки [TryFunction] тут нет нарочно, и это не выбор стиля: платформа запрещает
+      // внутри неё и MODIFY, и LOCKTABLE - "is not allowed inside the call ... when it is
+      // used as a TryFunction". Ловить нечем, да и незачем.
+      DocField := RecRef.FIELD(Context."Document Field No.");
+      DocField.SETRANGE(HoldDocumentNo);
+      IF NOT RecRef.FINDFIRST THEN
+        ERROR(NoRowErr,HoldDocumentNo,Context."Table Name");
+      RecRef.MODIFY;
+      MESSAGE(TookTxt,USERID,SESSIONID,HoldDocumentNo,MarkSeen);
+    END;
+
+    LOCAL PROCEDURE WaitDocumentNo@6() : Code[20];
+    BEGIN
+      // Своя строка ждущего: она нужна затем, чтобы переходник записал его отметку. Тот же
+      // порядок и в бою - человек сперва делает своё дело, а на чужую строку натыкается
+      // потом.
+      EXIT('LOCKWATCH-LIVE-2');
     END;
 
     LOCAL PROCEDURE HoldMs@2() : Integer;

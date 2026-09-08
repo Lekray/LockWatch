@@ -160,11 +160,12 @@ OBJECT Codeunit 110235 LockWatch Pass
         REPEAT
           IF Pending."Document No." <> '' THEN
             Journal.SetDocument(Pending."Entry No.",Pending."Document No.",Pending."User Name",
-                                Pending."Document Source",'')
+                                Pending."Document Source",'',Pending."Victim User Name")
           ELSE
             // Пустая колонка с ПРИЧИНОЙ честнее пустой колонки без неё: без причины она
             // читается как "блокировок по документам не было".
-            Journal.SetDocument(Pending."Entry No.",'','',Parse.DocSourceNone,NoMarkTxt);
+            Journal.SetDocument(Pending."Entry No.",'','',Parse.DocSourceNone,NoMarkTxt,
+                                Pending."Victim User Name");
         UNTIL Pending.NEXT = 0;
       EXIT('');
     END;

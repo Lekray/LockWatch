@@ -264,7 +264,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       TranList@1000000010 : Text;
       HobtList@1000000011 : Text;
       SpidList@1000000017 : Text;
-      HeadList@1000000018 : Text;
+      MarkSpidList@1000000018 : Text;
       Slot@1000000012 : Integer;
       Answered@1000000013 : Boolean;
     BEGIN
@@ -274,15 +274,15 @@ OBJECT Codeunit 110234 LockWatch Sql
       // держит. Читать представление дважды значило бы платить дважды за один и тот же
       // скан, а он дорог: 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не
       // помогает вовсе.
-      BuildLockLists(Buffer,TranList,HobtList,SpidList,HeadList);
-      IF (TranList = '') AND (SpidList = '') AND (HeadList = '') THEN
+      BuildLockLists(Buffer,TranList,HobtList,SpidList,MarkSpidList);
+      IF (TranList = '') AND (SpidList = '') AND (MarkSpidList = '') THEN
         EXIT;
 
       SqlConn := SqlConn.SqlConnection(ConnString);
       SqlConn.Open;
       SqlCmd := SqlConn.CreateCommand;
       SqlCmd.CommandTimeout := ReadTimeoutSec;
-      SqlCmd.CommandText := LocksOfInterestSql(TranList,HobtList,SpidList,HeadList);
+      SqlCmd.CommandText := LocksOfInterestSql(TranList,HobtList,SpidList,MarkSpidList);
       SqlReader := SqlCmd.ExecuteReader;
       WHILE SqlReader.Read AND (Locks < MaxLocks) DO BEGIN
         Locks := Locks + 1;
@@ -317,6 +317,15 @@ OBJECT Codeunit 110234 LockWatch Sql
                                Buffer."Head SPID",Buffer."Blocker Transaction Id");
           IF Slot > 0 THEN
             ByContextMark(SqlConn,Buffer,LockObject[Slot],LockIndex[Slot],LockHash[Slot],Answered);
+
+          // Третья дорога отвечает на вопрос "КОГО задержали". Отметка есть и у жертвы -
+          // своя, положенная её же транзакцией до того, как она встала в очередь, - и
+          // читается она тем же приёмом. Без неё журнал называет пострадавшего номером
+          // сеанса и узлом, то есть не называет: по номеру сеанса человека не найти, а
+          // через сутки его не найти и подавно.
+          Slot := FindMarkBySpid(LockKind,LockSpid,LockObject,Locks,Buffer."Victim SPID");
+          IF Slot > 0 THEN
+            ByVictimMark(SqlConn,Buffer,LockObject[Slot],LockIndex[Slot],LockHash[Slot]);
         UNTIL Buffer.NEXT = 0;
       Buffer.RESET;
       SqlConn.Close;
@@ -400,6 +409,31 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(TRUE);
     END;
 
+    LOCAL PROCEDURE ByVictimMark@49(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";VAR Buffer@1000000001 : TEMPORARY Record 110231;ObjectName@1000000002 : Text;IndexName@1000000003 : Text;LockHash@1000000004 : Text) : Boolean;
+    VAR
+      SqlCmd@1000000005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      SqlReader@1000000006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      UserId@1000000007 : Text;
+    BEGIN
+      // Из отметки жертвы берётся ТОЛЬКО имя. Документ в ней тоже есть, но он про то, чем
+      // занималась жертва, а не за что идёт спор, и класть его в ту же колонку значило бы
+      // смешать два разных ответа в одном месте - худшее, что можно сделать с журналом.
+      IF LockHash = '' THEN
+        EXIT(FALSE);
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText := MarkRowSql(ObjectName,IndexName,LockHash);
+      SqlReader := SqlCmd.ExecuteReader;
+      IF SqlReader.Read THEN
+        UserId := ReaderText(SqlReader,1);
+      SqlReader.Close;
+      IF UserId = '' THEN
+        EXIT(FALSE);
+      Buffer."Victim User Name" := COPYSTR(UserId,1,MAXSTRLEN(Buffer."Victim User Name"));
+      Buffer.MODIFY;
+      EXIT(TRUE);
+    END;
+
     LOCAL PROCEDURE FindContext@34(VAR Context@1000000000 : TEMPORARY Record 110232;NavTableName@1000000001 : Text) : Boolean;
     BEGIN
       // Имя таблицы в журнале снято с SQL, а в списке контекста лежит имя объекта NAV.
@@ -450,11 +484,9 @@ OBJECT Codeunit 110234 LockWatch Sql
       //
       // Проверено очередью из трёх жертв: на прежнем коде имя получал ровно ОДИН эпизод
       // из трёх - тот, чей непосредственный виновник и был головой.
-      IF HeadSpid <> 0 THEN
-        FOR Index := 1 TO Locks DO
-          IF (LockKind[Index] = KindGranted) AND (LockSpid[Index] = HeadSpid) THEN
-            IF IsMarkTable(LockObject[Index]) THEN
-              EXIT(Index);
+      Index := FindMarkBySpid(LockKind,LockSpid,LockObject,Locks,HeadSpid);
+      IF Index > 0 THEN
+        EXIT(Index);
       // Головы не знаем - остаётся непосредственный блокирующий. На цепочке глубиной в
       // единицу это одно и то же лицо, а глубже без головы отвечать всё равно нечем.
       IF TranId <> 0 THEN
@@ -462,6 +494,21 @@ OBJECT Codeunit 110234 LockWatch Sql
           IF (LockKind[Index] = KindGranted) AND (LockTran[Index] = TranId) THEN
             IF IsMarkTable(LockObject[Index]) THEN
               EXIT(Index);
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE FindMarkBySpid@29(VAR LockKind@1000000000 : ARRAY [40] OF Integer;VAR LockSpid@1000000001 : ARRAY [40] OF Integer;VAR LockObject@1000000002 : ARRAY [40] OF Text;Locks@1000000003 : Integer;Spid@1000000004 : Integer) : Integer;
+    VAR
+      Index@1000000005 : Integer;
+    BEGIN
+      // Выданная блокировка на таблице отметок у названного сеанса. Выданная, а не
+      // просимая: отметку СВОЮ сеанс держит, а не ждёт.
+      IF Spid = 0 THEN
+        EXIT(0);
+      FOR Index := 1 TO Locks DO
+        IF (LockKind[Index] = KindGranted) AND (LockSpid[Index] = Spid) THEN
+          IF IsMarkTable(LockObject[Index]) THEN
+            EXIT(Index);
       EXIT(0);
     END;
 
@@ -477,24 +524,27 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(COPYSTR(Name,STRLEN(Name) - STRLEN(Suffix) + 1) = Suffix);
     END;
 
-    LOCAL PROCEDURE BuildLockLists@37(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR TranList@1000000001 : Text;VAR HobtList@1000000002 : Text;VAR SpidList@1000000004 : Text;VAR HeadList@1000000005 : Text);
+    LOCAL PROCEDURE BuildLockLists@37(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR TranList@1000000001 : Text;VAR HobtList@1000000002 : Text;VAR SpidList@1000000004 : Text;VAR MarkSpidList@1000000005 : Text);
     VAR
       Seen@1000000003 : Integer;
     BEGIN
-      // Четыре списка на один запрос: транзакции виновников и сеансы ГОЛОВ цепочек - для
-      // отметок, номера сеансов жертв вместе с hobt - для спорных строк. Отбор по номеру
-      // сеанса обязателен: без него в ответ попали бы невыполненные просьбы всей базы.
+      // Четыре списка на один запрос: транзакции виновников и сеансы, чьи ОТМЕТКИ нужны
+      // (голова цепочки и сама жертва), - для имён; номера сеансов жертв вместе с hobt -
+      // для спорных строк. Отбор по номеру сеанса обязателен: без него в ответ попали бы
+      // невыполненные просьбы всей базы.
       TranList := '';
       HobtList := '';
       SpidList := '';
-      HeadList := '';
+      MarkSpidList := '';
       Buffer.RESET;
       IF Buffer.FINDSET THEN
         REPEAT
           IF Buffer."Blocker Transaction Id" <> 0 THEN BEGIN
             TranList := AppendId(TranList,FORMAT(Buffer."Blocker Transaction Id"));
             IF Buffer."Head SPID" <> 0 THEN
-              HeadList := AppendId(HeadList,FORMAT(Buffer."Head SPID"));
+              MarkSpidList := AppendId(MarkSpidList,FORMAT(Buffer."Head SPID"));
+            IF Buffer."Victim SPID" <> 0 THEN
+              MarkSpidList := AppendId(MarkSpidList,FORMAT(Buffer."Victim SPID"));
             IF (Buffer."Hobt Id" <> 0) AND (Buffer."Victim SPID" <> 0) THEN BEGIN
               HobtList := AppendId(HobtList,FORMAT(Buffer."Hobt Id"));
               SpidList := AppendId(SpidList,FORMAT(Buffer."Victim SPID"));
@@ -505,7 +555,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       Buffer.RESET;
     END;
 
-    LOCAL PROCEDURE LocksOfInterestSql@38(TranList@1000000000 : Text;HobtList@1000000001 : Text;SpidList@1000000004 : Text;HeadList@1000000007 : Text) : Text;
+    LOCAL PROCEDURE LocksOfInterestSql@38(TranList@1000000000 : Text;HobtList@1000000001 : Text;SpidList@1000000004 : Text;MarkSpidList@1000000007 : Text) : Text;
     VAR
       Sql@1000000002 : Text;
       Hobts@1000000003 : Text;
@@ -524,7 +574,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       Trans := TranList;
       IF Trans = '' THEN
         Trans := '-1';
-      Heads := HeadList;
+      Heads := MarkSpidList;
       IF Heads = '' THEN
         Heads := '-1';
       // Первая половина условия - НЕВЫПОЛНЕННЫЕ просьбы жертв: они называют спорную строку.
