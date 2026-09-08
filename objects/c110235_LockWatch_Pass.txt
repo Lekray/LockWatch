@@ -70,6 +70,9 @@ OBJECT Codeunit 110235 LockWatch Pass
       // предыдущего, а самый дорогой - запись - должен получить всё, что о нём известно,
       // с первого раза: обновлять строку журнала дважды за проход дороже вдвое.
       Setup.FetchOnce;
+      // Язык, на котором проход пишет слова: подсказку, причину, сообщение сторожа и текст
+      // тревоги наружу. В сессии с окном язык не трогается вовсе - разбирается это внутри.
+      Parse.UseJournalLanguage(Setup."Journal Language ID");
       StartedAt := CURRENTDATETIME;
 
       IF NOT Sql.ReadQueue(Setup."Max Rows per Pass",Setup."Collect Statement Values",

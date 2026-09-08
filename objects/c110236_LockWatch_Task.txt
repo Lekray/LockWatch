@@ -18,6 +18,7 @@ OBJECT Codeunit 110236 LockWatch Task
   {
     VAR
       Setup@1000000000 : Record 110230;
+      Parse@1000000006 : Codeunit 110230;
       NoSchedulerErr@1000000001 : TextConst 'ENU=The service instance runs with the task scheduler switched off (EnableTaskScheduler in the service configuration). Until it is on, the watch cannot arm itself.;RUS=Экземпляр службы работает с выключенным планировщиком задач (EnableTaskScheduler в конфигурации службы). Пока он выключен, сторож завестись не может.';
       StartedTxt@1000000002 : TextConst 'ENU=The watch is armed, the first pass is due shortly.;RUS=Сторож заведён, первый проход вот-вот.';
       StoppedTxt@1000000003 : TextConst 'ENU=The watch is stopped by hand.;RUS=Сторож остановлен вручную.';
@@ -31,6 +32,11 @@ OBJECT Codeunit 110236 LockWatch Task
       // Две цепочки проходов, идущие вперемежку, - это не удвоенное наблюдение, а два
       // наблюдателя, закрывающих эпизоды друг другу, и разобрать потом такой журнал нельзя.
       Setup.FetchOnce;
+      // Язык журнала, если его не задавали, берётся у того, кто сторожа ЗАВЁЛ: читать
+      // журнал будут такие же люди, а фоновой задаче взять язык неоткуда. Сессия без окна
+      // (прогон, командлет) его не назначает - у неё язык службы, а не человека.
+      IF GUIALLOWED AND (Setup."Journal Language ID" = 0) THEN
+        Setup."Journal Language ID" := GLOBALLANGUAGE;
       IF NOT TASKSCHEDULER.CANCREATETASK THEN
         ERROR(NoSchedulerErr);
       CancelOurTasks;
@@ -101,6 +107,9 @@ OBJECT Codeunit 110236 LockWatch Task
     LOCAL PROCEDURE RunAndReschedule@5();
     BEGIN
       Setup.FetchOnce;
+      // Задача пишет свои слова тем же языком, что и проход: сообщение "сторож выключен",
+      // пришедшее по-английски в русский журнал, выглядит чужим - и им и является.
+      Parse.UseJournalLanguage(Setup."Journal Language ID");
       IF NOT Setup.Enabled THEN BEGIN
         // Выключатель сняли между проходами. Цепочка обрывается сама и говорит об этом:
         // сторож, замолчавший без объяснения, неотличим от сторожа, который умер.

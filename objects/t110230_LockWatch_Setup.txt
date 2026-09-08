@@ -53,6 +53,16 @@ OBJECT Table 110230 LockWatch Setup
     { 25  ;   ;Platform Road Status;Text250       ;CaptionML=[ENU=Platform Road Status;
                                                               RUS=Что со дорогой от платформы];
                                                    Editable=No }
+    { 26  ;   ;Journal Language ID ;Integer       ;TableRelation="Windows Language"."Language ID";
+                                                   CaptionML=[ENU=Journal Language;
+                                                              RUS=Язык журнала];
+                                                   MinValue=0 }
+    { 27  ;   ;Journal Language Name;Text80       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Windows Language".Name
+                                                                      WHERE (Language ID=FIELD(Journal Language ID)));
+                                                   CaptionML=[ENU=Journal Language Name;
+                                                              RUS=Язык журнала, название];
+                                                   Editable=No }
     { 30  ;   ;Deadlocks Enabled   ;Boolean       ;CaptionML=[ENU=Deadlocks Enabled;
                                                               RUS=Собирать взаимоблокировки] }
     { 31  ;   ;Deadlocks Read Until;DateTime      ;CaptionML=[ENU=Deadlocks Read Until;

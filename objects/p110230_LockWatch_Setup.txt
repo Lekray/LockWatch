@@ -160,6 +160,21 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="SQL Server" }
 
+    { 55  ;2   ;Field     ;
+                Name=JournalLanguageId;
+                ToolTipML=[ENU=Specifies the language in which the watch writes WORDS into the journal - advice, reasons and its own messages. The background task has no person behind it and no language of its own, so without this it writes in the language of the service. Switching the language in the client does not change what is already stored: the client shows a saved string, it does not build it again.;
+                           RUS=Определяет язык, на котором сторож пишет в журнал СЛОВА - подсказки, причины и свои сообщения. У фоновой задачи нет ни человека, ни его языка, и без этой настройки она пишет на языке службы. Переключение языка в клиенте уже записанное не меняет: клиент показывает сохранённую строку, а не собирает её заново.];
+                ApplicationArea=#All;
+                SourceExpr="Journal Language ID" }
+
+    { 56  ;2   ;Field     ;
+                Name=JournalLanguageName;
+                ToolTipML=[ENU=Specifies the name of that language, as Windows itself calls it. The number alone says nothing to the reader, and a wrong number is indistinguishable from a right one.;
+                           RUS=Определяет название этого языка так, как его зовёт сама Windows. Одно число читателю не говорит ничего, а ошибочное число неотличимо от верного.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                SourceExpr="Journal Language Name" }
+
     { 6   ;1   ;Group     ;
                 CaptionML=[ENU=Limits;
                            RUS=Пределы];
