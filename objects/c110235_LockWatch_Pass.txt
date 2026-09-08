@@ -64,12 +64,16 @@ OBJECT Codeunit 110235 LockWatch Pass
       Restarted@1000000027 : Integer;
       Note@1000000028 : Text;
       Truncated@1000000029 : Boolean;
+      State@1000000030 : Record 110237;
     BEGIN
       // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
       // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
       // предыдущего, а самый дорогой - запись - должен получить всё, что о нём известно,
       // с первого раза: обновлять строку журнала дважды за проход дороже вдвое.
       Setup.FetchOnce;
+      // Состояние сторожа лежит отдельно от настройки нарочно: строку, которую фон
+      // переписывает каждый проход, человек не может править вовсе (FINDINGS, раздел 33).
+      State.FetchOnce;
       // Язык, на котором проход пишет слова: подсказку, причину, сообщение сторожа и текст
       // тревоги наружу. В сессии с окном язык не трогается вовсе - разбирается это внутри.
       Parse.UseJournalLanguage(Setup."Journal Language ID");
@@ -81,7 +85,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       THEN BEGIN
         // Отказ съёма журнал НЕ трогает. Закрыть эпизоды моментом, которого мы не знаем,
         // значило бы объявить их законченными, ничего об этом не выяснив.
-        SaveWatchdog(Setup,STRSUBSTNO(ReadFailedTxt,Sql.LastErrorText),StartedAt,NoTime,0,FALSE);
+        SaveWatchdog(State,STRSUBSTNO(ReadFailedTxt,Sql.LastErrorText),StartedAt,NoTime,0,FALSE);
         EXIT(FALSE);
       END;
 
@@ -121,13 +125,13 @@ OBJECT Codeunit 110235 LockWatch Pass
 
       // Взаимоблокировки собираются ПОСЛЕ очереди и не каждым проходом. Они приходят
       // готовыми эпизодами и ведению не подлежат: сервер уже разорвал круг.
-      Note := Note + CollectDeadlocks(Setup);
+      Note := Note + CollectDeadlocks(Setup,State);
 
       // Накопительный слой снимается каждым проходом: он дёшев (доли миллисекунды на всю
       // базу) и, в отличие от очереди, видит ожидания короче периода опроса. Сторожем ему
       // не быть - счётчик прирастает только в момент конца ожидания, - зато он единственный,
       // кто может сказать, какую долю происходящего журнал вообще видит.
-      Note := Note + CollectCoverage(Setup);
+      Note := Note + CollectCoverage(Setup,State);
 
       // Чистка порционная и внутри того же прохода: отдельное задание уборки - это ещё
       // один объект, который забудут включить, и журнал будет расти молча.
@@ -136,7 +140,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       Truncated := (Setup."Max Rows per Pass" > 0) AND (RowCount >= Setup."Max Rows per Pass");
       Elapsed := CURRENTDATETIME - StartedAt;
       Note := STRSUBSTNO(CountsTxt,Opened,Updated,Closed,Restarted) + Note;
-      SaveWatchdog(Setup,PassNote(RowCount,OtherDatabase,Truncated,Setup."Max Rows per Pass",Note),
+      SaveWatchdog(State,PassNote(RowCount,OtherDatabase,Truncated,Setup."Max Rows per Pass",Note),
              ObservedAt,Elapsed,RowCount,Truncated);
       EXIT(TRUE);
     END;
@@ -172,7 +176,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT('');
     END;
 
-    LOCAL PROCEDURE CollectDeadlocks@9(VAR Setup@1000000000 : Record 110230) : Text;
+    LOCAL PROCEDURE CollectDeadlocks@9(VAR Setup@1000000000 : Record 110230;VAR State@1000000011 : Record 110237) : Text;
     VAR
       Found@1000000001 : TEMPORARY Record 110231;
       WasReadUntil@1000000002 : DateTime;
@@ -191,15 +195,15 @@ OBJECT Codeunit 110235 LockWatch Pass
       // взаимоблокировок, и на тихом сервере не меняется вовсе; разбор всего буфера в XML
       // дороже опроса очереди, ради которого проход и заведён.
       Period := Parse.DeadlockReadPeriodMs;
-      IF Setup."Deadlocks Read At" <> 0DT THEN BEGIN
-        Elapsed := CURRENTDATETIME - Setup."Deadlocks Read At";
+      IF State."Deadlocks Read At" <> 0DT THEN BEGIN
+        Elapsed := CURRENTDATETIME - State."Deadlocks Read At";
         IF Elapsed < Period THEN
           EXIT('');
       END;
       // Отметка "читали в" ставится ДО чтения и остаётся стоять при отказе: сервер,
       // который не отвечает, нельзя спрашивать каждые три секунды.
-      Setup."Deadlocks Read At" := CURRENTDATETIME;
-      WasReadUntil := Setup."Deadlocks Read Until";
+      State."Deadlocks Read At" := CURRENTDATETIME;
+      WasReadUntil := State."Deadlocks Read Until";
 
       IF NOT Sql.ReadDeadlocks(WasReadUntil,Parse.MaxDeadlocksPerPass,
                                Setup."Collect Statement Values",Found,BufferPresent,OldestAt,Rows)
@@ -220,7 +224,7 @@ OBJECT Codeunit 110235 LockWatch Pass
             Added := Added + 1;
         UNTIL Found.NEXT = 0;
       IF NewestAt <> 0DT THEN
-        Setup."Deadlocks Read Until" := NewestAt;
+        State."Deadlocks Read Until" := NewestAt;
 
       // Буфер кольцевой. Если самое старое событие в нём уже новее прежней отметки, между
       // ними что-то вытеснено, и молчать об этом нельзя: пустая колонка читается как
@@ -262,7 +266,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT('');
     END;
 
-    LOCAL PROCEDURE CollectCoverage@11(VAR Setup@1000000000 : Record 110230) : Text;
+    LOCAL PROCEDURE CollectCoverage@11(VAR Setup@1000000000 : Record 110230;VAR State@1000000006 : Record 110237) : Text;
     VAR
       Reading@1000000001 : TEMPORARY Record 110235;
       Rows@1000000002 : Integer;
@@ -278,8 +282,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Отметка "охват считается с" ставится в тот же проход, что и первое чтение. Без
       // неё журнальная половина охвата считалась бы за всё время, а счётчики - с этого
       // мига, и доля вышла бы больше сотни процентов.
-      IF Setup."Coverage Since" = 0DT THEN
-        Setup."Coverage Since" := CURRENTDATETIME;
+      IF State."Coverage Since" = 0DT THEN
+        State."Coverage Since" := CURRENTDATETIME;
 
       Coverage.Accumulate(Reading);
       Coverage.PassCounts(Added,Changed,Resets);
@@ -307,20 +311,31 @@ OBJECT Codeunit 110235 LockWatch Pass
         UNTIL ContextTable.NEXT = 0;
     END;
 
-    LOCAL PROCEDURE SaveWatchdog@2(VAR Setup@1000000000 : Record 110230;Msg@1000000001 : Text;At@1000000002 : DateTime;Elapsed@1000000003 : Duration;Rows@1000000006 : Integer;Truncated@1000000004 : Boolean);
+    LOCAL PROCEDURE SaveWatchdog@2(VAR State@1000000000 : Record 110237;Msg@1000000001 : Text;At@1000000002 : DateTime;Elapsed@1000000003 : Duration;Rows@1000000006 : Integer;Truncated@1000000004 : Boolean);
     VAR
+      Fresh@1000000007 : Record 110237;
       Milliseconds@1000000005 : Integer;
     BEGIN
       // Сторож пишет ВСЕГДА, и на удачном проходе тоже. Пустое сообщение читается как
       // "всё хорошо", а на деле означает "не знаю": последний проход мог не случиться
       // вовсе, и отличить одно от другого можно только по отметке времени рядом.
+      //
+      // Запись у прохода ОДНА и в самом конце - как и была, когда лежала в настройке.
+      // Строка перечитывается под замком прямо перед ней: между началом прохода и его
+      // концом человек мог нажать "стоп" или "начать счёт заново", а NAV сверяет версию
+      // строки при записи. Отметки чтения, добытые проходом, переносятся в свежую строку
+      // поимённо - их три, и список этот стоит держать на виду.
       Milliseconds := Elapsed;
-      Setup."Last Pass At" := At;
-      Setup."Last Pass (ms)" := Milliseconds;
-      Setup."Last Pass Rows" := Rows;
-      Setup."Last Pass Truncated" := Truncated;
-      Setup."Watchdog Message" := COPYSTR(Msg,1,MAXSTRLEN(Setup."Watchdog Message"));
-      Setup.MODIFY;
+      Fresh.FetchToWrite;
+      Fresh."Deadlocks Read At" := State."Deadlocks Read At";
+      Fresh."Deadlocks Read Until" := State."Deadlocks Read Until";
+      Fresh."Coverage Since" := State."Coverage Since";
+      Fresh."Last Pass At" := At;
+      Fresh."Last Pass (ms)" := Milliseconds;
+      Fresh."Last Pass Rows" := Rows;
+      Fresh."Last Pass Truncated" := Truncated;
+      Fresh."Watchdog Message" := COPYSTR(Msg,1,MAXSTRLEN(Fresh."Watchdog Message"));
+      Fresh.MODIFY;
       COMMIT;
     END;
 

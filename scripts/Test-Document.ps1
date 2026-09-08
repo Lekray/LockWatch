@@ -76,6 +76,7 @@ if ($FieldNo -le 0) { Fail 'не задано поле документа: пе�
 $episode = "[$Company`$LockWatch Episode]"
 $context = "[$Company`$LockWatch Context Table]"
 $setup   = "[$Company`$LockWatch Setup]"
+$state   = "[$Company`$LockWatch Watchdog]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
 # Номера заведомо не встречающиеся: прогон пишет в ЖИВУЮ таблицу установки, и столкнуться
@@ -329,7 +330,7 @@ try {
     # прогона, хоть от чужой работы на той же базе. Строка в журнале получилась бы законной,
     # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
     # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'', [Deadlocks Enabled] = 0;" | Out-Null
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0; UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
 
     # Строка контекста заводится ОДНИМИ НОМЕРАМИ - имён здесь нет вовсе. Имена подставит сам

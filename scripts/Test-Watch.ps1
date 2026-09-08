@@ -38,6 +38,7 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 
 $episode = "[$Company`$LockWatch Episode]"
 $setup   = "[$Company`$LockWatch Setup]"
+$state   = "[$Company`$LockWatch Watchdog]"
 $mark    = "[$Company`$LockWatch Context Mark]"
 $tasks   = '[dbo].[Scheduled Task]'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
@@ -57,7 +58,20 @@ function Scalar([string]$query) {
     return $rows[0].Trim()
 }
 function TaskCount { [int](Scalar "SELECT COUNT(*) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';") }
-function LastPass  { Scalar "SELECT ISNULL(CONVERT(varchar(30),[Last Pass At],121),'') FROM $setup;" }
+function LastPass  { Scalar "SELECT ISNULL(CONVERT(varchar(30),[Last Pass At],121),'') FROM $state;" }
+# Версия строки - то, по чему NAV судит "запись изменилась". Пока фон писал состояние в
+# строку настройки, версия той строки двигалась каждый проход, и человек не мог поставить
+# в ней ни одной галки: страница устаревала быстрее, чем он до неё дотягивался.
+#
+# Столбец версии переводится в binary(8) ПЕРЕД показом, и это не украшение: CONVERT прямо
+# из timestamp отдаёт ПУСТО - без ошибки, с нулевым кодом возврата и пустой строкой. Ловится
+# это только тем, что проверка тихо перестаёт что-либо проверять: два пустых значения равны
+# друг другу, и половина проверки проходит на чём угодно.
+function Stamp([string]$table) {
+    Scalar "SELECT ISNULL((SELECT TOP 1 CONVERT(varchar(50),CONVERT(binary(8),[timestamp]),1) FROM $table),'');"
+}
+function SetupStamp { Stamp $setup }
+function StateStamp { Stamp $state }
 
 $passed = 0; $total = 0; $report = @()
 function Check([string]$what, [bool]$ok, [string]$detail) {
@@ -158,15 +172,25 @@ try {
 
     Write-Host 'Жду, пока проход случится САМ'
     $wentThrough = Wait-For { (LastPass) -ne $beforeStart } 60
-    $watchdog = Scalar "SELECT [Watchdog Message] FROM $setup;"
+    $watchdog = Scalar "SELECT [Watchdog Message] FROM $state;"
     Check 'проход случился сам, без единого нажатия' ($wentThrough -and ($watchdog -match 'Pass went through|Проход прошёл')) `
         "сторож пишет: $watchdog"
     if (-not $wentThrough) { Fail 'фоновая задача так и не проснулась - дальше проверять нечего' }
 
     $firstPass = LastPass
+    $setupStamp = SetupStamp
+    $stateStamp = StateStamp
     $secondPass = Wait-For { (LastPass) -ne $firstPass } 60
     Check 'цепочка перевзвелась и не раздвоилась' ($secondPass -and ((TaskCount) -eq 1)) `
         "второй проход $(if ($secondPass) { 'был' } else { 'НЕ БЫЛ' }), задач в планировщике $(TaskCount)"
+
+    # Проверка, ради которой состояние и вынесено в свою таблицу. Проверяются ОБЕ стороны:
+    # строка настройки за целый проход не шелохнулась, а строка состояния - сдвинулась.
+    # Без второй половины проверка проходила бы и на мёртвом стороже.
+    $setupHeld = (SetupStamp) -eq $setupStamp
+    $stateMoved = (StateStamp) -ne $stateStamp
+    Check 'проход пишет своё состояние и не трогает строку настройки' ($setupHeld -and $stateMoved) `
+        "версия настройки $(if ($setupHeld) { 'не менялась' } else { 'СДВИНУЛАСЬ' }), версия состояния $(if ($stateMoved) { 'сдвинулась' } else { 'НЕ МЕНЯЛАСЬ' })"
 
     Write-Host 'Устраиваю блокировку и НИЧЕГО не нажимаю'
     Invoke-Sql @"

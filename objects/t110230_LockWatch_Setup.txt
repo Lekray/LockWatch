@@ -65,30 +65,54 @@ OBJECT Table 110230 LockWatch Setup
                                                    Editable=No }
     { 30  ;   ;Deadlocks Enabled   ;Boolean       ;CaptionML=[ENU=Deadlocks Enabled;
                                                               RUS=Собирать взаимоблокировки] }
-    { 31  ;   ;Deadlocks Read Until;DateTime      ;CaptionML=[ENU=Deadlocks Read Until;
+    { 31  ;   ;Deadlocks Read Until;DateTime      ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Deadlocks Read Until"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Deadlocks Read Until;
                                                               RUS=Взаимоблокировки прочитаны до];
                                                    Editable=No }
-    { 32  ;   ;Deadlocks Read At   ;DateTime      ;CaptionML=[ENU=Deadlocks Read At;
+    { 32  ;   ;Deadlocks Read At   ;DateTime      ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Deadlocks Read At"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Deadlocks Read At;
                                                               RUS=Буфер читали в];
                                                    Editable=No }
     { 33  ;   ;Coverage Enabled    ;Boolean       ;CaptionML=[ENU=Coverage Enabled;
                                                               RUS=Считать охват] }
-    { 34  ;   ;Coverage Since      ;DateTime      ;CaptionML=[ENU=Coverage Since;
+    { 34  ;   ;Coverage Since      ;DateTime      ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Coverage Since"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Coverage Since;
                                                               RUS=Охват считается с];
                                                    Editable=No }
-    { 40  ;   ;Last Pass At        ;DateTime      ;CaptionML=[ENU=Last Pass At;
+    { 40  ;   ;Last Pass At        ;DateTime      ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Last Pass At"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Last Pass At;
                                                               RUS=Последний проход];
                                                    Editable=No }
-    { 41  ;   ;Last Pass (ms)      ;Integer       ;CaptionML=[ENU=Last Pass (ms);
+    { 41  ;   ;Last Pass (ms)      ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Last Pass (ms)"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Last Pass (ms);
                                                               RUS=Последний проход, мс];
                                                    Editable=No }
-    { 42  ;   ;Last Pass Rows      ;Integer       ;CaptionML=[ENU=Last Pass Rows;
+    { 42  ;   ;Last Pass Rows      ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Last Pass Rows"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Last Pass Rows;
                                                               RUS=Строк в последнем проходе];
                                                    Editable=No }
-    { 43  ;   ;Last Pass Truncated ;Boolean       ;CaptionML=[ENU=Last Pass Truncated;
+    { 43  ;   ;Last Pass Truncated ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Last Pass Truncated"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Last Pass Truncated;
                                                               RUS=Последний проход усечён];
                                                    Editable=No }
-    { 50  ;   ;Watchdog Message    ;Text250       ;CaptionML=[ENU=Watchdog Message;
+    { 50  ;   ;Watchdog Message    ;Text250       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("LockWatch Watchdog"."Watchdog Message"
+                                                                      WHERE (Primary Key=CONST('')));
+                                                   CaptionML=[ENU=Watchdog Message;
                                                               RUS=Сообщение сторожа];
                                                    Editable=No }
   }

@@ -53,10 +53,21 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 
 $episode = "[$Company`$LockWatch Episode]"
 $setup   = "[$Company`$LockWatch Setup]"
+$state   = "[$Company`$LockWatch Watchdog]"
 $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 # Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
+# Строку состояния сторожа заводит первый же проход, но здесь она нужна РАНЬШЕ: отметку
+# "прочитано до" надо поставить прежде, чем проход впервые откроет кольцевой буфер, иначе
+# в журнал приедут чужие круги. Умолчаний NAV в SQL не создаёт, а столбцы объявляет
+# NOT NULL, поэтому строка заводится со всеми столбцами разом.
 $blankDate = "CONVERT(datetime,'17530101')"
+$stateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM $state)
+  INSERT INTO $state ([Primary Key],[Deadlocks Read Until],[Deadlocks Read At],[Coverage Since],
+                      [Last Pass At],[Last Pass (ms)],[Last Pass Rows],[Last Pass Truncated],[Watchdog Message])
+  VALUES (N'',$blankDate,$blankDate,$blankDate,$blankDate,0,0,0,N'');
+"@
 
 function Invoke-Sql([string]$query) {
     # SET QUOTED_IDENTIFIER ON обязателен: sqlcmd включает его ВЫКЛЮЧЕННЫМ, а без него
@@ -209,10 +220,12 @@ try {
     # Пустая дата у NAV в SQL, кстати, не NULL, а 1753-01-01: столбцы объявлены NOT NULL.
     # Отметку "когда читали" обнуляем именно ею - иначе первый проход буфер не откроет.
     Invoke-Sql @"
-UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'',
-  [Deadlocks Enabled] = 1, [Deadlocks Read Until] = GETDATE(), [Deadlocks Read At] = $blankDate;
+UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 1;
+$stateSeed
+UPDATE $state SET [Watchdog Message] = N'',
+  [Deadlocks Read Until] = GETDATE(), [Deadlocks Read At] = $blankDate;
 "@ | Out-Null
-    $mark0 = Scalar "SELECT CONVERT(varchar(30),[Deadlocks Read Until],126) FROM $setup;"
+    $mark0 = Scalar "SELECT CONVERT(varchar(30),[Deadlocks Read Until],126) FROM $state;"
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] IN (-11,-12);" | Out-Null
     Invoke-Sql @"
@@ -230,7 +243,7 @@ VALUES (-11,-11,N'STAND',N'$Company',0,N'DEAD-ONE',GETDATE()),
     $one = Invoke-Deadlock 'круг первый'
     Invoke-Pass 'проход после первого круга'
 
-    $watchdog = Scalar "SELECT [Watchdog Message] FROM $setup;"
+    $watchdog = Scalar "SELECT [Watchdog Message] FROM $state;"
     Check 'проход отчитался, а не промолчал' (($watchdog -ne '') -and ($watchdog -notmatch 'не прочитаны') -and ($watchdog -notmatch 'не работает')) `
         "сторож пишет: $watchdog"
 
@@ -265,7 +278,7 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # Текст оператора едет со значениями. Галка выключена - колонка обязана быть пустой.
     Check 'текст оператора без разрешения не собран' ($f[14] -eq '') "оператор [$($f[14])]"
 
-    $mark1 = Scalar "SELECT CONVERT(varchar(30),[Deadlocks Read Until],126) FROM $setup;"
+    $mark1 = Scalar "SELECT CONVERT(varchar(30),[Deadlocks Read Until],126) FROM $state;"
     Check 'отметка прочитанного сдвинулась' (($mark1 -ne '') -and ($mark1 -gt $mark0)) `
         "прочитано до [$mark1] при исходном [$mark0]"
 
@@ -277,7 +290,7 @@ FROM $episode ORDER BY [Entry No_] DESC;
     $two = Invoke-Deadlock 'круг второй'
     Invoke-Pass 'проход после второго круга'
 
-    $watchdog2 = Scalar "SELECT [Watchdog Message] FROM $setup;"
+    $watchdog2 = Scalar "SELECT [Watchdog Message] FROM $state;"
     Check 'второй проход тоже отчитался' (($watchdog2 -ne '') -and ($watchdog2 -notmatch 'не прочитаны') -and ($watchdog2 -notmatch 'не работает')) `
         "сторож пишет: $watchdog2"
 
@@ -300,7 +313,7 @@ finally {
     # Отметка оставляется на СЕЙЧАС, а не пустой. Пустая означает "буфер не читан вовсе",
     # и следующий же проход вычитал бы из кольца все графы разом - включая устроенные этим
     # опытом. Прогон убрал бы за собой в журнале и оставил мину в настройке.
-    $cleanup += " UPDATE $setup SET [Deadlocks Read Until] = GETDATE(), [Deadlocks Read At] = $blankDate;"
+    $cleanup += " UPDATE $state SET [Deadlocks Read Until] = GETDATE(), [Deadlocks Read At] = $blankDate;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
     & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }

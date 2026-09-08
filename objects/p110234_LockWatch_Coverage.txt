@@ -245,10 +245,9 @@ OBJECT Page 110234 LockWatch Coverage
 
     LOCAL PROCEDURE ReadTotals@1();
     VAR
-      Setup@1000000000 : Record 110230;
+      State@1000000000 : Record 110237;
     BEGIN
-      Setup.FetchOnce;
-      CoverageSince := Setup."Coverage Since";
+      CoverageSince := State.CoverageSince;
       Coverage.CounterTotal(CounterWaits,CounterMs,CounterEscalations);
       Coverage.JournalTotal(CoverageSince,JournalEpisodes,JournalMs);
       SharePct := Coverage.Share(CounterMs,JournalMs);
@@ -266,16 +265,18 @@ OBJECT Page 110234 LockWatch Coverage
 
     LOCAL PROCEDURE StartOver@3();
     VAR
-      Setup@1000000000 : Record 110230;
+      State@1000000000 : Record 110237;
     BEGIN
       IF NOT CONFIRM(StartOverQst,FALSE) THEN
         EXIT;
       // Отметка и приросты сбрасываются ВМЕСТЕ. Оставить отметку значило бы сравнивать
       // счётчики с этого мига против журнала за всё прошлое, а сбросить одну её - наоборот.
       Coverage.ResetAll;
-      Setup.FetchOnce;
-      Setup."Coverage Since" := CURRENTDATETIME;
-      Setup.MODIFY;
+      // Единственная кнопка, которой человеку позволено тронуть состояние сторожа. Под
+      // замком - потому что проход пишет ту же строку, и разойтись версиями им нельзя.
+      State.FetchToWrite;
+      State."Coverage Since" := CURRENTDATETIME;
+      State.MODIFY;
       COMMIT;
       ReadTotals;
       CurrPage.UPDATE(FALSE);

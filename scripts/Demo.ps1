@@ -88,6 +88,18 @@ if ($FieldNo -le 0) { Fail 'не задано поле документа: пе�
 
 $episode  = "[$Company`$LockWatch Episode]"
 $setup    = "[$Company`$LockWatch Setup]"
+$state    = "[$Company`$LockWatch Watchdog]"
+# Строку состояния сторожа заводит первый же проход, но здесь она нужна РАНЬШЕ: отметку
+# "прочитано до" надо поставить прежде, чем проход впервые откроет кольцевой буфер, иначе
+# в журнал приедут чужие круги. Умолчаний NAV в SQL не создаёт, а столбцы объявляет
+# NOT NULL, поэтому строка заводится со всеми столбцами разом.
+$stateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM $state)
+  INSERT INTO $state ([Primary Key],[Deadlocks Read Until],[Deadlocks Read At],[Coverage Since],
+                      [Last Pass At],[Last Pass (ms)],[Last Pass Rows],[Last Pass Truncated],[Watchdog Message])
+  VALUES (N'',CONVERT(datetime,'17530101'),CONVERT(datetime,'17530101'),CONVERT(datetime,'17530101'),
+          CONVERT(datetime,'17530101'),0,0,0,N'');
+"@
 $context  = "[$Company`$LockWatch Context Table]"
 $mark     = "[$Company`$LockWatch Context Mark]"
 $alert    = "[$Company`$LockWatch Alert]"
@@ -475,7 +487,8 @@ DELETE FROM $mark WHERE [Server Instance Id] < 0;
 DELETE FROM $context WHERE [Table No_] = $TableNo;
 DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId;
 UPDATE $setup SET [Enabled] = 0, [Collect Statement Values] = 0, [Alert Threshold (ms)] = 5000,
-                  [Alert Channel] = 1, [Watchdog Message] = N'';
+                  [Alert Channel] = 1;
+DELETE FROM $state;
 "@ | Out-Null
     Say 'журнал, тревоги, охват, отметки и строка контекста очищены; настройка - заводская'
 
@@ -516,11 +529,12 @@ try {
     # инструмент должен УВИДЕТЬ, пишется ДО перезапуска. Это касается и строки контекста:
     # список таблиц документа служба тоже держит в кэше.
     Invoke-Sql @"
-UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'',
+UPDATE $setup SET [SQL Server] = N'$Server',
                   [Collect Statement Values] = 1, [Deadlocks Enabled] = 1,
                   [Coverage Enabled] = 1, [Alert Channel] = 2,
-                  [Alert Threshold (ms)] = $(DemoAlertMs),
-                  [Deadlocks Read Until] = GETDATE();
+                  [Alert Threshold (ms)] = $(DemoAlertMs);
+$stateSeed
+UPDATE $state SET [Watchdog Message] = N'', [Deadlocks Read Until] = GETDATE();
 DELETE FROM $episode;
 DELETE FROM $alert;
 DELETE FROM $coverage;
@@ -574,9 +588,9 @@ VALUES ($TableNo,N'',$FieldNo,N'',N'',1);
     # исполняющаяся, строки в таблице не имеет, и её проход всё равно случится.
     Invoke-Method 'StopWatch'
     Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';")) -eq 0 } 30 | Out-Null
-    $before = Scalar "SELECT ISNULL(CONVERT(varchar(30),[Last Pass At],121),'') FROM $setup;"
+    $before = Scalar "SELECT ISNULL(CONVERT(varchar(30),[Last Pass At],121),'') FROM $state;"
     Invoke-Method 'StartWatch'
-    if (-not (Wait-For { (Scalar "SELECT ISNULL(CONVERT(varchar(30),[Last Pass At],121),'') FROM $setup;") -ne $before } (CatchSeconds))) {
+    if (-not (Wait-For { (Scalar "SELECT ISNULL(CONVERT(varchar(30),[Last Pass At],121),'') FROM $state;") -ne $before } (CatchSeconds))) {
         Fail 'сторож не проснулся ни разу - показывать нечего'
     }
     $period = Scalar "SELECT CONVERT(varchar(11),[Poll Period (ms)]) FROM $setup;"

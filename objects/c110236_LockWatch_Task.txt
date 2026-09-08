@@ -18,6 +18,7 @@ OBJECT Codeunit 110236 LockWatch Task
   {
     VAR
       Setup@1000000000 : Record 110230;
+      Watchdog@1000000007 : Record 110237;
       Parse@1000000006 : Codeunit 110230;
       NoSchedulerErr@1000000001 : TextConst 'ENU=The service instance runs with the task scheduler switched off (EnableTaskScheduler in the service configuration). Until it is on, the watch cannot arm itself.;RUS=Экземпляр службы работает с выключенным планировщиком задач (EnableTaskScheduler в конфигурации службы). Пока он выключен, сторож завестись не может.';
       StartedTxt@1000000002 : TextConst 'ENU=The watch is armed, the first pass is due shortly.;RUS=Сторож заведён, первый проход вот-вот.';
@@ -41,8 +42,8 @@ OBJECT Codeunit 110236 LockWatch Task
         ERROR(NoSchedulerErr);
       CancelOurTasks;
       Setup.Enabled := TRUE;
-      Setup."Watchdog Message" := StartedTxt;
       Setup.MODIFY;
+      Watchdog.Say(StartedTxt);
       COMMIT;
       Schedule(FirstDelayMs);
     END;
@@ -52,8 +53,8 @@ OBJECT Codeunit 110236 LockWatch Task
     BEGIN
       Setup.FetchOnce;
       Setup.Enabled := FALSE;
-      Setup."Watchdog Message" := StoppedTxt;
       Setup.MODIFY;
+      Watchdog.Say(StoppedTxt);
       COMMIT;
       // Снимаем задачу И гасим выключатель. Одного выключателя мало: уже поставленная
       // задача всё равно проснётся, и человек увидит проход после того, как нажал "стоп".
@@ -113,8 +114,7 @@ OBJECT Codeunit 110236 LockWatch Task
       IF NOT Setup.Enabled THEN BEGIN
         // Выключатель сняли между проходами. Цепочка обрывается сама и говорит об этом:
         // сторож, замолчавший без объяснения, неотличим от сторожа, который умер.
-        Setup."Watchdog Message" := DisabledTxt;
-        Setup.MODIFY;
+        Watchdog.Say(DisabledTxt);
         COMMIT;
         EXIT;
       END;
@@ -146,15 +146,14 @@ OBJECT Codeunit 110236 LockWatch Task
       // длиной в проход открыто пять миллисекунд из трёх секунд, и попасть в него нарочно
       // нельзя. Поэтому проверка здесь одна - чтение кода, и она записана.
       IF NOT Setup.Enabled THEN BEGIN
-        Setup."Watchdog Message" := DisabledTxt;
-        Setup.MODIFY;
+        Watchdog.Say(DisabledTxt);
         COMMIT;
         EXIT;
       END;
       DelayMs := Setup."Poll Period (ms)";
       IF DelayMs <= 0 THEN
         DelayMs := FirstDelayMs;
-      Floor := Setup."Last Pass (ms)" * MaxDutyFactor;
+      Floor := Watchdog.LastPassMs * MaxDutyFactor;
       IF Floor > DelayMs THEN
         DelayMs := Floor;
       Schedule(DelayMs);
@@ -191,10 +190,9 @@ OBJECT Codeunit 110236 LockWatch Task
 
     LOCAL PROCEDURE NoteFailure@9(ErrorText@1000000000 : Text);
     BEGIN
-      Setup.FetchOnce;
-      Setup."Watchdog Message" :=
-        COPYSTR(STRSUBSTNO(PassFailedTxt,ErrorText),1,MAXSTRLEN(Setup."Watchdog Message"));
-      Setup.MODIFY;
+      // Обрезает длинный текст ошибки сама таблица состояния: у неё это поле, ей и знать
+      // его длину. Здесь бы пришлось повторять MAXSTRLEN чужого поля.
+      Watchdog.Say(STRSUBSTNO(PassFailedTxt,ErrorText));
       COMMIT;
     END;
 

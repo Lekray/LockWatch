@@ -45,6 +45,7 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 
 $episode = "[$Company`$LockWatch Episode]"
 $setup   = "[$Company`$LockWatch Setup]"
+$state   = "[$Company`$LockWatch Watchdog]"
 $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
@@ -135,7 +136,7 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
 "@
     $log = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $file 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { Fail "проход не отработал:`n$log" }
-    $row = Scalar "SELECT CONVERT(varchar(11),[Last Pass (ms)]) + '|' + CONVERT(varchar(11),[Last Pass Rows]) + '|' + CONVERT(varchar(2),[Last Pass Truncated]) FROM $setup;"
+    $row = Scalar "SELECT CONVERT(varchar(11),[Last Pass (ms)]) + '|' + CONVERT(varchar(11),[Last Pass Rows]) + '|' + CONVERT(varchar(2),[Last Pass Truncated]) FROM $state;"
     return ($row -split '\|') | ForEach-Object { $_.Trim() }
 }
 

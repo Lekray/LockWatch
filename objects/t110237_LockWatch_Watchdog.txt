@@ -1,0 +1,138 @@
+OBJECT Table 110237 LockWatch Watchdog
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=LockWatch Watchdog;
+               RUS=Сторож блокировок, состояние];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Primary Key         ;Code10        ;CaptionML=[ENU=Primary Key;
+                                                              RUS=Первичный ключ] }
+    { 31  ;   ;Deadlocks Read Until;DateTime      ;CaptionML=[ENU=Deadlocks Read Until;
+                                                              RUS=Взаимоблокировки прочитаны до];
+                                                   Editable=No }
+    { 32  ;   ;Deadlocks Read At   ;DateTime      ;CaptionML=[ENU=Deadlocks Read At;
+                                                              RUS=Буфер читали в];
+                                                   Editable=No }
+    { 34  ;   ;Coverage Since      ;DateTime      ;CaptionML=[ENU=Coverage Since;
+                                                              RUS=Охват считается с];
+                                                   Editable=No }
+    { 40  ;   ;Last Pass At        ;DateTime      ;CaptionML=[ENU=Last Pass At;
+                                                              RUS=Последний проход];
+                                                   Editable=No }
+    { 41  ;   ;Last Pass (ms)      ;Integer       ;CaptionML=[ENU=Last Pass (ms);
+                                                              RUS=Последний проход, мс];
+                                                   Editable=No }
+    { 42  ;   ;Last Pass Rows      ;Integer       ;CaptionML=[ENU=Last Pass Rows;
+                                                              RUS=Строк в последнем проходе];
+                                                   Editable=No }
+    { 43  ;   ;Last Pass Truncated ;Boolean       ;CaptionML=[ENU=Last Pass Truncated;
+                                                              RUS=Последний проход усечён];
+                                                   Editable=No }
+    { 50  ;   ;Watchdog Message    ;Text250       ;CaptionML=[ENU=Watchdog Message;
+                                                              RUS=Сообщение сторожа];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Primary Key                             ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    [External]
+    PROCEDURE FetchOnce@1();
+    BEGIN
+      // Чтение БЕЗ замка - им проход начинается. Замок здесь стоил бы дорого: держать его
+      // пришлось бы через съём очереди, то есть через обращение к SQL, и кнопка "стоп"
+      // ждала бы ровно столько, сколько ждёт сервер.
+      IF GET THEN
+        EXIT;
+      INIT;
+      "Primary Key" := '';
+      INSERT;
+    END;
+
+    [External]
+    PROCEDURE FetchToWrite@2();
+    BEGIN
+      // Перед записью строка перечитывается ПОД ЗАМКОМ. NAV сверяет версию строки при
+      // записи, и без этого проход, начавшийся до нажатия "стоп", падал бы на своей же
+      // последней строке - с сообщением про обновлённую страницу, которого никто не ждёт
+      // от фоновой задачи. Замок держится до COMMIT, а он тут же следом.
+      LOCKTABLE;
+      IF GET THEN
+        EXIT;
+      INIT;
+      "Primary Key" := '';
+      INSERT;
+    END;
+
+    [External]
+    PROCEDURE Say@3(Message@1000000000 : Text);
+    BEGIN
+      // Только слово, без чисел прохода: завод, остановка и падение задачи говорят о
+      // СЕБЕ, а числа последнего прохода при этом остаются прежними - они не устарели.
+      FetchToWrite;
+      "Watchdog Message" := COPYSTR(Message,1,MAXSTRLEN("Watchdog Message"));
+      MODIFY;
+    END;
+
+    [External]
+    PROCEDURE LastPassMs@4() : Integer;
+    BEGIN
+      // Цена последнего прохода нужна перевзводу задачи, и берётся она отсюда напрямую,
+      // а не через вычисляемое поле настройки: то пришлось бы считать CALCFIELDS, а это
+      // то же самое чтение, только окольным путём.
+      IF GET THEN
+        EXIT("Last Pass (ms)");
+      EXIT(0);
+    END;
+
+    [External]
+    PROCEDURE CoverageSince@5() : DateTime;
+    BEGIN
+      // Экран охвата спрашивает отметку, но заводить строку состояния он не должен: она
+      // появляется от прохода, а не от того, что кто-то открыл экран.
+      IF GET THEN
+        EXIT("Coverage Since");
+      EXIT(0DT);
+    END;
+
+    BEGIN
+    {
+      Состояние сторожа: когда был последний проход, чего он стоил, сколько строк принёс,
+      что имеет сказать и до какого мига прочитаны буфер взаимоблокировок и счётчики
+      охвата. Строка одна на компанию, и пишет её ТОЛЬКО фон - кроме одной кнопки
+      "начать счёт заново" на экране охвата.
+
+      Отдельная таблица заведена не ради порядка, а по вычитанной цене. Всё это лежало в
+      строке настройки - там же, где галки и числа, которые правит человек. NAV сверяет
+      версию строки при записи, а проход переписывал её каждые три секунды: страница
+      настройки устаревала почти сразу после открытия, и любая правка возвращала "мы
+      только что обновили эту страницу". Ошибка выглядела как каприз платформы, а была
+      нашей - фон и человек писали одну строку (FINDINGS, раздел 33).
+
+      Номера полей нарочно те же, что были в настройке: то же поле, тот же номер. На
+      странице настройки они остались на своих местах и показываются вычисляемыми полями
+      (FlowField Lookup) - вычисляемое поле не хранится, версию строки не трогает, и
+      строка человека больше не меняется сама по себе.
+
+      Строку заводит сам инструмент первым же проходом. Скрипту, которому нужно тронуть
+      состояние ДО первого прохода, придётся завести её запросом со ВСЕМИ столбцами:
+      умолчаний NAV в SQL не создаёт, а объявляет всё NOT NULL.
+    }
+    END.
+  }
+}

@@ -54,6 +54,7 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 $episode = "[$Company`$LockWatch Episode]"
 $context = "[$Company`$LockWatch Context Table]"
 $setup   = "[$Company`$LockWatch Setup]"
+$state   = "[$Company`$LockWatch Watchdog]"
 $mark    = "[$Company`$LockWatch Context Mark]"
 $coverage = "[$Company`$LockWatch Coverage]"
 $alert    = "[$Company`$LockWatch Alert]"
@@ -146,10 +147,10 @@ try {
     # Текст запроса снимается только при включённом признаке, и признак этот по умолчанию
     # выключен: в операторе едут ЗНАЧЕНИЯ, а это решение заказчика, а не наше умолчание.
     # Прогон включает его сам и возвращает как было.
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Watchdog Message] = N'', [Deadlocks Enabled] = 0, [Collect Statement Values] = 1;" | Out-Null
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Collect Statement Values] = 1; UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
     # Накопительный слой, наоборот, чистится и остаётся ВКЛЮЧЁННЫМ: без чистки проверка
     # прошла бы на строках прошлого прогона, то есть не проверяла бы ничего.
-    Invoke-Sql "DELETE FROM $coverage; UPDATE $setup SET [Coverage Enabled] = 1, [Coverage Since] = $blankDate;" | Out-Null
+    Invoke-Sql "DELETE FROM $coverage; UPDATE $setup SET [Coverage Enabled] = 1; UPDATE $state SET [Coverage Since] = $blankDate;" | Out-Null
     # Тревога включается НАРУЖУ и с низким порогом: опыт держит блокировку около пяти
     # секунд, и порог по умолчанию она перевалила бы на самой границе. Проверка, стоящая
     # на границе, проверяет часы, а не тревогу.
@@ -211,7 +212,7 @@ WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($waiter.Id);
     Write-Host 'Проход по живой очереди'
     Invoke-Pass 'проход'
 
-    $watchdog = Scalar "SELECT [Watchdog Message] FROM $setup;"
+    $watchdog = Scalar "SELECT [Watchdog Message] FROM $state;"
     Check 'проход отчитался, а не промолчал' (($watchdog -ne '') -and ($watchdog -notmatch 'не удалось')) "сторож пишет: $watchdog"
 
     $rows = [int](Scalar "SELECT COUNT(*) FROM $episode;")
@@ -367,7 +368,7 @@ finally {
     # Признак возвращается в исходное - таким он заводится при создании настройки.
     $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $context WHERE [Table No_] = 110233;"
     $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = 1, [Collect Statement Values] = 0;"
-    $cleanup += " DELETE FROM $coverage; UPDATE $setup SET [Coverage Since] = $blankDate;"
+    $cleanup += " DELETE FROM $coverage; UPDATE $state SET [Coverage Since] = $blankDate;"
     # Настройка тревоги возвращается в исходное: порог и канал - то, чем инструмент
     # заводится, и оставлять их сдвинутыми после прогона нельзя.
     $cleanup += " DELETE FROM $alert; UPDATE $setup SET [Alert Channel] = 1, [Alert Threshold (ms)] = 5000;"
