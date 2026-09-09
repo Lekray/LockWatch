@@ -56,6 +56,11 @@ $setup   = "[$Company`$LockWatch Setup]"
 $state   = "[$Company`$LockWatch Watchdog]"
 $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
+# Имена рабочих станций сторон. Логин у обоих соединений один - учётная запись, под которой
+# идёт прогон, - и программа одна, sqlcmd; узел остаётся единственным, чем они отличаются.
+# Кто из них жертва, решает не случай, а ключ DEADLOCK_PRIORITY, поэтому имена закреплены.
+$victimHost = 'LW-DEAD-VICTIM'
+$winnerHost = 'LW-DEAD-WINNER'
 # Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
 # Строку состояния сторожа заводит первый же проход, но здесь она нужна РАНЬШЕ: отметку
 # "прочитано до" надо поставить прежде, чем проход впервые откроет кольцевой буфер, иначе
@@ -93,12 +98,14 @@ function Check([string]$what, [bool]$ok, [string]$detail) {
 }
 
 $pa = $null; $pb = $null
-function Start-Sqlcmd([string]$name, [string]$sql) {
+function Start-Sqlcmd([string]$name, [string]$sql, [string]$workstation = '') {
     $file = Join-Path $outDir $name
     [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
-    Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList @(
-        '-S', $Server, '-d', $Database, '-E', '-l', '30', '-i', $file
-    )
+    # Ключ -H кладёт имя рабочей станции в host_name сеанса, а граф берёт его из узла
+    # процесса. Без него обе стороны опыта на сервере выглядят одинаково.
+    $sqlArgs = @('-S', $Server, '-d', $Database, '-E', '-l', '30', '-i', $file)
+    if ($workstation) { $sqlArgs += @('-H', $workstation) }
+    Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList $sqlArgs
 }
 
 $probeFile = Join-Path $outDir 'wait-nav.ps1'
@@ -182,8 +189,8 @@ function Invoke-Deadlock([string]$why) {
         # "жертва та самая" стала бы угадыванием.
         $a = "SET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'A1' WHERE [Server Instance Id]=-11`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'A2' WHERE [Server Instance Id]=-12`nCOMMIT`n"
         $b = "SET DEADLOCK_PRIORITY HIGH`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'B1' WHERE [Server Instance Id]=-12`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'B2' WHERE [Server Instance Id]=-11`nCOMMIT`n"
-        $script:pa = Start-Sqlcmd 'dead-a.sql' $a
-        $script:pb = Start-Sqlcmd 'dead-b.sql' $b
+        $script:pa = Start-Sqlcmd 'dead-a.sql' $a $victimHost
+        $script:pb = Start-Sqlcmd 'dead-b.sql' $b $winnerHost
         $pa = $script:pa
         $pb = $script:pb
 
@@ -273,11 +280,12 @@ SELECT TOP 1 CONVERT(varchar(11),[Class]) + '|' + CONVERT(varchar(11),[Outcome])
   CONVERT(varchar(11),[Max Wait (ms)]) + '|' + [Held Mode] + '|' + [Wait Type] + '|' +
   CONVERT(varchar(11),[NAV Key No_]) + '|' + [Blocker Statement] + '|' +
   [Blocker Login] + '|' + [Blocker Program] + '|' +
-  [Victim Login] + '|' + [Victim Program]
+  [Victim Login] + '|' + [Victim Program] + '|' +
+  [Victim Host] + '|' + [Blocker Host]
 FROM $episode ORDER BY [Entry No_] DESC;
 "@
     $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
-    if ($f.Count -lt 19) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
+    if ($f.Count -lt 21) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
 
     # Обоих участников граф называет сам - узлом процесса, из которого уже взяты машина,
     # процесс и программа. Дорога эта отдельная от очереди, и своих номеров колонок у неё
@@ -289,6 +297,15 @@ FROM $episode ORDER BY [Entry No_] DESC;
         (($f[15] -ne '') -and ($f[17] -ne '') -and
          ($f[16] -match '(?i)sqlcmd') -and ($f[18] -match '(?i)sqlcmd')) `
         "виновник [$($f[15])] / [$($f[16])], жертва [$($f[17])] / [$($f[18])]"
+
+    # Непустота обеих колонок ещё не значит, что они не перепутаны местами: логин и
+    # программа у сторон опыта одинаковые, и перестановка прошла бы молча. Узел - это то
+    # единственное, чем они отличаются, а кто из них жертва, решает ключ приоритета, а не
+    # случай. Граф берёт узел из того же узла процесса, что и логин: разъехались они -
+    # значит стороны разъехались тоже, и обвинён не тот.
+    Check 'граф не перепутал стороны: узел жертвы и узел виновника те самые' `
+        (($f[19] -eq $victimHost) -and ($f[20] -eq $winnerHost)) `
+        "узел жертвы [$($f[19])] при ожидаемом [$victimHost], узел виновника [$($f[20])] при ожидаемом [$winnerHost]"
 
     Check 'класс и исход названы, а не оставлены неизвестными' (($f[0] -eq '3') -and ($f[1] -eq '3')) `
         "класс $($f[0]) при ожидаемом 3 (взаимоблокировка), исход $($f[1]) при ожидаемом 3 (откат сервером)"

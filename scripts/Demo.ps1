@@ -383,17 +383,21 @@ SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
   CASE WHEN [No Document Reason] = '' THEN '-' ELSE [No Document Reason] END + '|' +
   CONVERT(varchar(11),ISNULL(DATALENGTH([Blocker Statement Text]),0)) + '|' +
   CONVERT(varchar(11),ISNULL(DATALENGTH([Victim Statement]),0)) + '|' +
-  CONVERT(varchar(11),[Entry No_])
+  CONVERT(varchar(11),[Entry No_]) + '|' +
+  CASE WHEN [Victim User Name] = '' THEN '-' ELSE [Victim User Name] END
 FROM $episode WHERE [Class] <> 3 ORDER BY [Open] DESC, [Entry No_] DESC;
 "@
 }
 
 function Tell-Episode($f) {
-    if ($f.Count -lt 21) { Warn 'в журнале пусто'; return }
+    if ($f.Count -lt 22) { Warn 'в журнале пусто'; return }
     Say "журнал: таблица [$($f[0])], ключ NAV $($f[1]), режим $($f[2]), ожидание $($f[3])"
     Say "        эпизод $($f[4]), исход - $($f[5]), ждали $($f[6]) мс"
     if ($f[7] -ne '-') { Say "        документ $($f[7]) ($($f[8]))" } else { Say "        документ не назван: $($f[17])" }
-    if ($f[9] -ne '-') { Say "        учётная запись $($f[9]) ($($f[10]))" }
+    if ($f[9] -ne '-') { Say "        учётная запись виновника $($f[9]) ($($f[10]))" }
+    # Второе имя - ответ на "кого задержали". Без него "кто кого" остаётся половиной
+    # ответа: виновник назван, а пострадавший - номером сеанса.
+    if ($f[21] -ne '-') { Say "        учётная запись жертвы   $($f[21])" }
     # Учётная запись NAV и логин SQL - разные ответы на разные вопросы, и порознь они
     # честнее. Отметку кладёт только сессия NAV; за чужим соединением - утилитой, заданием,
     # чьим-то окном запросов - учётной записи NAV нет и быть не может, зато сервер знает о
@@ -611,17 +615,24 @@ VALUES ($TableNo,N'',$FieldNo,N'',N'',1);
     Say 'дальше показ не делает НИ ОДНОГО ручного прохода: журнал заполняет сторож'
 
     # -----------------------------------------------------------------------------------
-    # Учётная запись, которую положил бы переходник: у отметки в поле [User Id] лежит
+    # Учётные записи, которые положил бы переходник: у отметки в поле [User Id] лежит
     # USERID сессии NAV, а не логин SQL - это разные вещи, и путать их нельзя.
-    $demoUser = "$env:USERDOMAIN\$env:USERNAME"
+    #
+    # Сторон ДВЕ, и учётные записи у них разные нарочно. Весь вопрос "кто кого" в том, что
+    # людей двое; показ, где обе стороны - один и тот же человек, отвечает не на тот вопрос,
+    # а стенд знает ровно одну живую учётную запись. Поэтому имена здесь вымышленные - и
+    # видно, что вымышленные.
+    $demoHolder = "$env:USERDOMAIN\IVANOV"
+    $demoQueue  = @("$env:USERDOMAIN\PETROV", "$env:USERDOMAIN\SIDOROV", "$env:USERDOMAIN\KUZNETSOV")
+    $demoVictim = $demoQueue[0]
 
     Head 'Круг (устраиваю заранее)'
     Say 'кольцевой буфер сервера инструмент читает раз в минуту - ждать её в тишине незачем'
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] IN (-11,-12);
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-11,-11,N'DEMO',N'$Company',0,N'CIRCLE-A',GETDATE()),
-       (-12,-12,N'DEMO',N'$Company',0,N'CIRCLE-B',GETDATE());
+VALUES (-11,-11,N'$demoHolder',N'$Company',0,N'CIRCLE-A',GETDATE()),
+       (-12,-12,N'$demoVictim',N'$Company',0,N'CIRCLE-B',GETDATE());
 "@ | Out-Null
     $circleMade = $false
     for ($attempt = 1; $attempt -le (CircleAttempts); $attempt++) {
@@ -652,20 +663,24 @@ WHERE x.e.value('(@timestamp)[1]','datetime') > DATEADD(minute,-2,GETUTCDATE());
     # -----------------------------------------------------------------------------------
     Head 'Сцена 1. За какой документ идёт спор - и кто его держит'
     Say "виновник держит строку документа $docHash, жертва тянется за той же строкой"
-    Say 'виновник оставляет и отметку контекста - ровно так, как её оставляет переходник'
-    Say 'обе дороги отвечают: документ приходит по хэшу спорной строки, человек - из отметки'
+    Say 'обе стороны оставляют отметку контекста - ровно так, как её оставляет переходник'
+    Say 'обе дороги отвечают: документ приходит по хэшу спорной строки, люди - из отметок'
     $where = Get-KeyPredicate $sqlTable $docColumn $docHash
     if (-not $where) { Fail 'первичный ключ таблицы документа не определён' }
     Invoke-Sql @"
-DELETE FROM $mark WHERE [Server Instance Id] = -1;
+DELETE FROM $mark WHERE [Server Instance Id] IN (-1,-2);
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'$demoUser',N'$Company',$TableNo,N'$docHash',GETDATE());
+VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docHash',GETDATE()),
+       (-2,-2,N'$demoVictim',N'$Company',$TableNo,N'$docHash',GETDATE());
 "@ | Out-Null
     # В таблице УСТАНОВКИ держатель ничего не меняет: UPDLOCK даёт ту же блокировку рода
     # KEY, что и запись, но данных не трогает. Правится только своя строка отметки - её и
     # правит переходник, в той же транзакции, чем и держит на ней блокировку.
     $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'$docHash' WHERE [Server Instance Id]=-1`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
-    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
+    # Жертва отмечается ТОЖЕ, своей отметкой и в своей транзакции. Без этого колонка
+    # "кто ждал" остаётся пустой: имя ждущего инструмент берёт из ЕГО отметки, найденной
+    # по его же выданной блокировке, а не из отметки виновника.
+    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=-2`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'demo-doc-hold.sql' $hold
     $script:scenePids += $blocker
     Start-Sleep -Seconds 2
@@ -694,14 +709,16 @@ VALUES (-1,-1,N'$demoUser',N'$Company',$TableNo,N'$docHash',GETDATE());
         Say 'дорога по хэшу здесь молчит по делу, и отвечает отметка контекста'
         Say "отметку кладёт переходник в той же транзакции; на стенде её кладёт показ - подписчика на чужую таблицу мы не оставляем"
         Invoke-Sql @"
-DELETE FROM $mark WHERE [Server Instance Id] = -1;
+DELETE FROM $mark WHERE [Server Instance Id] IN (-1,-2);
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'$demoUser',N'$Company',$TableNo,N'$docMark',GETDATE());
+VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETDATE()),
+       (-2,-2,N'$demoVictim',N'$Company',$TableNo,N'$docMark',GETDATE());
 "@ | Out-Null
         # Отметка правится В ТОЙ ЖЕ транзакции, что и захват чужой строки: инструмент
-        # находит её не по времени, а по монопольной блокировке той же транзакции.
+        # находит её не по времени, а по монопольной блокировке той же транзакции. Жертва
+        # правит свою - иначе "кто ждал" пусто, а вопрос "кто кого" отвечен наполовину.
         $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'$docMark' WHERE [Server Instance Id]=-1`nSELECT TOP 1 1 FROM [$plainTableSql] WITH (UPDLOCK, ROWLOCK, INDEX(0))`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
-        $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT TOP 1 1 FROM [$plainTableSql] WITH (UPDLOCK, ROWLOCK, INDEX(0))`nROLLBACK`n"
+        $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=-2`nSELECT TOP 1 1 FROM [$plainTableSql] WITH (UPDLOCK, ROWLOCK, INDEX(0))`nROLLBACK`n"
         $blocker = Start-Sqlcmd 'demo-user-hold.sql' $hold
         $script:scenePids += $blocker
         Start-Sleep -Seconds 2
@@ -720,12 +737,24 @@ VALUES (-1,-1,N'$demoUser',N'$Company',$TableNo,N'$docMark',GETDATE());
     Head 'Сцена 3. Кто пострадал, и когда это уже тревога'
     Say "виновник держит строку $docQueue, за ней встают $(QueueVictims) жертвы"
     $where = Get-KeyPredicate $sqlTable $docColumn $docQueue
-    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
-    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
+    # Отметка своя у каждой стороны: у держателя и у каждой жертвы. Так в журнале видно не
+    # "трое ждут", а КТО именно ждёт - по имени, у каждой строки своё.
+    $rows = @("(-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docQueue',GETDATE())")
+    for ($i = 1; $i -le (QueueVictims); $i++) {
+        $who = $demoQueue[($i - 1) % $demoQueue.Count]
+        $rows += "($(-1 - $i),$(-1 - $i),N'$who',N'$Company',$TableNo,N'$docQueue',GETDATE())"
+    }
+    Invoke-Sql @"
+DELETE FROM $mark WHERE [Server Instance Id] BETWEEN -9 AND -1;
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+VALUES $($rows -join ', ');
+"@ | Out-Null
+    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'$docQueue' WHERE [Server Instance Id]=-1`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'demo-queue-hold.sql' $hold
     $script:scenePids += $blocker
     Start-Sleep -Seconds 2
     for ($i = 1; $i -le (QueueVictims); $i++) {
+        $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=$(-1 - $i)`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
         $script:scenePids += Start-Sqlcmd "demo-queue-want-$i.sql" $want
         Start-Sleep -Milliseconds 300
     }
@@ -783,7 +812,7 @@ FROM $episode WHERE [Class] = 3 ORDER BY [Entry No_] DESC;
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] = -1;
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'$demoUser',N'$Company',$TableNo,N'$docMark',GETDATE());
+VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETDATE());
 "@ | Out-Null
     $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'HELD-BY-SQL' WHERE [Server Instance Id]=-1`nWAITFOR DELAY '00:01:00'`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'demo-nav-hold.sql' $hold
@@ -835,8 +864,23 @@ FROM $episode WHERE [Victim Is NAV] = 1 ORDER BY [Entry No_] DESC;
     Head 'Живой эпизод'
     Say "оставляю блокировку на $(LiveHoldMinutes) мин: на экране будет ОТКРЫТЫЙ эпизод"
     $where = Get-KeyPredicate $sqlTable $docColumn $docLive
-    $liveHold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:0$(LiveHoldMinutes):00'`nROLLBACK`n"
-    $liveWant = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
+    # Этот эпизод остаётся на экране дольше всех, и людей в нём надо назвать так же, как в
+    # сценах: каждая сторона правит СВОЮ отметку в своей транзакции. Без этого самая долгая
+    # картинка показа отвечает "документ знаю, а людей нет" - то есть ровно то, чего
+    # инструмент обещает не делать.
+    #
+    # Отметки здесь СВОИ, -6 и -7, а не общие -1 и -2. Строку -1 в этот самый миг держит
+    # сессия NAV из пятой сцены - её мерная задержка длится минуту, - и правка той же
+    # строки увела бы спор на таблицу отметок: в последней строке журнала оказалась бы не
+    # та блокировка, ради которой всё делалось. Ловилось на себе.
+    Invoke-Sql @"
+DELETE FROM $mark WHERE [Server Instance Id] IN (-6,-7);
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+VALUES (-6,-6,N'$demoHolder',N'$Company',$TableNo,N'$docLive',GETDATE()),
+       (-7,-7,N'$demoVictim',N'$Company',$TableNo,N'$docLive',GETDATE());
+"@ | Out-Null
+    $liveHold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'$docLive' WHERE [Server Instance Id]=-6`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:0$(LiveHoldMinutes):00'`nROLLBACK`n"
+    $liveWant = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=-7`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
     $liveA = Start-Sqlcmd 'demo-live-hold.sql' $liveHold
     Start-Sleep -Seconds 2
     $liveB = Start-Sqlcmd 'demo-live-want.sql' $liveWant

@@ -842,13 +842,10 @@ OBJECT Codeunit 110234 LockWatch Sql
           ELSE
             KeyNo := Parse.KeyNoFromIndexName(IndexName);
           NameRow(Found,ObjectName,TableName,KeyNo,SiftKeyNo <> Parse.UnknownKeyNo);
-        END ELSE BEGIN
+        END ELSE
           // Имя, которое не разобралось, показывается СЫРЫМ и метится непонятым. Пустая
           // колонка на его месте читалась бы как "таблица неизвестна серверу".
-          Found."SQL Object Name" := COPYSTR(ObjectName,1,MAXSTRLEN(Found."SQL Object Name"));
-          Found."NAV Key No." := KeyNo;
-          Found."Resource Unresolved" := TRUE;
-        END;
+          UnnamedRow(Found,ObjectName);
         IF StatementBody <> '' THEN BEGIN
           Found."Blocker Statement Text".CREATEOUTSTREAM(StatementOut,TEXTENCODING::UTF8);
           StatementOut.WRITETEXT(StatementBody);
@@ -995,6 +992,24 @@ OBJECT Codeunit 110234 LockWatch Sql
       Row."On SIFT" := OnSift;
     END;
 
+    LOCAL PROCEDURE UnnamedRow@64(VAR Row@1000000000 : Record 110231;ObjectName@1000000001 : Text);
+    BEGIN
+      // Место, парное первому: имя, которое разбор НЕ понял, показывается сырым и метится
+      // непонятым. Дороги сюда те же две, и расходиться им нельзя - а они расходились:
+      // граф показывал сырое имя, очередь молчала, и строка выходила без имени вовсе.
+      //
+      // Пустое имя здесь не мелочь. У ожидания ОБЪЕКТА целиком hobt равен нулю, и имя
+      // остаётся единственным, чем два разных ожидания одной транзакции отличаются друг
+      // от друга (см. FindOpen в журнале). Пустое у обоих - и различить эпизоды нечем:
+      // порознь их держит один лишь признак "счётчик ожидания пошёл назад", а он о другом
+      // и срабатывает не всегда.
+      Row."SQL Object Name" := COPYSTR(ObjectName,1,MAXSTRLEN(Row."SQL Object Name"));
+      Row."NAV Table Name" := '';
+      Row."NAV Key No." := Parse.UnknownKeyNo;
+      Row."On SIFT" := FALSE;
+      Row."Resource Unresolved" := TRUE;
+    END;
+
     LOCAL PROCEDURE MomentDays@54(At@1000000000 : DateTime) : Integer;
     VAR
       Elapsed@1000000001 : Duration;
@@ -1047,15 +1062,23 @@ OBJECT Codeunit 110234 LockWatch Sql
       SiftKeyNo@1000000007 : Integer;
       KeyNo@1000000008 : Integer;
       SqlObjectId@1000000009 : Integer;
+      Parsed@1000000010 : Boolean;
     BEGIN
-      IF NOT Parse.SplitSqlObjectName(ObjectName,CompanyName,TableName,SiftKeyNo) THEN
-        EXIT;
+      // Неразобранное имя - не повод бросить строку. Здесь стоял выход, и строка после
+      // него оставалась без имени ВОВСЕ - даже без пометки "не опознано". Читается это
+      // как "сервер таблицы не назвал", хотя сервер её назвал: не понял её разбор.
+      // Ловится на блокировке платформенной таблицы $ndo$ - их на базу около дюжины, и
+      // таблицами NAV они не являются, поэтому разбор честно отвечает "не моё".
+      Parsed := Parse.SplitSqlObjectName(ObjectName,CompanyName,TableName,SiftKeyNo);
+      KeyNo := Parse.UnknownKeyNo;
       // Правил два, и одно теряет самый частый случай блокировок NAV молча: у таблицы
       // номер ключа несёт имя ИНДЕКСА, у SIFT-представления - имя самого объекта.
-      IF SiftKeyNo <> Parse.UnknownKeyNo THEN
-        KeyNo := SiftKeyNo
-      ELSE
-        KeyNo := Parse.KeyNoFromIndexName(IndexName);
+      IF Parsed THEN BEGIN
+        IF SiftKeyNo <> Parse.UnknownKeyNo THEN
+          KeyNo := SiftKeyNo
+        ELSE
+          KeyNo := Parse.KeyNoFromIndexName(IndexName);
+      END;
 
       Observed.RESET;
       IF Source = SourceHobt THEN
@@ -1067,7 +1090,10 @@ OBJECT Codeunit 110234 LockWatch Sql
       END;
       IF Observed.FINDSET(TRUE) THEN
         REPEAT
-          NameRow(Observed,ObjectName,TableName,KeyNo,SiftKeyNo <> Parse.UnknownKeyNo);
+          IF Parsed THEN
+            NameRow(Observed,ObjectName,TableName,KeyNo,SiftKeyNo <> Parse.UnknownKeyNo)
+          ELSE
+            UnnamedRow(Observed,ObjectName);
           Observed.MODIFY;
         UNTIL Observed.NEXT = 0;
       Observed.RESET;
