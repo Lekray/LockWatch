@@ -93,6 +93,9 @@ function Wait-For([scriptblock]$condition, [int]$seconds) {
 }
 
 $blocker = $null
+$cover = $null
+# Подготовленный завод ждёт знака файлом и без него висел бы вечно: его снимает уборка.
+$armProc = $null
 function Start-Sqlcmd([string]$name, [string]$sql) {
     $file = Join-Path $outDir $name
     [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
@@ -192,6 +195,71 @@ try {
     Check 'проход пишет своё состояние и не трогает строку настройки' ($setupHeld -and $stateMoved) `
         "версия настройки $(if ($setupHeld) { 'не менялась' } else { 'СДВИНУЛАСЬ' }), версия состояния $(if ($stateMoved) { 'сдвинулась' } else { 'НЕ МЕНЯЛАСЬ' })"
 
+    # Завод ПОВЕРХ идущего прохода. Задачу, которая уже исполняется, снять нечем, и на
+    # прежнем коде она перевзводила себя уже после завода: цепочек становилось ДВЕ, обе
+    # живые, обе перевзводятся. На прежнем коде задач тут выходит 2.
+    #
+    # Окно ловится не сном, а ЗАМКОМ. Держим ЖУРНАЛ: его проход читает каждым проходом -
+    # переезд старых строк идёт всегда, - а завод к нему не обращается вовсе и потому
+    # проходит целиком, пока проход стоит. Накопительный слой на эту роль не годится: на
+    # тихом стенде счётчики не двигаются, проход в него не заходит и замка не видит
+    # (проверено - двенадцать проходов подряд мимо запертой таблицы охвата).
+    #
+    # Времени у опыта меньше десяти секунд: столько проход держится на замке, а потом
+    # срывается по пределу ожидания NAV, подхватывается задачей и перевзводится. Поэтому
+    # завод готовится ЗАРАНЕЕ - отдельный процесс поднимает модуль NAV и ждёт знака файлом.
+    # Запуск с модулем стоит несколько секунд, и без прогрева опыт не успевал бы.
+    Write-Host 'Завожу сторожа ПОВЕРХ идущего прохода'
+    $armReady   = Join-Path $outDir 'watch-arm.ready'
+    $armTrigger = Join-Path $outDir 'watch-arm.trigger'
+    $armDone    = Join-Path $outDir 'watch-arm.done'
+    foreach ($f in @($armReady, $armTrigger, $armDone)) { if (Test-Path $f) { Remove-Item $f -Force } }
+    $armFile = Join-Path $outDir 'watch-arm.ps1'
+    Write-Ps51 $armFile @"
+$navImport
+Set-Content -Path '$armReady' -Value 'ready'
+while (-not (Test-Path '$armTrigger')) { Start-Sleep -Milliseconds 50 }
+try {
+    Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TaskCodeunitId -MethodName StartWatch -ErrorAction Stop
+    Set-Content -Path '$armDone' -Value 'ok'
+} catch { Set-Content -Path '$armDone' -Value `$_.Exception.Message }
+"@
+    $armProc = Start-Process -FilePath $ps51 -PassThru -WindowStyle Hidden `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $armFile)
+    if (-not (Wait-For { Test-Path $armReady } 90)) { Fail 'подготовленный завод не поднял модуль NAV - опыт не удался' }
+
+    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nDELETE FROM $episode WITH (TABLOCKX)`nWAITFOR DELAY '00:01:00'`nROLLBACK`n"
+    $cover = Start-Sqlcmd 'watch-journal-hold.sql' $hold
+    # Ждём ФАКТА - что проход и вправду встал на журнале. Номер объекта спрашивается у
+    # каталога: обратный перевод (OBJECT_NAME от resource_associated_entity_id) роняет
+    # запрос переполнением на первой же чужой блокировке рода KEY.
+    $stuckSql = @"
+SELECT TOP 1 CONVERT(varchar(11),l.request_session_id)
+FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id = l.request_session_id
+WHERE l.request_status = 'WAIT'
+  AND l.resource_associated_entity_id IN (
+        SELECT OBJECT_ID(N'$episode')
+        UNION ALL SELECT p.hobt_id FROM sys.partitions p WHERE p.object_id = OBJECT_ID(N'$episode'))
+  AND s.program_name LIKE 'Microsoft Dynamics NAV%';
+"@
+    if (-not (Wait-For { '' -ne (Scalar $stuckSql) } 60)) { Fail 'проход на журнале не встал - окно не открылось, опыт не удался' }
+    Set-Content -Path $armTrigger -Value 'go'
+    $armed = Wait-For { Test-Path $armDone } 20
+    $armSaid = if ($armed) { (Get-Content $armDone -Raw).Trim() } else { 'не ответил' }
+    Stop-Sqlcmd $cover
+    if ($armSaid -ne 'ok') { Fail "подготовленный завод не отработал: $armSaid" }
+    # Задержанный проход доходит до конца и на прежнем коде тут же ставит СВОЮ задачу.
+    # Сломано нарочно 09.09.2026 - сверка поколения снята: 8 из 9, и красная эта проверка,
+    # "задач в планировщике 2 при ожидаемой 1".
+    # Ждём именно этого: появилась вторая - ответ есть сразу, не появилась за двадцать
+    # секунд - тоже ответ. Строка задачи живёт и пока задача ИСПОЛНЯЕТСЯ, поэтому число
+    # снимается в тишине: когда очередной проход уже отчитался.
+    Wait-For { (TaskCount) -gt 1 } 20 | Out-Null
+    $quietPass = LastPass
+    Wait-For { (LastPass) -ne $quietPass } 30 | Out-Null
+    Check 'завод поверх идущего прохода не создаёт второй цепочки' ((TaskCount) -eq 1) `
+        "задач в планировщике $(TaskCount) при ожидаемой 1, сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")"
+
     Write-Host 'Устраиваю блокировку и НИЧЕГО не нажимаю'
     Invoke-Sql @"
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
@@ -230,6 +298,8 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETDATE());
 }
 finally {
     Stop-Sqlcmd $blocker
+    Stop-Sqlcmd $cover
+    Stop-Sqlcmd $armProc
     & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId; UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1;" 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }
 }

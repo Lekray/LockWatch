@@ -40,6 +40,9 @@ OBJECT Table 110237 LockWatch Watchdog
     { 50  ;   ;Watchdog Message    ;Text250       ;CaptionML=[ENU=Watchdog Message;
                                                               RUS=Сообщение сторожа];
                                                    Editable=No }
+    { 51  ;   ;Watch Generation    ;Integer       ;CaptionML=[ENU=Watch Generation;
+                                                              RUS=Поколение цепочки];
+                                                   Editable=No }
   }
   KEYS
   {
@@ -87,6 +90,28 @@ OBJECT Table 110237 LockWatch Watchdog
       FetchToWrite;
       "Watchdog Message" := COPYSTR(Message,1,MAXSTRLEN("Watchdog Message"));
       MODIFY;
+    END;
+
+    [External]
+    PROCEDURE Arm@6() : Integer;
+    BEGIN
+      // Метка поколения цепочки. Поднимает её ТОЛЬКО завод, и по ней проход, начавшийся до
+      // нового завода, узнаёт, что цепочка уже не его. Число, а не время: два завода подряд
+      // укладываются в одну миллисекунду, и метка временем их бы не различила.
+      FetchToWrite;
+      "Watch Generation" := "Watch Generation" + 1;
+      MODIFY;
+      EXIT("Watch Generation");
+    END;
+
+    [External]
+    PROCEDURE Generation@7() : Integer;
+    BEGIN
+      // Строки ещё нет - значит и цепочки не было: ноль отличается от любого заведённого
+      // поколения, и проход с нулём себя не продолжит. Заводить строку чтением нельзя.
+      IF GET THEN
+        EXIT("Watch Generation");
+      EXIT(0);
     END;
 
     [External]

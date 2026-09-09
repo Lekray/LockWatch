@@ -111,7 +111,7 @@ $runs = @(
     }
     @{
         Name = 'watch'; Script = 'Test-Watch.ps1'; Extra = @()
-        Checks = 8; WithInstance = $true
+        Checks = 9; WithInstance = $true
         Why = 'сторожу нужен спокойный журнал: он судит по тому, что появилось САМО'
         What = 'фоновая задача заводится, идёт сама, не двоится и умирает по кнопке'
     }
