@@ -132,6 +132,11 @@ function Footprint {
     return ($out -join ', ')
 }
 function Task-Rows        { Count-Sql "SELECT COUNT(*) FROM $tasksTable WHERE [Run Codeunit] BETWEEN $rangeFrom AND $rangeTo;" }
+# Сколько ждать тишины в планировщике после остановки сторожа. Строка идущей задачи уходит
+# тогда, когда проход кончится; на тихой базе проход стоит десятки миллисекунд, а на занятой
+# упирается в предел ожидания блокировки у NAV - десять секунд. Берём вдвое: ждать здесь
+# дёшево и один раз, а поторопиться - значит объявить снятие неполным на ровном месте.
+function WatchQuietSeconds { 20 }
 function Sql-Tables       { Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] LIKE '%LockWatch%';" }
 # Собранный переходник ставится ВНЕ объявленного диапазона - номер ему выбирают под
 # установку. Забытый при снятии, он остаётся подписан на чужую таблицу, потребителя у
@@ -240,19 +245,38 @@ if ((-not $svc) -or ($svc.Status -ne 'Running')) {
 # ---------- 1. сторож ----------
 Write-Host ''
 Write-Host 'Снимаю сторожа'
-{
-    # Сначала своим же путём: кодюнит гасит выключатель И снимает задачу, а прямое удаление
-    # строки оставило бы включённый выключатель - и следующая выкладка завелась бы сама.
-    $runner = Join-Path $outDir 'uninstall-stopwatch.ps1'
-    $body = @"
+# Сначала своим же путём: кодюнит гасит ВЫКЛЮЧАТЕЛЬ и снимает задачу. Прямое удаление
+# строки выключателя не трогает, а идущий проход перевзводит себя сам - строка возвращается
+# уже после удаления, и снятие объявляет себя неполным.
+#
+# Этот блок стоял в голых фигурных скобках, и PowerShell считает такое ВЫРАЖЕНИЕМ: он
+# печатает текст блока в вывод и не выполняет его. Снятие ни разу не звало StopWatch, а
+# смета этого не замечала, потому что строки задач всё равно добирались напрямую, и
+# перевзвод случается только тогда, когда проход идёт прямо в этот миг.
+$runner = Join-Path $outDir 'uninstall-stopwatch.ps1'
+$body = @"
 `$ErrorActionPreference = 'Stop'
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110236 -MethodName StopWatch -ErrorAction Stop
 "@
-    [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
-    & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Host '  свой путь не отработал - добираю строки задач напрямую' -ForegroundColor Yellow }
+[IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+& $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-Null
+$stopWorked = ($LASTEXITCODE -eq 0)
+if (-not $stopWorked) { Write-Host '  свой путь не отработал - добираю строки задач напрямую' -ForegroundColor Yellow }
+
+# Ждём ФАКТА, а не мгновения. Строка ИДУЩЕЙ задачи в планировщике есть, и снятие её не
+# берёт: она уходит сама, когда проход кончится. Погашенный выключатель не даст ему
+# перевзвестись, и число садится на ноль само - а если выключатель не погашен, ноля не
+# будет вовсе, сколько ни жди.
+$quietBy = (Get-Date).AddSeconds((WatchQuietSeconds))
+while (((Get-Date) -lt $quietBy) -and ((Task-Rows) -gt 0)) { Start-Sleep -Milliseconds 500 }
+$tasksAfterStop = Task-Rows
+if ($tasksAfterStop -eq 0) {
+    Write-Host '  сторож остановлен своим путём, планировщик пуст'
+} else {
+    Write-Host "  строк задач осталось после остановки: $tasksAfterStop" -ForegroundColor Yellow
 }
+
 $left = Task-Rows
 if ($left -gt 0) {
     Invoke-Sql "DELETE FROM $tasksTable WHERE [Run Codeunit] BETWEEN $rangeFrom AND $rangeTo;" | Out-Null
@@ -324,6 +348,15 @@ Check 'объектов с нашим именем не осталось ниг�
 $tablesLeft = Sql-Tables
 Check 'таблиц SQL не осталось, и данные ушли с ними' ($tablesLeft -eq 0) `
     "таблиц с именем LockWatch $tablesLeft"
+# Мерится не итог, а СВОЙ ПУТЬ: строки задач всё равно добираются прямым удалением, и по
+# итогу обе дороги неотличимы. Здесь спрашивается число ДО прямого удаления - остановка
+# обязана была увести его в ноль сама. Проверка непуста только на заведённом стороже: на
+# тихой базе строк нет и до остановки, поэтому смета сторожа перед снятием заводит нарочно.
+#
+# Сломано нарочно 09.09.2026 - блок остановки возвращён в голые фигурные скобки: 5 из 6, и
+# красная эта проверка, "строк задач после остановки 1, свой путь НЕ отработал".
+Check 'сторож остановлен своим путём, а не выломан из планировщика' ($tasksAfterStop -eq 0) `
+    "строк задач после остановки $tasksAfterStop, свой путь $(if ($stopWorked) { 'отработал' } else { 'НЕ отработал' })"
 $tasksLeft = Task-Rows
 Check 'в планировщике задач наших строк нет' ($tasksLeft -eq 0) `
     "строк с нашим кодюнитом $tasksLeft"
@@ -354,11 +387,21 @@ try {
 } catch {
     $leftovers += "Источник событий Windows $eventSource - проверить не удалось: $($_.Exception.Message)"
 }
-$xe = Scalar "SELECT COUNT(*) FROM sys.server_event_sessions WHERE [name] LIKE '%deadlock_monitor%';"
-if ([int]$xe -gt 0) {
-    $leftovers += "Серверная сессия Extended Events (найдено: $xe) - её завела платформа по ключу"
-    $leftovers += 'EnableDeadlockMonitoring и переживёт снятие инструмента. Уходит она только'
-    $leftovers += 'обратным выключением ключа в CustomSettings.config и перезапуском экземпляра.'
+# Сессию мониторинга платформа зовёт по имени базы: <база>_deadlock_monitor (замер
+# 09.09.2026). Значит на сервере с несколькими базами отбор по одному лишь роду сессии
+# поймал бы и ЧУЖИЕ - и снятие велело бы гасить ключ у чужой установки. Своя считается по
+# точному имени, чужие называются отдельно и как чужие.
+$xeOurs = Count-Sql "SELECT COUNT(*) FROM sys.server_event_sessions WHERE [name] = DB_NAME() + N'_deadlock_monitor';"
+$xeAll  = Count-Sql "SELECT COUNT(*) FROM sys.server_event_sessions WHERE [name] LIKE '%deadlock_monitor%';"
+if ($xeOurs -gt 0) {
+    $leftovers += 'Серверная сессия Extended Events этой базы - её завела платформа по ключу'
+    $leftovers += 'EnableDeadlockMonitoring и переживёт снятие инструмента (проверено замером).'
+    $leftovers += 'Уходит она только обратным выключением ключа в CustomSettings.config и'
+    $leftovers += 'перезапуском экземпляра.'
+}
+if ($xeAll -gt $xeOurs) {
+    $leftovers += "Ещё сессий того же рода на сервере: $($xeAll - $xeOurs) - они носят имена ДРУГИХ"
+    $leftovers += 'баз этого сервера. К инструменту они отношения не имеют, и трогать их нельзя.'
 }
 if ($leftovers.Count -gt 0) {
     Write-Host ''

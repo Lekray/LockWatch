@@ -140,10 +140,10 @@ $runs = @(
         What = 'дорога к имени человека от платформы и правдивость её сторожа'
     }
     @{
-        Name = 'uninstall'; Script = 'Uninstall-LockWatch.ps1'; Extra = @('-Yes')
-        Checks = 5; WithInstance = $true
+        Name = 'uninstall'; Script = 'Test-Uninstall.ps1'; Extra = @()
+        Checks = 6; WithInstance = $true
         Why = 'снимает всё: после него мерить нечего, пока не выложишь заново'
-        What = 'снятие инструмента и сверка по базе, что следа от него не осталось'
+        What = 'снятие РАБОТАЮЩЕГО инструмента и сверка по базе, что следа от него не осталось'
     }
     @{
         Name = 'redeploy'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
