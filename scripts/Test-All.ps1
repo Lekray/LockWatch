@@ -72,7 +72,7 @@ $pwshExe = (Get-Process -Id $PID).Path
 $runs = @(
     @{
         Name = 'onstand'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 45; Critical = $true; WithInstance = $true
+        Checks = 46; Critical = $true; WithInstance = $true
         Why = 'выкладка первой: всё дальнейшее меряет то, что она положила на стенд'
         What = 'сборка пакета, выкладка компилятором, разбор без базы, мерный прогон журнала'
     }
@@ -147,7 +147,7 @@ $runs = @(
     }
     @{
         Name = 'redeploy'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 45; WithInstance = $true
+        Checks = 46; WithInstance = $true
         Why = 'возвращает стенд в рабочее состояние - и это же второй замер: выкладка на ОЧИЩЕННУЮ базу'
         What = 'повторная выкладка на базу, с которой инструмент только что сняли'
     }

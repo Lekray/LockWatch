@@ -66,6 +66,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       AdviceQuietTxt@1000000053 : TextConst 'ENU=quiet %1, zero threshold %2, right on the threshold %3;RUS=тихо %1, нулевой порог %2, ровно на пороге %3';
       ChkCounterDeltaTxt@1000000054 : TextConst 'ENU=a counter that went backwards is read as a reset, not as a negative gain;RUS=пошедший назад счётчик читается как обнуление, а не как отрицательный прирост';
       CounterDeltaTxt@1000000055 : TextConst 'ENU=gain %1, no move %2, after a reset %3, reset seen %4;RUS=прирост %1, без движения %2, после обнуления %3, обнуление замечено %4';
+      ChkRingHeadTxt@1000000056 : TextConst 'ENU=in a ring the culprit is the immediate blocker, not the victim itself;RUS=в кольце виновником назван непосредственный блокирующий, а не сама жертва';
+      RingHeadTxt@1000000057 : TextConst 'ENU=head %1 expected %2, depth %3 expected 1;RUS=голова %1 при ожидаемой %2, глубина %3 при ожидаемой 1';
       FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -338,6 +340,14 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Check(Passed,Total,Report,ChkCycleTxt,
         Cycle AND (Depth <= Parse.MaxChainSteps + 1),
         STRSUBSTNO(CycleTxt,Cycle,Depth));
+
+      // И второе утверждение, отдельное: обрыв - это ещё не ответ. Головы в кольце нет, и
+      // возвращать начало нельзя: голова идёт в колонку виновника, начало - в колонку
+      // ждущего, и обе колонки называют одного и того же человека, пострадавшего.
+      // На прежнем коде голова равнялась 1, то есть самой жертве, и проверка красная.
+      Check(Passed,Total,Report,ChkRingHeadTxt,
+        (Head = 2) AND (Depth = 1),
+        STRSUBSTNO(RingHeadTxt,Head,2,Depth));
     END;
 
     LOCAL PROCEDURE CheckVictims@25(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
