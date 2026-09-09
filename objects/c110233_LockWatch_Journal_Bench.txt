@@ -43,6 +43,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       MirrorDifferTxt@1000000052 : TextConst 'ENU=field %1 differs: %2 against %3;RUS=поле %1 разное: %2 против %3';
       ChkCeilingTxt@1000000062 : TextConst 'ENU=the journal comes down to its row ceiling, the oldest go first, and an open episode stays;RUS=журнал опускается до своего потолка строк, старшие уезжают первыми, а идущий эпизод остаётся';
       CeilingTxt@1000000063 : TextConst 'ENU=moved %1 of the %2 over the ceiling, journal %3 against the ceiling %4, the open %5 stayed;RUS=переехало %1 из %2 сверх потолка, в журнале %3 при потолке %4, идущий %5 остался';
+      ChkCovMoveTxt@1000000064 : TextConst 'ENU=moving an episode to history does not change the coverage;RUS=переезд эпизода в историю не меняет охвата';
+      CovMoveTxt@1000000065 : TextConst 'ENU=episodes %1 before and %2 after, ms %3 and %4, moved %5;RUS=эпизодов %1 до и %2 после, мс %3 и %4, переехало %5';
       ChkTrimTxt@1000000014 : TextConst 'ENU=what is older than the term leaves the journal for history, and nothing is lost on the way;RUS=что старше срока, уезжает из журнала в историю, и по дороге ничего не теряется';
       TrimTxt@1000000015 : TextConst 'ENU=moved %1 of the %2 backdated, left %3 of %4, landed in history %5;RUS=переехало %1 из %2 состаренных, осталось %3 из %4, доехало до истории %5';
       ChkCostTxt@1000000016 : TextConst 'ENU=the NAV half of a pass fits into the declared ceiling;RUS=NAV-половина прохода укладывается в объявленный потолок';
@@ -111,6 +113,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       OldestClosed@1000000066 : Integer;
       RowsBefore@1000000067 : Integer;
       MovedByCeiling@1000000068 : Integer;
+      CovEpBefore@1000000069 : Integer;
+      CovEpAfter@1000000070 : Integer;
+      CovMsBefore@1000000071 : BigInteger;
+      CovMsAfter@1000000072 : BigInteger;
       MirrorNote@1000000053 : Text;
       SummedJournal@1000000062 : Integer;
       SummedBoth@1000000063 : Integer;
@@ -279,6 +285,11 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       HeldNo := HoldOldest;
       RowsBefore := JournalRowCount;
       OldestClosed := OldestClosedNo;
+      // Охват снимается ДО переезда и ПОСЛЕ. Переезд - это перекладывание строки из одной
+      // таблицы в другую, и охват от него меняться не смеет: эпизод, увиденный и потом
+      // уехавший, увиден был. Мерка сильна именно равенством: доля, посчитанная по одному
+      // журналу, падала бы здесь сама собой и выглядела бы как испортившееся наблюдение.
+      Coverage.JournalTotal(0DT,CovEpBefore,CovMsBefore);
       MovedByCeiling := Journal.MoveOldEntries(0,RowsBefore - CeilingSurplus,Waiters);
       Check(Passed,Total,Report,ChkCeilingTxt,
             (MovedByCeiling = CeilingSurplus) AND
@@ -287,6 +298,12 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             InJournal(HeldNo),
             STRSUBSTNO(CeilingTxt,MovedByCeiling,CeilingSurplus,JournalRowCount,
                        RowsBefore - CeilingSurplus,HeldNo));
+
+      // Переезд состоялся - без него равенство ниже прошло бы и на охвате по одному журналу.
+      Coverage.JournalTotal(0DT,CovEpAfter,CovMsAfter);
+      Check(Passed,Total,Report,ChkCovMoveTxt,
+            (CovEpAfter = CovEpBefore) AND (CovMsAfter = CovMsBefore) AND (MovedByCeiling > 0),
+            STRSUBSTNO(CovMoveTxt,CovEpBefore,CovEpAfter,CovMsBefore,CovMsAfter,MovedByCeiling));
 
       // Зеркало сверяется КАЖДЫМ прогоном, а не глазами при правке. Список полей истории
       // списан с журнала, и разойтись он может только молча: добавленное поле просто не

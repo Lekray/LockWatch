@@ -126,23 +126,61 @@ OBJECT Codeunit 110238 LockWatch Coverage
 
     [External]
     PROCEDURE JournalTotal@4(SinceAt@1000000000 : DateTime;VAR Episodes@1000000001 : Integer;VAR WaitMs@1000000002 : BigInteger);
+    BEGIN
+      // Названная половина охвата считается за ТОТ ЖЕ срок, с которого ведётся счёт
+      // приростов. Сравнивать журнал за сутки со счётчиками за месяц значило бы получить
+      // долю охвата в несколько процентов и напугать ею на ровном месте.
+      //
+      // Считается по журналу И по истории, и без всякой кнопки - в отличие от свода. Свод
+      // отвечает на "что происходит", и "в последнее время" против "за всё время" - два
+      // разных законных вопроса, оттого там кнопка. Охват отвечает на другое: "чего журнал
+      // НЕ увидел". Эпизод, увиденный и потом уехавший в историю, увиден БЫЛ, и посчитать
+      // один журнал значило бы объявить пропуском собственный переезд: доля падала бы сама
+      // собой по сроку или по потолку, и падение читалось бы как испортившееся наблюдение.
+      //
+      // Обходов два - тип записи в параметре C/AL фиксирован, - а складывается эпизод в
+      // одном месте: разойдясь, две половины охвата считали бы разные величины.
+      Episodes := 0;
+      WaitMs := 0;
+      AddJournal(SinceAt,Episodes,WaitMs);
+      AddHistory(SinceAt,Episodes,WaitMs);
+    END;
+
+    LOCAL PROCEDURE AddJournal@7(SinceAt@1000000000 : DateTime;VAR Episodes@1000000001 : Integer;VAR WaitMs@1000000002 : BigInteger);
     VAR
       Episode@1000000003 : Record 110231;
     BEGIN
-      // Журнальная половина охвата считается за ТОТ ЖЕ срок, с которого ведётся счёт
-      // приростов. Сравнивать журнал за сутки со счётчиками за месяц значило бы получить
-      // долю охвата в несколько процентов и напугать ею на ровном месте.
-      Episodes := 0;
-      WaitMs := 0;
       Episode.RESET;
       Episode.SETCURRENTKEY("Started At");
       IF SinceAt <> 0DT THEN
         Episode.SETFILTER("Started At",'>=%1',SinceAt);
       IF Episode.FINDSET THEN
         REPEAT
-          Episodes := Episodes + 1;
-          WaitMs := WaitMs + Episode."Max Wait (ms)";
+          AddOne(Episodes,WaitMs,Episode."Max Wait (ms)");
         UNTIL Episode.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddHistory@8(SinceAt@1000000000 : DateTime;VAR Episodes@1000000001 : Integer;VAR WaitMs@1000000002 : BigInteger);
+    VAR
+      Moved@1000000003 : Record 110238;
+    BEGIN
+      // Тот же отбор по истории. Ключ "Started At" в ней есть: история заводилась с ключами
+      // под чтение, и этот - первый из них.
+      Moved.RESET;
+      Moved.SETCURRENTKEY("Started At");
+      IF SinceAt <> 0DT THEN
+        Moved.SETFILTER("Started At",'>=%1',SinceAt);
+      IF Moved.FINDSET THEN
+        REPEAT
+          AddOne(Episodes,WaitMs,Moved."Max Wait (ms)");
+        UNTIL Moved.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddOne@9(VAR Episodes@1000000000 : Integer;VAR WaitMs@1000000001 : BigInteger;Ms@1000000002 : Integer);
+    BEGIN
+      // Общий кусок нарочно, хоть он и в две строки: это и есть то, что охват считает.
+      Episodes := Episodes + 1;
+      WaitMs := WaitMs + Ms;
     END;
 
     [External]

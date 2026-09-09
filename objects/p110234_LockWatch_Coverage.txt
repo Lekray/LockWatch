@@ -59,6 +59,19 @@ OBJECT Page 110234 LockWatch Coverage
                                  ShowEpisodes;
                                END;
                                 }
+      { 25      ;1   ;Action    ;
+                      Name=ShowHistoryEpisodes;
+                      CaptionML=[ENU=Episodes in History;
+                                 RUS=Эпизоды в истории];
+                      ToolTipML=[ENU=Open the same table and key in history. The named half is counted over the journal AND history, and sending the eye to the journal alone would show fewer than were counted.;
+                                 RUS=Открыть ту же таблицу и тот же ключ в истории. Названная половина считается по журналу И истории, и отправлять взгляд в один журнал значило бы показать меньше, чем посчитано.];
+                      ApplicationArea=#All;
+                      Image=History;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ShowHistoryEpisodes;
+                               END;
+                                }
       { 23      ;1   ;Action    ;
                       Name=StartOver;
                       CaptionML=[ENU=Start Over;
@@ -118,10 +131,10 @@ OBJECT Page 110234 LockWatch Coverage
 
     { 5   ;2   ;Field     ;
                 Name=JournalMs;
-                CaptionML=[ENU=Journal Named (ms);
-                           RUS=Журнал назвал, мс];
-                ToolTipML=[ENU=Specifies how many milliseconds of waiting the journal has episodes for, over the same stretch.;
-                           RUS=Определяет, на сколько миллисекунд ожидания у журнала есть эпизоды - за тот же срок.];
+                CaptionML=[ENU=Named (ms);
+                           RUS=Названо, мс];
+                ToolTipML=[ENU=Specifies how many milliseconds of waiting there are episodes for, over the same stretch. The journal and history are counted together - an episode seen and later moved to history was still seen, and leaving it out would call the tool own move a miss.;
+                           RUS=Определяет, на сколько миллисекунд ожидания есть эпизоды - за тот же срок. Журнал и история считаются вместе - эпизод, увиденный и потом уехавший в историю, увиден был, и не считать его значило бы объявить пропуском собственный переезд.];
                 ApplicationArea=#All;
                 SourceExpr=JournalMs }
 
@@ -139,8 +152,8 @@ OBJECT Page 110234 LockWatch Coverage
                 Name=JournalEpisodes;
                 CaptionML=[ENU=Episodes Named;
                            RUS=Эпизодов названо];
-                ToolTipML=[ENU=Specifies how many episodes the journal holds over the same stretch.;
-                           RUS=Определяет, сколько эпизодов держит журнал за тот же срок.];
+                ToolTipML=[ENU=Specifies how many episodes there are over the same stretch, in the journal and in history together.;
+                           RUS=Определяет, сколько эпизодов есть за тот же срок - в журнале и в истории вместе.];
                 ApplicationArea=#All;
                 SourceExpr=JournalEpisodes }
 
@@ -295,6 +308,23 @@ OBJECT Page 110234 LockWatch Coverage
       IF CoverageSince <> 0DT THEN
         Episode.SETFILTER("Started At",'>=%1',CoverageSince);
       PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
+    END;
+
+    LOCAL PROCEDURE ShowHistoryEpisodes@8();
+    VAR
+      Episode@1000000000 : Record 110238;
+      TableName@1000000001 : Text[250];
+      KeyNo@1000000002 : Integer;
+    BEGIN
+      // Отдельной кнопкой, а не догадкой: в журнале и в истории лежат РАЗНЫЕ эпизоды одной
+      // и той же пары "таблица плюс ключ", и человек сам решает, куда смотреть.
+      TableName := "NAV Table Name";
+      KeyNo := "NAV Key No.";
+      Episode.SETRANGE("NAV Table Name",TableName);
+      Episode.SETRANGE("NAV Key No.",KeyNo);
+      IF CoverageSince <> 0DT THEN
+        Episode.SETFILTER("Started At",'>=%1',CoverageSince);
+      PAGE.RUN(PAGE::"LockWatch Episode History",Episode);
     END;
 
     LOCAL PROCEDURE LowShare@5() : Integer;
