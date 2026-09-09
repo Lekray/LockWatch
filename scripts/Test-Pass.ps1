@@ -229,12 +229,13 @@ SELECT TOP 1
   CONVERT(varchar(11),[Max Wait (ms)]) + '|' + [Wait Type] + '|' +
   [Document No_] + '|' + CONVERT(varchar(11),[Document Source]) + '|' +
   [User Name] + '|' + CONVERT(varchar(11),[User Source]) + '|' + [No Document Reason] + '|' +
-  [Blocker Login] + '|' + [Blocker Host] + '|' + [Blocker Program]
+  [Blocker Login] + '|' + [Blocker Host] + '|' + [Blocker Program] + '|' +
+  [Victim Login] + '|' + [Victim Program]
 FROM $episode ORDER BY [Entry No_] DESC;
 "@
     if (-not $row) { Fail 'в журнале пусто - дальше проверять нечего' }
     $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
-    if ($f.Count -lt 22) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
+    if ($f.Count -lt 24) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
 
     Check 'жертва и виновник те самые' ((([int]$f[0]) -eq $waiterSpid) -and (([int]$f[2]) -eq $blockerSpid)) `
         "жертва $($f[0]) при ожидаемой $waiterSpid, виновник $($f[2]) при ожидаемом $blockerSpid"
@@ -313,6 +314,16 @@ FROM $episode ORDER BY [Entry No_] DESC;
     Check 'сервер назвал держателя: логин, узел, программа' `
         (($f[19] -ne '') -and ($f[20] -ne '') -and ($f[21] -match '(?i)sqlcmd')) `
         "логин [$($f[19])], узел [$($f[20])], программа [$($f[21])] при ожидаемой sqlcmd"
+
+    # И жертву - тем же способом. Соединение с её сеансом в запросе очереди стоит ПЕРВЫМ:
+    # им уже берутся узел, процесс и программа, и логин из той же строки не стоит ничего.
+    # Без него жертва была названа хуже виновника: у того три ответа, у неё был один узел,
+    # а вопрос "кто ждал" задают ровно так же часто. Учётная запись NAV рядом - из отметки
+    # контекста, и её нет у чужого соединения; логин есть ВСЕГДА.
+    # На прежнем коде: этих двух полей не было вовсе.
+    Check 'сервер назвал и жертву: логин и программа' `
+        (($f[22] -ne '') -and ($f[23] -match '(?i)sqlcmd')) `
+        "логин жертвы [$($f[22])], программа [$($f[23])] при ожидаемой sqlcmd"
 
     Write-Host 'Отпускаю блокировку и делаю второй проход'
     Stop-Sqlcmd $blocker

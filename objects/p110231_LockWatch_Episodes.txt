@@ -328,6 +328,19 @@ OBJECT Page 110231 LockWatch Episodes
                 ApplicationArea=#All;
                 SourceExpr="Victim Process Id" }
 
+    { 61  ;2   ;Field     ;
+                Name=VictimLogin;
+                ToolTipML=[ENU=Specifies the SQL login of the waiting session. It answers "who waited" the way the server knows it, and it is filled always - unlike the NAV account next to it, which exists only where a context mark was laid.;
+                           RUS=Определяет логин SQL ждущего сеанса. Это ответ на "кто ждал" тем, что знает сервер, и он есть ВСЕГДА - в отличие от соседней учётной записи NAV, которая берётся только из отметки контекста.];
+                ApplicationArea=#All;
+                SourceExpr="Victim Login" }
+
+    { 62  ;2   ;Field     ;
+                Name=VictimProgram;
+                ToolTipML=[ENU=Specifies how the waiting session introduced itself to the server.;
+                           RUS=Определяет, как ждущий сеанс представился серверу.];
+                ApplicationArea=#All;
+                SourceExpr="Victim Program" }
     { 16  ;2   ;Field     ;
                 Name=HeadSPID;
                 ToolTipML=[ENU=Specifies the head of the chain - the session that waits for nobody, that is, the one truly to blame. It is not the same as the immediate blocker: in a chain the immediate one is himself a victim, and blaming him sends people to fix the wrong thing.;

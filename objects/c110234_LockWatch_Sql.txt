@@ -160,6 +160,15 @@ OBJECT Codeunit 110234 LockWatch Sql
             COPYSTR(ReaderText(SqlReader,22),1,MAXSTRLEN(Observed."Blocker Host"));
           Observed."Blocker Program" :=
             COPYSTR(ReaderText(SqlReader,11),1,MAXSTRLEN(Observed."Blocker Program"));
+          // Жертву сервер знает ровно так же, и соединение с её сеансом в запросе стоит
+          // ПЕРВЫМ - им берутся узел, процесс и программа. Логин из той же строки не стоит
+          // ничего, а без него жертва названа хуже виновника: у виновника три ответа, у
+          // жертвы был один узел. Программа уже читается колонкой 7 (по ней решается, наш
+          // ли это сеанс), и выбрасывать её после одной проверки было бы расточительством.
+          Observed."Victim Login" :=
+            COPYSTR(ReaderText(SqlReader,23),1,MAXSTRLEN(Observed."Victim Login"));
+          Observed."Victim Program" :=
+            COPYSTR(ReaderText(SqlReader,7),1,MAXSTRLEN(Observed."Victim Program"));
           // Колонки 15 и 16, а не 14 и 15. На единицу раньше лежит признак "у виновника
           // есть исполняемый запрос", и он уходил в ДНИ: журнал показывал начало
           // транзакции 1900-01-02, а класс эпизода считался по миллисекундам вместо
@@ -789,6 +798,12 @@ OBJECT Codeunit 110234 LockWatch Sql
           COPYSTR(ReaderText(SqlReader,24),1,MAXSTRLEN(Found."Blocker Host"));
         Found."Blocker Login" :=
           COPYSTR(ReaderText(SqlReader,25),1,MAXSTRLEN(Found."Blocker Login"));
+        // Жертву граф называет тем же узлом процесса, из которого уже взяты машина, процесс
+        // и программа. Логин оттуда же и стоит столько же - нисколько.
+        Found."Victim Login" :=
+          COPYSTR(ReaderText(SqlReader,26),1,MAXSTRLEN(Found."Victim Login"));
+        Found."Victim Program" :=
+          COPYSTR(ReaderText(SqlReader,5),1,MAXSTRLEN(Found."Victim Program"));
         Found."Blocker Transaction Id" := ReaderBigInt(SqlReader,10);
         Found."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,11),ReaderInt(SqlReader,12));
         Found."Resource Kind" := COPYSTR(UPPERCASE(ReaderText(SqlReader,13)),1,MAXSTRLEN(Found."Resource Kind"));
@@ -955,7 +970,8 @@ OBJECT Codeunit 110234 LockWatch Sql
         // Дописано ПОСЛЕ Statement нарочно: он всегда ровно три столбца - и под галкой на
         // тексты, и без неё, - значит хвост неподвижен и ни один прежний номер не поехал.
         ', bp.n' + XVal('@hostname','nvarchar(80)') + ',' +
-        ' bp.n' + XVal('@loginname','nvarchar(128)') +
+        ' bp.n' + XVal('@loginname','nvarchar(128)') + ',' +
+        ' vp.n' + XVal('@loginname','nvarchar(128)') +
         ' FROM res' +
         ' CROSS APPLY res.G.nodes(' + Q + '/deadlock/process-list/process[@id' + Eq +
         'sql:column("res.VictimId")]' + Q + ') AS vp(n)' +
@@ -1157,7 +1173,7 @@ OBJECT Codeunit 110234 LockWatch Sql
         // столбца (при выключенных текстах он отдаёт четыре пустышки), поэтому хвост
         // неподвижен и ни один прежний номер колонки не поехал. Сдвиг на единицу в этом
         // же запросе уже стоил нам молчаливой поломки - заметка о ней выше по коду.
-        ', bs.login_name, bs.host_name' +
+        ', bs.login_name, bs.host_name, vs.login_name' +
         ' FROM sys.dm_os_waiting_tasks wt' +
         ' JOIN sys.dm_exec_sessions vs ON vs.session_id = wt.session_id' +
         ' LEFT JOIN sys.dm_tran_session_transactions vt ON vt.session_id = wt.session_id' +

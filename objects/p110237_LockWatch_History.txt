@@ -183,6 +183,19 @@ OBJECT Page 110237 LockWatch Episode History
                 ApplicationArea=#All;
                 SourceExpr="Victim User Name" }
 
+    { 48  ;2   ;Field     ;
+                Name=VictimLogin;
+                ToolTipML=[ENU=Specifies the SQL login of the waiting session. It answers "who waited" the way the server knows it, and it is filled always - unlike the NAV account next to it, which exists only where a context mark was laid.;
+                           RUS=Определяет логин SQL ждущего сеанса. Это ответ на "кто ждал" тем, что знает сервер, и он есть ВСЕГДА - в отличие от соседней учётной записи NAV, которая берётся только из отметки контекста.];
+                ApplicationArea=#All;
+                SourceExpr="Victim Login" }
+
+    { 49  ;2   ;Field     ;
+                Name=VictimProgram;
+                ToolTipML=[ENU=Specifies how the waiting session introduced itself to the server.;
+                           RUS=Определяет, как ждущий сеанс представился серверу.];
+                ApplicationArea=#All;
+                SourceExpr="Victim Program" }
     { 14  ;2   ;Field     ;
                 Name=BlockerLogin;
                 ToolTipML=[ENU=Specifies the SQL login of the session that held the lock. For an outside connection this is the only answer to "who" there is.;

@@ -271,11 +271,24 @@ SELECT TOP 1 CONVERT(varchar(11),[Class]) + '|' + CONVERT(varchar(11),[Outcome])
   [NAV Table Name] + '|' + [Resource Kind] + '|' + [Deadlock Id] + '|' +
   CONVERT(varchar(11),CASE WHEN [Ended At] > [Started At] THEN 1 ELSE 0 END) + '|' +
   CONVERT(varchar(11),[Max Wait (ms)]) + '|' + [Held Mode] + '|' + [Wait Type] + '|' +
-  CONVERT(varchar(11),[NAV Key No_]) + '|' + [Blocker Statement]
+  CONVERT(varchar(11),[NAV Key No_]) + '|' + [Blocker Statement] + '|' +
+  [Blocker Login] + '|' + [Blocker Program] + '|' +
+  [Victim Login] + '|' + [Victim Program]
 FROM $episode ORDER BY [Entry No_] DESC;
 "@
     $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
-    if ($f.Count -lt 15) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
+    if ($f.Count -lt 19) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
+
+    # Обоих участников граф называет сам - узлом процесса, из которого уже взяты машина,
+    # процесс и программа. Дорога эта отдельная от очереди, и своих номеров колонок у неё
+    # столько же: назвать по ней участников и не проверить этого значило бы держать вторую
+    # половину журнала на честном слове.
+    # На прежнем коде: у жертвы этих двух полей не было, а у виновника они были и не
+    # проверялись ни одной проверкой.
+    Check 'граф назвал обоих: логины и программы' `
+        (($f[15] -ne '') -and ($f[17] -ne '') -and
+         ($f[16] -match '(?i)sqlcmd') -and ($f[18] -match '(?i)sqlcmd')) `
+        "виновник [$($f[15])] / [$($f[16])], жертва [$($f[17])] / [$($f[18])]"
 
     Check 'класс и исход названы, а не оставлены неизвестными' (($f[0] -eq '3') -and ($f[1] -eq '3')) `
         "класс $($f[0]) при ожидаемом 3 (взаимоблокировка), исход $($f[1]) при ожидаемом 3 (откат сервером)"

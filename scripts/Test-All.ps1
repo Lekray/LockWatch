@@ -78,13 +78,13 @@ $runs = @(
     }
     @{
         Name = 'pass'; Script = 'Test-Pass.ps1'; Extra = @()
-        Checks = 19; WithInstance = $true
+        Checks = 20; WithInstance = $true
         Why = 'кратчайшая дорога до живого эпизода: сломан проход - дальше всё шум'
         What = 'проход на настоящей блокировке, дорога к документу по очереди сервера'
     }
     @{
         Name = 'pass-context'; Script = 'Test-Pass.ps1'; Extra = @('-ContextRoad')
-        Checks = 19; WithInstance = $true
+        Checks = 20; WithInstance = $true
         Why = 'та же блокировка, но документ берётся отметкой переходника, а не очередью'
         What = 'вторая дорога к документу'
     }
@@ -96,7 +96,7 @@ $runs = @(
     }
     @{
         Name = 'deadlock'; Script = 'Test-Deadlock.ps1'; Extra = @()
-        Checks = 13; WithInstance = $true
+        Checks = 14; WithInstance = $true
         Why = 'устраивает настоящие круги и оставляет их в кольцевом буфере: после прогонов по очереди'
         What = 'взаимоблокировки из system_health, строка журнала того же вида'
     }

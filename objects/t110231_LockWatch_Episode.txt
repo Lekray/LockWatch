@@ -123,6 +123,11 @@ OBJECT Table 110231 LockWatch Episode
                                                    Editable=No }
     { 66  ;   ;Blocker Program     ;Text128       ;CaptionML=[ENU=Blocker Program;
                                                               RUS=Программа виновника];
+                                                   Editable=No }    { 67  ;   ;Victim Login        ;Text128       ;CaptionML=[ENU=Victim SQL Login;
+                                                              RUS=Логин SQL жертвы];
+                                                   Editable=No }
+    { 68  ;   ;Victim Program      ;Text128       ;CaptionML=[ENU=Victim Program;
+                                                              RUS=Программа жертвы];
                                                    Editable=No }
     { 70  ;   ;Blocker Statement   ;Text250       ;CaptionML=[ENU=Blocker Statement;
                                                               RUS=Последний оператор виновника] }
