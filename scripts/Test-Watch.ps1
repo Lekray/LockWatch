@@ -13,6 +13,10 @@
     идущие вперемежку, закрывают эпизоды друг другу, и разобрать такой журнал потом
     нельзя - а на экране всё это время всё выглядит здоровым.
 
+    Оба трудных случая - завод и остановка ПОВЕРХ идущего прохода - устраиваются нарочно:
+    проход держат замком на журнале, и окно, в которое сном не попасть, открывается на
+    сколько угодно.
+
 .EXAMPLE
     pwsh scripts/Test-Watch.ps1
 #>
@@ -94,8 +98,9 @@ function Wait-For([scriptblock]$condition, [int]$seconds) {
 
 $blocker = $null
 $cover = $null
-# Подготовленный завод ждёт знака файлом и без него висел бы вечно: его снимает уборка.
+# Подготовленные вызовы ждут знака файлом и без него висели бы вечно: их снимает уборка.
 $armProc = $null
+$stopProc = $null
 function Start-Sqlcmd([string]$name, [string]$sql) {
     $file = Join-Path $outDir $name
     [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
@@ -112,6 +117,57 @@ $navImport = "Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service
 function Write-Ps51([string]$path, [string]$body) {
     [IO.File]::WriteAllText($path, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 }
+# Подготовленный вызов. Поднять модуль NAV стоит несколько секунд, а окно, в которое надо
+# попасть, живёт меньше десяти: столько проход держится на замке, а потом срывается по
+# пределу ожидания NAV. Поэтому процесс поднимается ЗАРАНЕЕ и ждёт знака файлом.
+function Start-Prepared([string]$tag, [string]$method) {
+    $ready   = Join-Path $outDir "watch-$tag.ready"
+    $trigger = Join-Path $outDir "watch-$tag.trigger"
+    $done    = Join-Path $outDir "watch-$tag.done"
+    foreach ($f in @($ready, $trigger, $done)) { if (Test-Path $f) { Remove-Item $f -Force } }
+    $file = Join-Path $outDir "watch-$tag.ps1"
+    Write-Ps51 $file @"
+$navImport
+Set-Content -Path '$ready' -Value 'ready'
+while (-not (Test-Path '$trigger')) { Start-Sleep -Milliseconds 50 }
+try {
+    Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TaskCodeunitId -MethodName $method -ErrorAction Stop
+    Set-Content -Path '$done' -Value 'ok'
+} catch { Set-Content -Path '$done' -Value `$_.Exception.Message }
+"@
+    $proc = Start-Process -FilePath $ps51 -PassThru -WindowStyle Hidden `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $file)
+    if (-not (Wait-For { Test-Path $ready } 90)) { Fail "подготовленный вызов $method не поднял модуль NAV" }
+    [PSCustomObject]@{ Process = $proc; Trigger = $trigger; Done = $done; Method = $method }
+}
+# Ответа ждём именно от подготовленного процесса: его молчание значит, что опыт не
+# состоялся вовсе, и судить дальше по числу задач было бы гаданием, а не замером.
+function Invoke-Prepared($prepared, [int]$seconds) {
+    Set-Content -Path $prepared.Trigger -Value 'go'
+    if (-not (Wait-For { Test-Path $prepared.Done } $seconds)) { return 'не ответил' }
+    return (Get-Content $prepared.Done -Raw).Trim()
+}
+
+# Замок, которым открывается окно длиной в проход. Держим ЖУРНАЛ: его проход читает и
+# пишет каждым проходом - переезд старых строк идёт всегда, - а завод и остановка к нему
+# не обращаются вовсе и потому проходят целиком, пока проход стоит. Накопительный слой на
+# эту роль не годится: на тихом стенде счётчики не двигаются, проход в него не заходит и
+# замка не видит (проверено - двенадцать проходов подряд мимо запертой таблицы охвата).
+$journalHold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nDELETE FROM $episode WITH (TABLOCKX)`nWAITFOR DELAY '00:01:00'`nROLLBACK`n"
+# Ждём ФАКТА - что проход и вправду встал на журнале. Номер объекта спрашивается у
+# каталога: обратный перевод (OBJECT_NAME от resource_associated_entity_id) роняет запрос
+# переполнением на первой же чужой блокировке рода KEY.
+$stuckSql = @"
+SELECT TOP 1 CONVERT(varchar(11),l.request_session_id)
+FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id = l.request_session_id
+WHERE l.request_status = 'WAIT'
+  AND l.resource_associated_entity_id IN (
+        SELECT OBJECT_ID(N'$episode')
+        UNION ALL SELECT p.hobt_id FROM sys.partitions p WHERE p.object_id = OBJECT_ID(N'$episode'))
+  AND s.program_name LIKE 'Microsoft Dynamics NAV%';
+"@
+function Wait-PassStuck([int]$seconds) { Wait-For { '' -ne (Scalar $stuckSql) } $seconds }
+
 $probeFile = Join-Path $outDir 'wait-nav.ps1'
 Write-Ps51 $probeFile @"
 $navImport
@@ -147,10 +203,10 @@ try {
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
 
-    # Гасим то, что могло остаться от прошлого прогона, И ДОЖИДАЕМСЯ тишины. Удалить строку
-    # задачи запросом мало: задача, которая уже исполняется, строки в таблице не имеет, и
-    # её проход всё равно случится - уже после того, как мы обнулили отметки. Прогон тогда
-    # краснеет не по делу, а причину искать негде.
+    # Гасим то, что могло остаться от прошлого прогона, И ДОЖИДАЕМСЯ тишины. Снять задачу
+    # мало: строка исполняющейся задачи в таблице ЕСТЬ, но снятие её не останавливает - она
+    # доходит до конца, и её проход всё равно случится, уже после того, как мы обнулили
+    # отметки. Прогон тогда краснеет не по делу, а причину искать негде.
     Write-Host '  гашу остатки прошлого прогона и жду тишины'
     Invoke-Method 'StopWatch'
     if (-not (Wait-For { (TaskCount) -eq 0 } 30)) { Fail 'задачи прошлого прогона не снялись' }
@@ -195,58 +251,22 @@ try {
     Check 'проход пишет своё состояние и не трогает строку настройки' ($setupHeld -and $stateMoved) `
         "версия настройки $(if ($setupHeld) { 'не менялась' } else { 'СДВИНУЛАСЬ' }), версия состояния $(if ($stateMoved) { 'сдвинулась' } else { 'НЕ МЕНЯЛАСЬ' })"
 
-    # Завод ПОВЕРХ идущего прохода. Задачу, которая уже исполняется, снять нечем, и на
-    # прежнем коде она перевзводила себя уже после завода: цепочек становилось ДВЕ, обе
-    # живые, обе перевзводятся. На прежнем коде задач тут выходит 2.
+    # Завод ПОВЕРХ идущего прохода. Строка исполняющейся задачи в таблице есть, но снятие
+    # её не останавливает: она доходит до конца и на прежнем коде перевзводила себя уже
+    # после завода - цепочек становилось ДВЕ, обе живые, обе перевзводятся. На прежнем
+    # коде задач тут выходит 2.
     #
-    # Окно ловится не сном, а ЗАМКОМ. Держим ЖУРНАЛ: его проход читает каждым проходом -
-    # переезд старых строк идёт всегда, - а завод к нему не обращается вовсе и потому
-    # проходит целиком, пока проход стоит. Накопительный слой на эту роль не годится: на
-    # тихом стенде счётчики не двигаются, проход в него не заходит и замка не видит
-    # (проверено - двенадцать проходов подряд мимо запертой таблицы охвата).
-    #
-    # Времени у опыта меньше десяти секунд: столько проход держится на замке, а потом
-    # срывается по пределу ожидания NAV, подхватывается задачей и перевзводится. Поэтому
-    # завод готовится ЗАРАНЕЕ - отдельный процесс поднимает модуль NAV и ждёт знака файлом.
-    # Запуск с модулем стоит несколько секунд, и без прогрева опыт не успевал бы.
+    # Обе руки готовятся заранее, и остановка - тоже: она понадобится в самом конце, а
+    # ждать знака ей ничего не стоит.
     Write-Host 'Завожу сторожа ПОВЕРХ идущего прохода'
-    $armReady   = Join-Path $outDir 'watch-arm.ready'
-    $armTrigger = Join-Path $outDir 'watch-arm.trigger'
-    $armDone    = Join-Path $outDir 'watch-arm.done'
-    foreach ($f in @($armReady, $armTrigger, $armDone)) { if (Test-Path $f) { Remove-Item $f -Force } }
-    $armFile = Join-Path $outDir 'watch-arm.ps1'
-    Write-Ps51 $armFile @"
-$navImport
-Set-Content -Path '$armReady' -Value 'ready'
-while (-not (Test-Path '$armTrigger')) { Start-Sleep -Milliseconds 50 }
-try {
-    Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TaskCodeunitId -MethodName StartWatch -ErrorAction Stop
-    Set-Content -Path '$armDone' -Value 'ok'
-} catch { Set-Content -Path '$armDone' -Value `$_.Exception.Message }
-"@
-    $armProc = Start-Process -FilePath $ps51 -PassThru -WindowStyle Hidden `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $armFile)
-    if (-not (Wait-For { Test-Path $armReady } 90)) { Fail 'подготовленный завод не поднял модуль NAV - опыт не удался' }
+    $armProc = Start-Prepared 'arm' 'StartWatch'
+    $stopProc = Start-Prepared 'stop' 'StopWatch'
 
-    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nDELETE FROM $episode WITH (TABLOCKX)`nWAITFOR DELAY '00:01:00'`nROLLBACK`n"
-    $cover = Start-Sqlcmd 'watch-journal-hold.sql' $hold
-    # Ждём ФАКТА - что проход и вправду встал на журнале. Номер объекта спрашивается у
-    # каталога: обратный перевод (OBJECT_NAME от resource_associated_entity_id) роняет
-    # запрос переполнением на первой же чужой блокировке рода KEY.
-    $stuckSql = @"
-SELECT TOP 1 CONVERT(varchar(11),l.request_session_id)
-FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id = l.request_session_id
-WHERE l.request_status = 'WAIT'
-  AND l.resource_associated_entity_id IN (
-        SELECT OBJECT_ID(N'$episode')
-        UNION ALL SELECT p.hobt_id FROM sys.partitions p WHERE p.object_id = OBJECT_ID(N'$episode'))
-  AND s.program_name LIKE 'Microsoft Dynamics NAV%';
-"@
-    if (-not (Wait-For { '' -ne (Scalar $stuckSql) } 60)) { Fail 'проход на журнале не встал - окно не открылось, опыт не удался' }
-    Set-Content -Path $armTrigger -Value 'go'
-    $armed = Wait-For { Test-Path $armDone } 20
-    $armSaid = if ($armed) { (Get-Content $armDone -Raw).Trim() } else { 'не ответил' }
+    $cover = Start-Sqlcmd 'watch-journal-hold.sql' $journalHold
+    if (-not (Wait-PassStuck 60)) { Fail 'проход на журнале не встал - окно не открылось, опыт не удался' }
+    $armSaid = Invoke-Prepared $armProc 20
     Stop-Sqlcmd $cover
+    $cover = $null
     if ($armSaid -ne 'ok') { Fail "подготовленный завод не отработал: $armSaid" }
     # Задержанный проход доходит до конца и на прежнем коде тут же ставит СВОЮ задачу.
     # Сломано нарочно 09.09.2026 - сверка поколения снята: 8 из 9, и красная эта проверка,
@@ -295,11 +315,53 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETDATE());
     $moved = Wait-For { (LastPass) -ne $frozen } 15
     Check 'после остановки проходов больше нет' (-not $moved) `
         "за 15 секунд отметка последнего прохода $(if ($moved) { 'СДВИНУЛАСЬ' } else { 'не сдвинулась' })"
+
+    # Зеркало опыта с заводом, и ловится тем же замком. Остановка гасит выключатель и
+    # снимает задачи, но идущую снять нечем: строка её на месте и после снятия (замер
+    # 09.09.2026 - задача та же самая, проход дошёл до конца). Значит не перевзвестись
+    # она должна САМА, и ради этого выключатель перечитывается ВТОРОЙ раз - перед
+    # перевзводом, а не только в начале задачи.
+    #
+    # Опасение, что для остановки замок пришлось бы держать вдвое дольше, замер снял:
+    # остановка укладывается в 466 мс при окне меньше десяти секунд - ставить ей нечего.
+    Write-Host 'Завожу заново и останавливаю уже ВО ВРЕМЯ прохода'
+    Invoke-Method 'StartWatch'
+    $beforeStop = LastPass
+    if (-not (Wait-For { (LastPass) -ne $beforeStop } 60)) { Fail 'сторож не пошёл заново - опыт не удался' }
+    $cover = Start-Sqlcmd 'watch-journal-hold-stop.sql' $journalHold
+    if (-not (Wait-PassStuck 60)) { Fail 'проход на журнале не встал - окно не открылось, опыт не удался' }
+    # Номер ИДУЩЕЙ задачи запоминается, пока она стоит на замке: по нему потом отличается
+    # своя строка от чужой. Строка идущей задачи в очереди одна и та же - это и меряем.
+    $heldId = Scalar "SELECT TOP 1 CONVERT(varchar(40),[ID]) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';"
+    if (((TaskCount) -ne 1) -or ('' -eq $heldId)) { Fail "во время прохода в очереди не одна задача, а $(TaskCount) - опыт не удался" }
+    $stopSaid = Invoke-Prepared $stopProc 20
+    Stop-Sqlcmd $cover
+    $cover = $null
+    if ($stopSaid -ne 'ok') { Fail "подготовленная остановка не отработала: $stopSaid" }
+    # Меряем ПОЯВЛЕНИЕ НОВОЙ задачи, а не итоговый ноль, и разница тут не в придирке.
+    # Снятая сверка воскрешает сторожа не навсегда, а на одно колено: воскресшая цепочка
+    # ставит ровно одну задачу, та просыпается, видит выключатель в НАЧАЛЕ задачи и умирает
+    # сама. Ноль наступает и на сломанном коде - секунды на три позже, - поэтому первая
+    # мера, ждавшая нуля, проходила вхолостую: на коде БЕЗ сверки она давала зелёные 10 из
+    # 10. А вот чужой номер в очереди - это факт: своя строка была ровно одна, и её номер
+    # записан выше.
+    #
+    # Сломано нарочно 09.09.2026 - сверка выключателя перед перевзводом снята: 9 из 10, и
+    # красная эта проверка, "новых задач после остановки ПОЯВИЛАСЬ, в очереди сейчас 1".
+    #
+    # Времени тут с запасом: воскресшая задача лежит в очереди период опроса, три секунды,
+    # и строка её не пропадает даже на время исполнения.
+    $newTask = Wait-For {
+        '' -ne (Scalar "SELECT TOP 1 CONVERT(varchar(40),[ID]) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company' AND [ID] <> '$heldId';")
+    } 20
+    Check 'остановка во время прохода не воскрешает цепочку' (-not $newTask) `
+        "новых задач после остановки $(if ($newTask) { 'ПОЯВИЛАСЬ' } else { 'не появилось' }), в очереди сейчас $(TaskCount), сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")"
 }
 finally {
     Stop-Sqlcmd $blocker
     Stop-Sqlcmd $cover
-    Stop-Sqlcmd $armProc
+    if ($armProc) { Stop-Sqlcmd $armProc.Process }
+    if ($stopProc) { Stop-Sqlcmd $stopProc.Process }
     & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId; UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1;" 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }
 }
