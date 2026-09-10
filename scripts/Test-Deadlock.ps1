@@ -187,6 +187,10 @@ SELECT COUNT(*) FROM (
 CROSS APPLY q.x.nodes('/RingBufferTarget/event[@name=''xml_deadlock_report'']') AS n(e);
 "@
 
+# Сколько позволено разойтись меткам графа с часами сервера. Круг случился минуту назад,
+# но попыток бывает до трёх, и каждая держит первую блокировку десять секунд: пять минут
+# покрывают самый долгий заход. Ошибка в часовой пояс даёт часы и в этот запас не влезет.
+function ClockSlackSeconds { 300 }
 function CircleAttempts {
     # Три. Одной мало - круг вероятностный; больше трёх значит, что не состоится он и на
     # десятой: причина тогда не в невезении, а в устройстве опыта, и её надо искать.
@@ -277,15 +281,15 @@ try {
 UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 1;
 $stateSeed
 UPDATE $state SET [Watchdog Message] = N'',
-  [Deadlocks Read Until] = GETDATE(), [Deadlocks Read At] = $blankDate;
+  [Deadlocks Read Until] = GETUTCDATE(), [Deadlocks Read At] = $blankDate;
 "@ | Out-Null
     $mark0 = Scalar "SELECT CONVERT(varchar(30),[Deadlocks Read Until],126) FROM $state;"
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] IN (-11,-12);" | Out-Null
     Invoke-Sql @"
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-11,-11,N'STAND',N'$Company',0,N'DEAD-ONE',GETDATE()),
-       (-12,-12,N'STAND',N'$Company',0,N'DEAD-TWO',GETDATE());
+VALUES (-11,-11,N'STAND',N'$Company',0,N'DEAD-ONE',GETUTCDATE()),
+       (-12,-12,N'STAND',N'$Company',0,N'DEAD-TWO',GETUTCDATE());
 "@ | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
@@ -349,6 +353,23 @@ FROM $episode ORDER BY [Entry No_] DESC;
         (($f[19] -eq $victimHost) -and ($f[20] -eq $winnerHost)) `
         "узел жертвы [$($f[19])] при ожидаемом [$victimHost], узел виновника [$($f[20])] при ожидаемом [$winnerHost]"
 
+    # Обе метки графа приходят от сервера, и шкалы у них РАЗНЫЕ: время события буфер
+    # событий пишет по UTC, а @lasttranstarted сервер кладёт по местным часам. В журнале
+    # они обязаны лежать одной шкалой - той, в какой NAV хранит DateTime, то есть по UTC.
+    # Проверка эта и решает вопрос, который иначе пришлось бы брать на веру из описания
+    # формата: разойдись любая из двух с часами сервера на часовой пояс - покраснеет.
+    $graphClock = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),ABS(DATEDIFF(second,SYSUTCDATETIME(),[Started At]))) + '|' +
+             CONVERT(varchar(11),ABS(DATEDIFF(second,SYSUTCDATETIME(),[Blocker Tran Began At]))) + '|' +
+             CONVERT(varchar(11),DATEDIFF(minute,SYSUTCDATETIME(),SYSDATETIME()))
+FROM $episode ORDER BY [Entry No_] DESC;
+"@
+    $gc = @(($graphClock -split '\|') | ForEach-Object { $_.Trim() })
+    while ($gc.Count -lt 3) { $gc += '0' }
+    Check 'обе метки графа записаны по UTC, а не по местным часам' `
+        ((([int]$gc[0]) -le (ClockSlackSeconds)) -and (([int]$gc[1]) -le (ClockSlackSeconds))) `
+        "время события расходится с UTC на $($gc[0]) с, начало транзакции - на $($gc[1]) с при запасе $(ClockSlackSeconds), пояс сервера $($gc[2]) мин"
+
     Check 'класс и исход названы, а не оставлены неизвестными' (($f[0] -eq '3') -and ($f[1] -eq '3')) `
         "класс $($f[0]) при ожидаемом 3 (взаимоблокировка), исход $($f[1]) при ожидаемом 3 (откат сервером)"
     Check 'жертва и победитель те самые' ((([int]$f[2]) -eq $one[0]) -and (([int]$f[3]) -eq $one[1])) `
@@ -404,7 +425,7 @@ finally {
     # Отметка оставляется на СЕЙЧАС, а не пустой. Пустая означает "буфер не читан вовсе",
     # и следующий же проход вычитал бы из кольца все графы разом - включая устроенные этим
     # опытом. Прогон убрал бы за собой в журнале и оставил мину в настройке.
-    $cleanup += " UPDATE $state SET [Deadlocks Read Until] = GETDATE(), [Deadlocks Read At] = $blankDate;"
+    $cleanup += " UPDATE $state SET [Deadlocks Read Until] = GETUTCDATE(), [Deadlocks Read At] = $blankDate;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
     # Опытные логины сметаются по образцу имени и В ПОРЯДКЕ: сперва пользователь базы,
     # потом сам логин - иначе сервер не отдаст логин, у которого есть пользователь.

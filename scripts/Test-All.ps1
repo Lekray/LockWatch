@@ -78,13 +78,13 @@ $runs = @(
     }
     @{
         Name = 'pass'; Script = 'Test-Pass.ps1'; Extra = @()
-        Checks = 25; WithInstance = $true
+        Checks = 26; WithInstance = $true
         Why = 'кратчайшая дорога до живого эпизода: сломан проход - дальше всё шум'
         What = 'проход на блокировке, документ, неразобранное имя, обе стороны по именам, очередь в два колена'
     }
     @{
         Name = 'pass-context'; Script = 'Test-Pass.ps1'; Extra = @('-ContextRoad')
-        Checks = 25; WithInstance = $true
+        Checks = 26; WithInstance = $true
         Why = 'та же блокировка, но документ берётся отметкой переходника, а не очередью'
         What = 'вторая дорога к документу'
     }
@@ -105,15 +105,21 @@ $runs = @(
     }
     @{
         Name = 'deadlock'; Script = 'Test-Deadlock.ps1'; Extra = @()
-        Checks = 15; WithInstance = $true
+        Checks = 16; WithInstance = $true
         Why = 'устраивает настоящие круги и оставляет их в кольцевом буфере: после прогонов по очереди'
         What = 'взаимоблокировки из system_health, строка журнала того же вида, стороны не перепутаны'
     }
     @{
         Name = 'watch'; Script = 'Test-Watch.ps1'; Extra = @()
-        Checks = 12; WithInstance = $true
+        Checks = 13; WithInstance = $true
         Why = 'сторожу нужен спокойный журнал: он судит по тому, что появилось САМО'
         What = 'фоновая задача заводится, идёт сама, не двоится, увозит журнал в историю и умирает по кнопке'
+    }
+    @{
+        Name = 'demo'; Script = 'Test-Demo.ps1'; Extra = @()
+        Checks = 4; WithInstance = $true
+        Why = 'показывает сторожа и потому идёт сразу за ним: без заведённого сторожа показ отказывается работать'
+        What = 'кнопка показа поднимает настоящее ожидание, а снятая галка запрещает сам показ, а не только кнопку'
     }
     @{
         Name = 'load'; Script = 'Test-Load.ps1'; Extra = @()

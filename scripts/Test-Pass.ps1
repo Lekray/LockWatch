@@ -69,6 +69,10 @@ $coverage = "[$Company`$LockWatch Coverage]"
 $alert    = "[$Company`$LockWatch Alert]"
 $alertSource = 'LockWatch'
 $alertThresholdMs = 1000
+# Сколько позволено разойтись отметке начала транзакции с часами сервера. Транзакция
+# держателя открыта секунды назад, и минуты хватает с избытком; ошибка же в часовой пояс
+# даёт часы, и такой запас её не спрячет.
+function ClockSlackSeconds { 120 }
 # Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
 $blankDate = "CONVERT(datetime,'17530101')"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
@@ -253,8 +257,8 @@ VALUES (110233,N'LockWatch Context Mark',13,N'Document No.',N'Отметка к�
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] BETWEEN -29 AND -1;
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'$holderUser',N'$Company',0,N'LOCK-TARGET',GETDATE()),
-       (-2,-2,N'$victimUser',N'$Company',0,N'VICTIM-DOC',GETDATE());
+VALUES (-1,-1,N'$holderUser',N'$Company',0,N'LOCK-TARGET',GETUTCDATE()),
+       (-2,-2,N'$victimUser',N'$Company',0,N'VICTIM-DOC',GETUTCDATE());
 "@ | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
@@ -438,6 +442,21 @@ FROM $episode ORDER BY [Entry No_] DESC;
         (($f[22] -eq $victimLogin) -and ($f[22] -ne $f[19]) -and
          ($f[25] -eq $victimHost) -and ($f[23] -match '(?i)sqlcmd')) `
         "логин жертвы [$($f[22])] при ожидаемом [$victimLogin], логин виновника [$($f[19])], узел [$($f[25])] при ожидаемом [$victimHost], программа [$($f[23])]"
+
+    # Момент начала транзакции виновника приходит с часов SQL, а лежит в колонке, которую
+    # NAV считает UTC. Спрашивается поэтому шкала: транзакция держателя открыта секунды
+    # назад, и отметка обязана сойтись с UTC-часами сервера, а не с местными. На местных
+    # она разошлась бы ровно на часовой пояс - три часа на этом стенде.
+    $tranClock = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),ABS(DATEDIFF(second,SYSUTCDATETIME(),[Blocker Tran Began At]))) + '|' +
+             CONVERT(varchar(11),DATEDIFF(minute,SYSUTCDATETIME(),SYSDATETIME()))
+FROM $episode ORDER BY [Entry No_] DESC;
+"@
+    $tc = @(($tranClock -split '\|') | ForEach-Object { $_.Trim() })
+    while ($tc.Count -lt 2) { $tc += '0' }
+    Check 'начало транзакции виновника записано по UTC, а не местным временем' `
+        (([int]$tc[0]) -le (ClockSlackSeconds)) `
+        "расходится с UTC на $($tc[0]) с при запасе $(ClockSlackSeconds), пояс сервера $($tc[1]) мин"
 
     Write-Host 'Отпускаю блокировку и делаю второй проход'
     Stop-Sqlcmd $blocker
@@ -677,9 +696,9 @@ FROM $episode WHERE [Resource Kind] = 'OBJECTLOCK';
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] BETWEEN -29 AND -20;
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-21,-21,N'$holderUser',N'$Company',0,N'CHAIN-HEAD',GETDATE()),
-       (-22,-22,N'$middleUser',N'$Company',0,N'CHAIN-MID',GETDATE()),
-       (-23,-23,N'$victimUser',N'$Company',0,N'CHAIN-TAIL',GETDATE());
+VALUES (-21,-21,N'$holderUser',N'$Company',0,N'CHAIN-HEAD',GETUTCDATE()),
+       (-22,-22,N'$middleUser',N'$Company',0,N'CHAIN-MID',GETUTCDATE()),
+       (-23,-23,N'$victimUser',N'$Company',0,N'CHAIN-TAIL',GETUTCDATE());
 "@ | Out-Null
 
     # Номер сеанса спрашивается по номеру ПРОЦЕССА: процесс известен заранее, сеанс

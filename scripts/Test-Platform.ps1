@@ -173,7 +173,7 @@ try {
     Write-Host 'Блокировку держит сессия NAV, ждёт sqlcmd'
     Invoke-Sql @"
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'STAND',N'$Company',0,N'PLATFORM-TARGET',GETDATE());
+VALUES (-1,-1,N'STAND',N'$Company',0,N'PLATFORM-TARGET',GETUTCDATE());
 "@ | Out-Null
     $holder = Start-Codeunit $HoldCodeunitId 'Hold'
 

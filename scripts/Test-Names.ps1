@@ -329,7 +329,7 @@ SELECT TOP 1 [NAV Table Name] + '|' + [Document No_] + '|' +
   [Blocker Login] + '|' + [Victim Login] + '|' + [No Document Reason]
 FROM $episode WHERE [NAV Table Name] = N'$navTable' ORDER BY [Entry No_] DESC;
 "@
-    $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
+    $f = @(($row -split '\|') | ForEach-Object { $_.Trim() })
     while ($f.Count -lt 9) { $f += '' }
 
     Check 'эпизод заведён на той самой таблице' ($f[0] -eq $navTable) `

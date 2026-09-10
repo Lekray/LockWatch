@@ -158,7 +158,7 @@ try {
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
     Invoke-Sql @"
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETDATE());
+VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
 "@ | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"

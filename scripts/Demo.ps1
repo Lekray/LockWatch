@@ -551,7 +551,7 @@ UPDATE $setup SET [SQL Server] = N'$Server',
                   [Coverage Enabled] = 1, [Alert Channel] = 2,
                   [Alert Threshold (ms)] = $(DemoAlertMs);
 $stateSeed
-UPDATE $state SET [Watchdog Message] = N'', [Deadlocks Read Until] = GETDATE();
+UPDATE $state SET [Watchdog Message] = N'', [Deadlocks Read Until] = GETUTCDATE();
 DELETE FROM $episode;
 DELETE FROM $alert;
 DELETE FROM $coverage;
@@ -631,8 +631,8 @@ VALUES ($TableNo,N'',$FieldNo,N'',N'',1);
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] IN (-11,-12);
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-11,-11,N'$demoHolder',N'$Company',0,N'CIRCLE-A',GETDATE()),
-       (-12,-12,N'$demoVictim',N'$Company',0,N'CIRCLE-B',GETDATE());
+VALUES (-11,-11,N'$demoHolder',N'$Company',0,N'CIRCLE-A',GETUTCDATE()),
+       (-12,-12,N'$demoVictim',N'$Company',0,N'CIRCLE-B',GETUTCDATE());
 "@ | Out-Null
     $circleMade = $false
     for ($attempt = 1; $attempt -le (CircleAttempts); $attempt++) {
@@ -670,8 +670,8 @@ WHERE x.e.value('(@timestamp)[1]','datetime') > DATEADD(minute,-2,GETUTCDATE());
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] IN (-1,-2);
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docHash',GETDATE()),
-       (-2,-2,N'$demoVictim',N'$Company',$TableNo,N'$docHash',GETDATE());
+VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docHash',GETUTCDATE()),
+       (-2,-2,N'$demoVictim',N'$Company',$TableNo,N'$docHash',GETUTCDATE());
 "@ | Out-Null
     # В таблице УСТАНОВКИ держатель ничего не меняет: UPDLOCK даёт ту же блокировку рода
     # KEY, что и запись, но данных не трогает. Правится только своя строка отметки - её и
@@ -680,7 +680,7 @@ VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docHash',GETDATE()),
     # Жертва отмечается ТОЖЕ, своей отметкой и в своей транзакции. Без этого колонка
     # "кто ждал" остаётся пустой: имя ждущего инструмент берёт из ЕГО отметки, найденной
     # по его же выданной блокировке, а не из отметки виновника.
-    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=-2`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
+    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETUTCDATE() WHERE [Server Instance Id]=-2`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'demo-doc-hold.sql' $hold
     $script:scenePids += $blocker
     Start-Sleep -Seconds 2
@@ -711,14 +711,14 @@ VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docHash',GETDATE()),
         Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] IN (-1,-2);
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETDATE()),
-       (-2,-2,N'$demoVictim',N'$Company',$TableNo,N'$docMark',GETDATE());
+VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETUTCDATE()),
+       (-2,-2,N'$demoVictim',N'$Company',$TableNo,N'$docMark',GETUTCDATE());
 "@ | Out-Null
         # Отметка правится В ТОЙ ЖЕ транзакции, что и захват чужой строки: инструмент
         # находит её не по времени, а по монопольной блокировке той же транзакции. Жертва
         # правит свою - иначе "кто ждал" пусто, а вопрос "кто кого" отвечен наполовину.
         $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'$docMark' WHERE [Server Instance Id]=-1`nSELECT TOP 1 1 FROM [$plainTableSql] WITH (UPDLOCK, ROWLOCK, INDEX(0))`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
-        $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=-2`nSELECT TOP 1 1 FROM [$plainTableSql] WITH (UPDLOCK, ROWLOCK, INDEX(0))`nROLLBACK`n"
+        $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETUTCDATE() WHERE [Server Instance Id]=-2`nSELECT TOP 1 1 FROM [$plainTableSql] WITH (UPDLOCK, ROWLOCK, INDEX(0))`nROLLBACK`n"
         $blocker = Start-Sqlcmd 'demo-user-hold.sql' $hold
         $script:scenePids += $blocker
         Start-Sleep -Seconds 2
@@ -739,10 +739,10 @@ VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETDATE()),
     $where = Get-KeyPredicate $sqlTable $docColumn $docQueue
     # Отметка своя у каждой стороны: у держателя и у каждой жертвы. Так в журнале видно не
     # "трое ждут", а КТО именно ждёт - по имени, у каждой строки своё.
-    $rows = @("(-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docQueue',GETDATE())")
+    $rows = @("(-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docQueue',GETUTCDATE())")
     for ($i = 1; $i -le (QueueVictims); $i++) {
         $who = $demoQueue[($i - 1) % $demoQueue.Count]
-        $rows += "($(-1 - $i),$(-1 - $i),N'$who',N'$Company',$TableNo,N'$docQueue',GETDATE())"
+        $rows += "($(-1 - $i),$(-1 - $i),N'$who',N'$Company',$TableNo,N'$docQueue',GETUTCDATE())"
     }
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] BETWEEN -9 AND -1;
@@ -754,7 +754,7 @@ VALUES $($rows -join ', ');
     $script:scenePids += $blocker
     Start-Sleep -Seconds 2
     for ($i = 1; $i -le (QueueVictims); $i++) {
-        $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=$(-1 - $i)`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
+        $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETUTCDATE() WHERE [Server Instance Id]=$(-1 - $i)`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
         $script:scenePids += Start-Sqlcmd "demo-queue-want-$i.sql" $want
         Start-Sleep -Milliseconds 300
     }
@@ -812,7 +812,7 @@ FROM $episode WHERE [Class] = 3 ORDER BY [Entry No_] DESC;
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] = -1;
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETDATE());
+VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETUTCDATE());
 "@ | Out-Null
     $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'HELD-BY-SQL' WHERE [Server Instance Id]=-1`nWAITFOR DELAY '00:01:00'`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'demo-nav-hold.sql' $hold
@@ -876,11 +876,11 @@ FROM $episode WHERE [Victim Is NAV] = 1 ORDER BY [Entry No_] DESC;
     Invoke-Sql @"
 DELETE FROM $mark WHERE [Server Instance Id] IN (-6,-7);
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-6,-6,N'$demoHolder',N'$Company',$TableNo,N'$docLive',GETDATE()),
-       (-7,-7,N'$demoVictim',N'$Company',$TableNo,N'$docLive',GETDATE());
+VALUES (-6,-6,N'$demoHolder',N'$Company',$TableNo,N'$docLive',GETUTCDATE()),
+       (-7,-7,N'$demoVictim',N'$Company',$TableNo,N'$docLive',GETUTCDATE());
 "@ | Out-Null
     $liveHold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'$docLive' WHERE [Server Instance Id]=-6`nSELECT 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nWAITFOR DELAY '00:0$(LiveHoldMinutes):00'`nROLLBACK`n"
-    $liveWant = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETDATE() WHERE [Server Instance Id]=-7`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
+    $liveWant = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Marked At]=GETUTCDATE() WHERE [Server Instance Id]=-7`nSELECT TOP 1 1 FROM [$sqlTable] WITH (UPDLOCK, ROWLOCK) WHERE $where`nROLLBACK`n"
     $liveA = Start-Sqlcmd 'demo-live-hold.sql' $liveHold
     Start-Sleep -Seconds 2
     $liveB = Start-Sqlcmd 'demo-live-want.sql' $liveWant

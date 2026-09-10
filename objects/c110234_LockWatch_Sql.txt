@@ -861,6 +861,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       Sql@1000000004 : Text;
       Events@1000000005 : Text;
       Statement@1000000006 : Text;
+      TranStarted@1000000007 : Text;
     BEGIN
       // Граф разбирает СЕРВЕР, а в C/AL приезжают готовые столбцы. Тащить XML в NAV
       // значило бы завести второй разбор имён и держать его в согласии с первым.
@@ -890,10 +891,14 @@ OBJECT Codeunit 110234 LockWatch Sql
         // собирать. Он приходит только под галкой, выключенной по умолчанию.
         Statement := ' SPACE(0), SPACE(0), 0';
 
+      // Атрибут графа сервер пишет по местным часам, а отдать его надо по UTC - той же
+      // шкалой, в какой NAV хранит DateTime. Выражение собирается ОДИН раз и подставляется
+      // трижды: разъехавшись между вхождениями, оно дало бы сутки вместо миллисекунд.
+      TranStarted := 'DATEADD(minute,@shift,bp.n' + XVal('@lasttranstarted','datetime2(3)') + ')';
       Sql :=
         'SET QUOTED_IDENTIFIER ON;' +
         'DECLARE @x xml, @since datetime2(3), @shift int;' +
-        'SET @shift ' + Eq + ' DATEDIFF(minute,GETUTCDATE(),GETDATE());' +
+        'SET @shift ' + Eq + ' DATEDIFF(minute,GETDATE(),GETUTCDATE());' +
         'SET @since ' + Eq + ' DATEADD(ms,' + FORMAT(SinceMs) +
         ',CONVERT(datetime2(3),CONVERT(datetime,' + FORMAT(SinceDays) + ')));' +
         'SELECT @x ' + Eq + ' CONVERT(xml,t.target_data)' +
@@ -902,19 +907,23 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' WHERE s.name ' + Eq + ' ' + Q + 'system_health' + Q +
         ' AND t.target_name ' + Eq + ' ' + Q + 'ring_buffer' + Q + ';';
 
-      // Время события в буфере лежит по UTC, а всё остальное в графе и в журнале - по
-      // местным часам. Сдвиг берётся у самого сервера: разница между его UTC и его
-      // местным. Считать её по часам NAV значило бы сложить две шкалы.
+      // Время события в буфере лежит по UTC - и УЖЕ в той шкале, в какой NAV хранит свои
+      // отметки, поэтому сдвигать его больше не надо. Прежде оно переводилось в местное,
+      // чтобы сойтись с остальным журналом; теперь весь журнал перешёл на UTC, и перевод
+      // стал бы ошибкой на разницу поясов.
+      //
+      // Сдвиг, однако, нужен - но в ДРУГУЮ сторону и для другого. Атрибуты самого графа
+      // (@lasttranstarted) сервер пишет по МЕСТНЫМ часам, и к UTC их приводит он же.
       Sql := Sql +
         'SELECT CASE WHEN @x IS NULL THEN 0 ELSE 1 END,' +
         ' ISNULL(DATEDIFF(day,CONVERT(datetime,0),MIN(v.EventAt)),0),' +
         ' ISNULL(DATEDIFF(ms,CONVERT(date,MIN(v.EventAt)),MIN(v.EventAt)),0)' +
-        ' FROM (SELECT DATEADD(minute,@shift,n.e' + XVal('@timestamp','datetime2(3)') +
-        ') AS EventAt FROM @x.nodes(' + Events + ') AS n(e)) v;';
+        ' FROM (SELECT n.e' + XVal('@timestamp','datetime2(3)') +
+        ' AS EventAt FROM @x.nodes(' + Events + ') AS n(e)) v;';
 
       Sql := Sql +
-        'WITH ev AS (SELECT DATEADD(minute,@shift,n.e' + XVal('@timestamp','datetime2(3)') +
-        ') AS EventAt, n.e.query(' + Q + 'data[@name' + Eq + '"xml_report"]/value/deadlock' +
+        'WITH ev AS (SELECT n.e' + XVal('@timestamp','datetime2(3)') +
+        ' AS EventAt, n.e.query(' + Q + 'data[@name' + Eq + '"xml_report"]/value/deadlock' +
         Q + ') AS G FROM @x.nodes(' + Events + ') AS n(e)),' +
         ' vic AS (SELECT ev.EventAt, ev.G, v.n' + XVal('@id','varchar(60)') + ' AS VictimId' +
         ' FROM ev CROSS APPLY ev.G.nodes(' + Q + '/deadlock/victim-list/victimProcess' + Q +
@@ -948,9 +957,8 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' bp.n' + XVal('@spid','int') + ',' +
         ' bp.n' + XVal('@clientapp','nvarchar(120)') + ',' +
         ' bp.n' + XVal('@xactid','bigint') + ',' +
-        ' DATEDIFF(day,CONVERT(datetime,0),bp.n' + XVal('@lasttranstarted','datetime2(3)') + '),' +
-        ' DATEDIFF(ms,CONVERT(date,bp.n' + XVal('@lasttranstarted','datetime2(3)') + '),bp.n' +
-        XVal('@lasttranstarted','datetime2(3)') + '),' +
+        ' DATEDIFF(day,CONVERT(datetime,0),' + TranStarted + '),' +
+        ' DATEDIFF(ms,CONVERT(date,' + TranStarted + '),' + TranStarted + '),' +
         ' res.Kind, res.HobtId, res.DbId, ISNULL(PARSENAME(res.ObjectName,1),res.ObjectName),' +
         ' res.IndexName, res.OwnerMode, res.WaiterMode,';
 
@@ -1131,6 +1139,8 @@ OBJECT Codeunit 110234 LockWatch Sql
       Cols@1000000003 : Text;
       Joins@1000000004 : Text;
       Cap@1000000005 : Text;
+      TranBegan@1000000006 : Text;
+      LastEnded@1000000007 : Text;
     BEGIN
       // Текст запроса стоит четырёх присоединений к горячему запросу прохода, и потому он
       // ВЫКЛЮЧАЕМ. Выключенный не платит ничем: колонки остаются на месте пустыми, а
@@ -1170,8 +1180,24 @@ OBJECT Codeunit 110234 LockWatch Sql
       // Порядок по убыванию длительности не украшение: при усечении в журнал попадают
       // САМЫЕ ДОЛГИЕ ожидания, а не первые попавшиеся. Усечённый проход честнее метится
       // отдельно, но и то, что в него попало, должно быть тем, за чем пришли.
+      // ШКАЛА ВРЕМЕНИ ЗДЕСЬ - UTC, и другой она быть не может. NAV хранит DateTime в SQL
+      // по UTC и при чтении переводит его в местное сам; отдай ему местное - и журнал
+      // покажет БУДУЩЕЕ ровно на разницу часовых поясов. Замер 10.09.2026 на стенде с
+      // поясом +3: отметка последнего прохода легла в колонку местным временем, и NAV
+      // прибавил к нему ещё три часа. Рядом, в той же строке состояния, лежали отметки,
+      // записанные CURRENTDATETIME, - те были верны, и две шкалы расходились на три часа
+      // внутри одной строки.
+      //
+      // Отсюда два выражения вместо одного. Сами МОМЕНТЫ берутся с UTC-часов сервера, а
+      // столбцы, которые сервер ведёт по МЕСТНЫМ часам, приводятся к UTC тем же сервером:
+      // это last_request_end_time и transaction_begin_time. Смешать шкалы в одном
+      // вычитании - и длительность вырастет на разницу поясов, то есть простой виновника
+      // в три часа возникнет на ровном месте.
+      TranBegan := 'DATEADD(minute,@shift,ba.transaction_begin_time)';
+      LastEnded := 'DATEADD(minute,@shift,bs.last_request_end_time)';
       Sql :=
-        'DECLARE @now datetime2 = SYSDATETIME();' +
+        'DECLARE @now datetime2 = SYSUTCDATETIME(),' +
+        ' @shift int = DATEDIFF(minute,GETDATE(),GETUTCDATE());' +
         'SELECT DATEDIFF(day,CONVERT(datetime,0),@now),' +
         ' DATEDIFF(ms,CONVERT(date,@now),@now), CONVERT(int,DB_ID());' +
         'SELECT TOP (' + FORMAT(MaxRows) + ')' +
@@ -1183,17 +1209,17 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' vt.transaction_id, bt.transaction_id,' +
         ' bs.status, bs.program_name,' +
         ' CASE WHEN bs.last_request_end_time IS NULL THEN 0' +
-        ' WHEN DATEDIFF(day,bs.last_request_end_time,@now) > 20 THEN 2147483647' +
-        ' ELSE DATEDIFF(ms,bs.last_request_end_time,@now) END,' +
+        ' WHEN DATEDIFF(day,' + LastEnded + ',@now) > 20 THEN 2147483647' +
+        ' ELSE DATEDIFF(ms,' + LastEnded + ',@now) END,' +
         ' CASE WHEN bs.open_transaction_count IS NULL THEN 0' +
         ' ELSE bs.open_transaction_count END,' +
         ' CASE WHEN EXISTS (SELECT 1 FROM sys.dm_exec_requests r' +
         ' WHERE r.session_id = wt.blocking_session_id) THEN 1 ELSE 0 END,' +
         ' CASE WHEN ba.transaction_begin_time IS NULL THEN 0' +
-        ' ELSE DATEDIFF(day,CONVERT(datetime,0),ba.transaction_begin_time) END,' +
+        ' ELSE DATEDIFF(day,CONVERT(datetime,0),' + TranBegan + ') END,' +
         ' CASE WHEN ba.transaction_begin_time IS NULL THEN 0' +
-        ' ELSE DATEDIFF(ms,CONVERT(date,ba.transaction_begin_time),' +
-        ' ba.transaction_begin_time) END' +
+        ' ELSE DATEDIFF(ms,CONVERT(date,' + TranBegan + '),' +
+        ' ' + TranBegan + ') END' +
         Cols +
         // Дописано ПОСЛЕ Cols нарочно, и это не небрежность. Cols - всегда ровно четыре
         // столбца (при выключенных текстах он отдаёт четыре пустышки), поэтому хвост
@@ -1286,6 +1312,12 @@ OBJECT Codeunit 110234 LockWatch Sql
       // Время приходит ДВУМЯ целыми, а не строкой, и это не причуда: разбор строки даты
       // зависит от языка сеанса и от языка сервера, и ошибётся он не отказом, а сдвигом.
       // Сутки от начала отсчёта SQL плюс миллисекунды внутри суток врать не умеют.
+      //
+      // Части обязаны приезжать по UTC. NAV хранит DateTime в SQL по UTC и переводит его
+      // в местное сам - при чтении, показе и сравнении; момент, собранный здесь из
+      // МЕСТНЫХ частей, лёг бы в колонку как есть и был бы показан человеку сдвинутым на
+      // разницу поясов вперёд. Проверено замером 10.09.2026, и цена ошибки - три часа
+      // вранья в каждой строке журнала на сервере с московским поясом.
       IF Days <= 0 THEN
         EXIT(0DT);
       Offset := Milliseconds;

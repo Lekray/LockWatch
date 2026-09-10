@@ -88,6 +88,8 @@ OBJECT Table 110230 LockWatch Setup
                                                    CaptionML=[ENU=Coverage Since;
                                                               RUS=Охват считается с];
                                                    Editable=No }
+    { 35  ;   ;Demo Enabled        ;Boolean       ;CaptionML=[ENU=Demo Button Enabled;
+                                                              RUS=Кнопка показа доступна] }
     { 40  ;   ;Last Pass At        ;DateTime      ;FieldClass=FlowField;
                                                    CalcFormula=Lookup("LockWatch Watchdog"."Last Pass At"
                                                                       WHERE (Primary Key=CONST('')));
@@ -150,6 +152,12 @@ OBJECT Table 110230 LockWatch Setup
       "Collect Statement Values" := FALSE;
       "Deadlocks Enabled" := TRUE;
       "Coverage Enabled" := TRUE;
+      // Кнопка показа по умолчанию ДОСТУПНА, и это не беспечность. Показ трогает
+      // собственную таблицу инструмента (Table 110239) и держит её шесть секунд:
+      // остановить чужую работу ему нечем, и потому разговора он не стоит. Выключатель
+      // рядом нужен установкам, где любое умышленное ожидание на сервере обсуждается со
+      // службой безопасности: там его гасят одной галкой, и кнопка становится недоступна.
+      "Demo Enabled" := TRUE;
       // Имена от платформы по умолчанию ВЫКЛЮЧЕНЫ, и это не осторожность ради осторожности:
       // включение стоит правки конфига, перезапуска экземпляра, обоих прав SQL и постоянной
       // серверной сессии XE, переживающей снятие инструмента. Решение это заказчика.

@@ -186,6 +186,14 @@ function FallWaitSeconds { 30 }
 # на десяток проходов подряд: если за десять проходов не уехало, дело не в невезении.
 function MoveWaitSeconds { 30 }
 
+# Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
+$blankDate = "CONVERT(datetime,'17530101')"
+# Сколько времени двум отметкам позволено разойтись. Обе ставит ОДИН проход - одна с часов
+# SQL, другая с часов NAV, - и разойтись они могут только на длительность самого прохода.
+# Минута - это шестьдесят его цен при объявленном потолке в тысячу миллисекунд, то есть
+# запас, который не спрячет ошибки в часовой пояс: тот дал бы три часа, а не секунду.
+function ClockSlackSeconds { 60 }
+
 $probeFile = Join-Path $outDir 'wait-nav.ps1'
 Write-Ps51 $probeFile @"
 $navImport
@@ -239,6 +247,10 @@ try {
     # а ЗАПОМИНАЕТСЯ, и проверка ждёт её ИЗМЕНЕНИЯ.
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
+    # Отметка охвата обнуляется, чтобы её поставил ПЕРВЫЙ проход этого прогона: сравнивать
+    # её с отметкой того же прохода можно только пока обе свежие. Ставит её C/AL, а отметку
+    # прохода - часы SQL, и в этом вся соль сравнения.
+    Invoke-Sql "UPDATE $state SET [Coverage Since] = $blankDate;" | Out-Null
 
     Write-Host 'Завожу сторожа'
     $beforeStart = LastPass
@@ -253,6 +265,28 @@ try {
     Check 'проход случился сам, без единого нажатия' ($wentThrough -and ($watchdog -match 'Pass went through|Проход прошёл')) `
         "сторож пишет: $watchdog"
     if (-not $wentThrough) { Fail 'фоновая задача так и не проснулась - дальше проверять нечего' }
+
+    # Время в журнале - UTC, и это не придирка к формату. NAV хранит DateTime в SQL по UTC
+    # и при чтении переводит его в местное САМ; отдай ему местное - и человек увидит в
+    # журнале БУДУЩЕЕ ровно на разницу поясов. Ловилось это на стенде с поясом +3
+    # (10.09.2026): отметка прохода лежала местным временем, а отметка охвата, которую
+    # ставит CURRENTDATETIME, - по UTC, и две половины сторожа расходились на три часа
+    # внутри одной строки.
+    #
+    # Спрашивается поэтому не формат, а согласие: обе отметки поставил ОДИН проход, и
+    # сойтись они обязаны. Сверка с UTC-часами сервера стоит рядом - без неё проверка
+    # прошла бы и на двух одинаково сдвинутых часах.
+    $clock = Scalar @"
+SELECT CONVERT(varchar(11),ABS(DATEDIFF(second,SYSUTCDATETIME(),[Last Pass At]))) + '|' +
+       CONVERT(varchar(11),ABS(DATEDIFF(second,[Last Pass At],[Coverage Since]))) + '|' +
+       CONVERT(varchar(11),DATEDIFF(minute,SYSUTCDATETIME(),SYSDATETIME()))
+FROM $state;
+"@
+    $c = @(($clock -split '\|') | ForEach-Object { $_.Trim() })
+    while ($c.Count -lt 3) { $c += '0' }
+    Check 'время записано по UTC, и обе половины сторожа сходятся' `
+        ((([int]$c[0]) -le (ClockSlackSeconds)) -and (([int]$c[1]) -le (ClockSlackSeconds))) `
+        "отметка прохода расходится с UTC на $($c[0]) с, с отметкой от NAV - на $($c[1]) с, пояс сервера $($c[2]) мин"
 
     $firstPass = LastPass
     $setupStamp = SetupStamp
@@ -301,7 +335,7 @@ try {
     Write-Host 'Устраиваю блокировку и НИЧЕГО не нажимаю'
     Invoke-Sql @"
 INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETDATE());
+VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
 "@ | Out-Null
     $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'HELD' WHERE [Server Instance Id] = -1`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
     $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'WANT' WHERE [Server Instance Id] = -1`nROLLBACK`n"
