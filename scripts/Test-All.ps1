@@ -24,6 +24,16 @@
     Невыполненное считается ОТДЕЛЬНО и никогда не складывается с пройденным. Прогон,
     который нельзя выполнить, - не утверждение, и в сумму утверждений он не идёт.
 
+    Четвёртый вид молчания - тот, что не кончается вовсе. Прогон, ушедший в вечный оборот,
+    не даёт ни кода возврата, ни отчёта, и смета не оканчивается НИКОГДА: три мерки выше
+    все до одной ждут конца прогона. Поэтому у каждого прогона крайний срок, и снятый по
+    сроку считается провалившимся, а не пропущенным.
+
+    Проверено вечным оборотом, поставленным в начало прогона меню 10.09.2026: смета сказала
+    "прогон не кончился за 12 мин - снят вместе с выводком", дала 0 из 1 прогонов и вышла с
+    кодом 1. На прежней смете тот же оборот не дал бы ничего - она ждала бы его до конца
+    рабочего дня.
+
     Один отказ не обрывает сметы: остальные прогоны всё равно идут, иначе на каждую
     поломку уходил бы день - по одному красному за заход. Исключение одно и с доводом:
     если не встала выкладка, всё дальнейшее меряет вчерашние объекты, и зелёный цвет там
@@ -67,6 +77,43 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 $pwshExe = (Get-Process -Id $PID).Path
+
+# Сколько прогону позволено идти. Прогон, ушедший в вечный оборот, кода возврата не даёт,
+# отчёта не даёт и сметы не оканчивает никогда - ловилось 10.09.2026: сорок минут молчания
+# и сожжённое ядро на пустом ответе SQL, и смета в тот заход не пошла бы вовсе.
+# Двенадцать минут - это втрое от самого долгого прогона ведомости (переходник, 3,6 мин) с
+# запасом на холодный старт службы. Перешагнувший этот предел прогон не медленный, а мёртвый.
+function RunDeadlineSeconds { 12 * 60 }
+
+function Read-Shared([string]$path) {
+    # Файл пишет ДРУГОЙ процесс, и открывать его надо с общим доступом: обычное чтение
+    # спорит с пишущим и падает отказом в самый неудобный миг - посреди чужого прогона.
+    if (-not (Test-Path $path)) { return '' }
+    $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+        $reader = New-Object IO.StreamReader($stream, (New-Object Text.UTF8Encoding($false)))
+        return $reader.ReadToEnd()
+    } finally { $stream.Dispose() }
+}
+
+function Show-Tail([string]$path, [int]$shown) {
+    # Вывод показывается ПО МЕРЕ прибытия, иначе смета на двадцать минут превратилась бы в
+    # двадцать минут пустого экрана, а человек - в того, кто не знает, идёт ли она вообще.
+    $all = Read-Shared $path
+    if ($all.Length -le $shown) { return $shown }
+    Write-Host -NoNewline $all.Substring($shown)
+    return $all.Length
+}
+
+function Stop-Tree([int]$id) {
+    # Снимать надо ВЕСЬ выводок: у прогона свои дети - Windows PowerShell с модулем NAV и
+    # sqlcmd, - и осиротевший ребёнок держал бы стенд ещё долго после того, как родителя
+    # сняли. Дети снимаются первыми: снятый родитель их уже не назовёт.
+    foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$id" -ErrorAction SilentlyContinue)) {
+        Stop-Tree $child.ProcessId
+    }
+    Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+}
 
 # Ведомость. Порядок значащий, число проверок - записанный замер, а не пожелание.
 $runs = @(
@@ -220,12 +267,40 @@ foreach ($run in $runs) {
     # только в самом конце. Прогон, погасивший её посередине, заставил бы следующий
     # заплатить холодным стартом - и замер цены прохода стал бы замером разогрева.
     $log = Join-Path $outDir "all-$($run.Name).log"
+    $errLog = "$log.err"
+    Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+
+    # Кавычки ставятся руками: имя компании бывает из двух слов, и Start-Process отдал бы
+    # его дочернему прогону ДВУМЯ доводами. Ошибка вышла бы не отказом, а чужой компанией.
+    $safeArgs = @($argList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })
+
     $began = Get-Date
-    & $pwshExe @argList 2>&1 | Tee-Object -FilePath $log
-    $code = $LASTEXITCODE
+    # Прогон идёт ОТДЕЛЬНЫМ процессом с крайним сроком, а не трубой: труба ждёт молча и без
+    # конца, и отличить "прогон думает" от "прогон не кончится никогда" по ней нечем.
+    $proc = Start-Process -FilePath $pwshExe -ArgumentList $safeArgs -NoNewWindow -PassThru `
+        -RedirectStandardOutput $log -RedirectStandardError $errLog
+    $hung = $false
+    $shown = 0
+    $until = $began.AddSeconds((RunDeadlineSeconds))
+    while ($true) {
+        $done = $proc.WaitForExit(500)
+        $shown = Show-Tail $log $shown
+        if ($done) { break }
+        if ((Get-Date) -ge $until) {
+            $hung = $true
+            Stop-Tree $proc.Id
+            [void]$proc.WaitForExit(10000)
+            $shown = Show-Tail $log $shown
+            break
+        }
+    }
+    $code = if ($hung) { 1 } else { $proc.ExitCode }
     $spent = (Get-Date) - $began
 
-    $text = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
+    # Отказы прогона приходят отдельной трубой, и терять их нельзя: в них живёт причина.
+    $errText = (Read-Shared $errLog).Trim()
+    if ($errText) { Write-Host $errText -ForegroundColor Red }
+    $text = (Read-Shared $log) + "`n" + $errText
     $sumPassed = 0; $sumTotal = 0; $lines = 0
     foreach ($m in [regex]::Matches($text, '(?:пройдено|passed)\s+(\d+)\s+(?:из|of)\s+(\d+)')) {
         $lines++
@@ -233,10 +308,11 @@ foreach ($run in $runs) {
         $sumTotal  += [int]$m.Groups[2].Value
     }
 
-    # Отчёт судится тремя мерками, и каждая ловит свой вид молчания.
+    # Отчёт судится четырьмя мерками, и каждая ловит свой вид молчания.
     $note = ''
     $ok = $true
-    if ($code -ne 0) { $ok = $false; $note = "код возврата $code" }
+    if ($hung) { $ok = $false; $note = "прогон не кончился за $([int]((RunDeadlineSeconds) / 60)) мин - снят вместе с выводком" }
+    elseif ($code -ne 0) { $ok = $false; $note = "код возврата $code" }
     elseif ($lines -eq 0) {
         # Нулевой код при отсутствии итога - это не успех, а прогон, переставший
         # отчитываться. Отличить его от успеха по коду возврата нельзя.
