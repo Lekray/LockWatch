@@ -42,6 +42,7 @@ if (-not $Instance) { Fail 'не задан экземпляр службы: п�
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
 
 $episode = "[$Company`$LockWatch Episode]"
+$history = "[$Company`$LockWatch Episode History]"
 $setup   = "[$Company`$LockWatch Setup]"
 $state   = "[$Company`$LockWatch Watchdog]"
 $mark    = "[$Company`$LockWatch Context Mark]"
@@ -99,6 +100,11 @@ function Wait-For([scriptblock]$condition, [int]$seconds) {
 
 $blocker = $null
 $cover = $null
+# Номер эпизода, уехавшего в историю. Историю не чистит ничто - ни проход, ни задача, ни
+# срок, - поэтому свою строку прогон уносит за собой сам: иначе стенд копил бы по опытному
+# эпизоду за прогон, и однажды они стали бы объяснением чужого замера.
+$movedNo = ''
+$movedSaid = ''
 # Подготовленные вызовы ждут знака файлом и без него висели бы вечно: их снимает уборка.
 $armProc = $null
 $stopProc = $null
@@ -174,6 +180,11 @@ function Wait-PassStuck([int]$seconds) { Wait-For { '' -ne (Scalar $stuckSql) } 
 # период опроса - задача должна была ещё и проснуться. Тридцать секунд - это трижды с
 # запасом, и ждём мы тут наступления события, а не спим на всякий случай.
 function FallWaitSeconds { 30 }
+
+# Сколько ждать ПЕРЕЕЗДА в историю. Переезд идёт тем же проходом, что и съём очереди, а
+# проход случается раз в период опроса - три секунды по умолчанию. Тридцати секунд хватает
+# на десяток проходов подряд: если за десять проходов не уехало, дело не в невезении.
+function MoveWaitSeconds { 30 }
 
 $probeFile = Join-Path $outDir 'wait-nav.ps1'
 Write-Ps51 $probeFile @"
@@ -310,6 +321,52 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETDATE());
     Check 'эпизод закрылся сам, без нажатия' $closed `
         "закрытых $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 0;"), открытых $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1;")"
 
+    # Переезд в историю виден только на ЖИВОМ стороже. Мерный прогон журнала зовёт
+    # MoveOldEntries сам и потому проверяет арифметику срока, а не то, что переезд вообще
+    # СЛУЧАЕТСЯ: вынь этот вызов из прохода - и мерный прогон останется зелёным, а горячая
+    # таблица будет расти молча, пока в неё не упрётся сервер.
+    #
+    # Ждать настоящих суток нельзя, а трогать настройку незачем: срок берётся из неё какой
+    # есть, и эпизод СТАРИТСЯ на день больше срока. Так проверяется тот самый переезд, что
+    # пойдёт в бою, - с боевым сроком, а не с подставленным ради опыта.
+    #
+    # Сломано нарочно 10.09.2026 - вызов MoveOldEntries вынут из прохода целиком: 11 из 12,
+    # и красная ровно эта проверка, "эпизод из журнала НЕ ушёл, в истории его 0". Мерный
+    # прогон журнала на том же коде остался зелёным ВЕСЬ, 19 из 19: он зовёт переезд сам.
+    Write-Host 'Старю закрытый эпизод и снова НИЧЕГО не нажимаю'
+    $retention = [int](Scalar "SELECT [Retention (Days)] FROM $setup;")
+    $movedNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [Open] = 0 ORDER BY [Entry No_] DESC;"
+    if (($retention -le 0) -or ('' -eq $movedNo)) {
+        Fail "стареть нечего: срок $retention дней, закрытых эпизодов нет - опыт не удался"
+    }
+    # Строка сторожа обнуляется ПЕРЕД старением: её пишет каждый проход, и "уехало" от
+    # прошлого переезда осталось бы в ней от прежнего прогона. Проверка читала бы чужой
+    # ответ и проходила бы даже там, где не уехало ничто.
+    Invoke-Sql "UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
+    $historyBefore = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $movedNo;")
+    Invoke-Sql "UPDATE $episode SET [Started At] = DATEADD(day,-$($retention + 1),[Started At]) WHERE [Entry No_] = $movedNo;" | Out-Null
+
+    # Слово сторожа снимается В ТОТ ЖЕ МИГ, что и уход строки, а не после ожидания: строку
+    # эту переписывает КАЖДЫЙ проход, и следующий - через три секунды - затрёт "уехало"
+    # обычным отчётом. Проверка, читающая её спустя время, зависела бы от того, чем занята
+    # машина: то зелёная, то красная, и обе краски незаслуженные.
+    $leftJournal = Wait-For {
+        if (([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $movedNo;")) -ne 0) { return $false }
+        $script:movedSaid = Scalar "SELECT [Watchdog Message] FROM $state;"
+        return $true
+    } (MoveWaitSeconds)
+    if (-not $leftJournal) { $movedSaid = Scalar "SELECT [Watchdog Message] FROM $state;" }
+    $inHistory = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $movedNo;")
+    # Спрашивается не "стало ли в журнале меньше", а судьба ИМЕННО ЭТОЙ строки: ушла из
+    # журнала и пришла в историю под своим номером. Счёт строк прошёл бы и на удалении - а
+    # удаление и переезд отличаются ровно тем, ради чего инструмент ставят.
+    # Слово сторожа стоит рядом с фактом нарочно: переезд, случившийся молча, человек
+    # объяснить не сможет - ненайденный вчерашний эпизод без объяснения стоит часа поисков.
+    Check 'журнал переезжает в историю сам, и сторож об этом говорит' `
+        ($leftJournal -and ($inHistory -eq 1) -and ($historyBefore -eq 0) -and
+         ($movedSaid -match 'Moved to history|Уехало в историю')) `
+        "эпизод $movedNo из журнала $(if ($leftJournal) { 'ушёл' } else { 'НЕ ушёл' }), в истории его $inHistory при ожидаемой 1 (было $historyBefore); сторож пишет: $movedSaid"
+
     Write-Host 'Останавливаю сторожа'
     Invoke-Method 'StopWatch'
     $enabled = Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"
@@ -402,7 +459,14 @@ finally {
     Stop-Sqlcmd $cover
     if ($armProc) { Stop-Sqlcmd $armProc.Process }
     if ($stopProc) { Stop-Sqlcmd $stopProc.Process }
-    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId; UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1;" 2>&1 | Out-Null
+    $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode;"
+    $cleanup += " DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId;"
+    $cleanup += " UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1;"
+    # Своя строка из истории уносится по НОМЕРУ, а не очисткой таблицы: история стенда -
+    # это чужие настоящие эпизоды, и смести их заодно со своим было бы дороже, чем
+    # оставить свой.
+    if ($movedNo) { $cleanup += " DELETE FROM $history WHERE [Entry No_] = $movedNo;" }
+    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }
 }
 

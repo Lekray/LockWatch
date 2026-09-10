@@ -17,10 +17,11 @@
     заблокировал бы наблюдателя.
 
     Сцен три. Первая - спор за СТРОКУ, с именем таблицы, ключом, документом и ОБОИМИ
-    людьми: у виновника и у жертвы свои отметки, свои учётные записи и свои узлы, и
-    перепутанные местами колонки красят проверку сразу. Вторая - спор за ОБЪЕКТ, имя
-    которого разбор не понимает: каталог SQL отвечает не только про таблицы NAV, и такое
-    имя обязано доехать до журнала сырым и с пометкой "не опознано", а не потеряться молча.
+    людьми: у виновника и у жертвы свои отметки, свои учётные записи NAV, свои логины SQL
+    и свои узлы, и перепутанные местами колонки красят проверку сразу. Вторая - спор за
+    ОБЪЕКТ, имя которого разбор не понимает: каталог SQL отвечает не только про таблицы
+    NAV, и такое имя обязано доехать до журнала сырым и с пометкой "не опознано", а не
+    потеряться молча.
     Третья - очередь в ДВА КОЛЕНА: имя виновника обязано прийти из отметки ГОЛОВЫ, а не
     соседа, который сам стоит в очереди.
 
@@ -101,13 +102,23 @@ $markName = "$Company`$LockWatch Context Mark"
 $holderUser = 'STAND-HOLDER'
 $victimUser = 'STAND-VICTIM'
 $middleUser = 'STAND-MIDDLE'
-# Имена рабочих станций. Логин у всех своих соединений один - учётная запись, под которой
-# идёт прогон, - и программа тоже одна, sqlcmd. Отличить их друг от друга можно только
-# узлом, а его sqlcmd называет ключом -H. Без этого проверка "сервер назвал узел" проходит
-# и на перепутанных местами колонках.
+# Имена рабочих станций. Их sqlcmd называет ключом -H, и без них проверка "сервер назвал
+# узел" проходит и на перепутанных местами колонках.
 $holderHost = 'LW-HOLDER'
 $victimHost = 'LW-VICTIM'
 $middleHost = 'LW-MIDDLE'
+# Логины сторон спора. Прежде логин у всех своих соединений был ОДИН - учётная запись, под
+# которой идёт прогон, - и колонку "кто держит" проверять было нечем, кроме непустоты. А в
+# бою по этой колонке называют виновника, когда он не сессия NAV: у чужого соединения нет
+# ни отметки контекста, ни учётной записи NAV, и логин - единственное имя, какое есть.
+#
+# Подключиться логином SQL нельзя: смешанный режим проверки подлинности на стенде выключен
+# (SERVERPROPERTY('IsIntegratedSecurityOnly') = 1). Поэтому соединение остаётся своим, а в
+# чужой логин сессия входит через EXECUTE AS - он подменяет ровно ту колонку, которую
+# читает инструмент: sys.dm_exec_sessions.login_name. Замер 10.09.2026: внутри EXECUTE AS
+# login_name - имя опытного логина, а original_login_name остаётся прежним.
+$holderLogin = 'LW Probe Holder'
+$victimLogin = 'LW Probe Waiter'
 
 function Invoke-Sql([string]$query) {
     # -w 500 обязателен: по умолчанию sqlcmd рвёт строку на 80 знаках, и длинное значение
@@ -146,6 +157,20 @@ function Start-Sqlcmd([string]$name, [string]$sql, [string]$workstation = '') {
     $sqlArgs = @('-S', $Server, '-d', $Database, '-E', '-b', '-l', '30', '-i', $file)
     if ($workstation) { $sqlArgs += @('-H', $workstation) }
     Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList $sqlArgs
+}
+# Логин заводится прогоном и им же убирается: оставленный на стенде опытный логин - это
+# чужая учётная запись в списке безопасности сервера, которую никто не заказывал.
+function New-ProbeLogin([string]$login) {
+    # Пароль случайный и никуда не записывается. Войти этим логином всё равно нельзя -
+    # смешанный режим выключен, - но синтаксис CREATE LOGIN пароля требует.
+    # Права даются РОВНО на строку-мишень: под этим логином идёт спор за неё, и ничего
+    # другого опытной учётной записи знать не положено.
+    $password = [Guid]::NewGuid().ToString('N') + 'Aa1!'
+    Invoke-Sql @"
+IF SUSER_ID(N'$login') IS NULL CREATE LOGIN [$login] WITH PASSWORD = '$password', CHECK_POLICY = OFF;
+IF DATABASE_PRINCIPAL_ID(N'$login') IS NULL CREATE USER [$login] FOR LOGIN [$login];
+GRANT SELECT, UPDATE ON $mark TO [$login];
+"@ | Out-Null
 }
 function Stop-Sqlcmd($process) {
     # Снятие процесса рвёт соединение, а разорванное соединение сервер откатывает сам:
@@ -237,11 +262,15 @@ VALUES (-1,-1,N'$holderUser',N'$Company',0,N'LOCK-TARGET',GETDATE()),
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
 
-    Write-Host 'Устраиваю блокировку'
-    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'HELD' WHERE [Server Instance Id] = -1`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
+    Write-Host 'Устраиваю блокировку - стороны под РАЗНЫМИ логинами'
+    New-ProbeLogin $holderLogin
+    New-ProbeLogin $victimLogin
+    # EXECUTE AS стоит ПЕРВЫМ и до открытия транзакции: сессия должна встать в очередь уже
+    # под своим логином, иначе сервер назовёт в очереди прежнюю учётную запись.
+    $hold = "EXECUTE AS LOGIN = N'$holderLogin'`nSET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'HELD' WHERE [Server Instance Id] = -1`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
     # Жертва правит СВОЮ отметку и только после этого встаёт в очередь за чужой строкой.
     # Порядок обязателен: без выданной блокировки на своей отметке искать её имя не по чему.
-    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'VICTIM-DOC' WHERE [Server Instance Id] = -2`nUPDATE $mark SET [Document No_] = N'WANT' WHERE [Server Instance Id] = -1`nROLLBACK`n"
+    $want = "EXECUTE AS LOGIN = N'$victimLogin'`nSET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'VICTIM-DOC' WHERE [Server Instance Id] = -2`nUPDATE $mark SET [Document No_] = N'WANT' WHERE [Server Instance Id] = -1`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'lock-hold.sql' $hold $holderHost
     Start-Sleep -Seconds 2
     $waiter = Start-Sqlcmd 'lock-want.sql' $want $victimHost
@@ -383,12 +412,16 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # сделано, и молчать было нечем оправдаться. Здесь держит sqlcmd, и он себя называет.
     # На прежнем коде: этих трёх полей не было вовсе, столбец "кто" у чужого держателя
     # оставался пустым, и пустота читалась как "инструмент не знает".
-    # Узел сверяется ПО ИМЕНИ, а не на непустоту: имя рабочей станции у сторон разное, и
-    # только так видно, что в колонку виновника попал держатель, а не ждущий. Непустота
-    # прошла бы и на перепутанных колонках - узел-то есть у обоих.
+    # Логин и узел сверяются ПО ИМЕНИ, а не на непустоту. Пока стороны ходили под одним
+    # логином, проверять его было нечем: непустота проходит и на перепутанных колонках -
+    # логин-то есть у обоих, и он у обоих ОДИН И ТОТ ЖЕ. Теперь у каждой стороны свой.
+    #
+    # Сломано нарочно 10.09.2026 - bs.login_name и vs.login_name переставлены местами в
+    # запросе очереди: 23 из 25, красные обе эти проверки. На прежнем условии перестановка
+    # прошла бы молча: обе колонки были непусты и обе содержали одно и то же имя.
     Check 'сервер назвал держателя: логин, узел, программа' `
-        (($f[19] -ne '') -and ($f[20] -eq $holderHost) -and ($f[21] -match '(?i)sqlcmd')) `
-        "логин [$($f[19])], узел [$($f[20])] при ожидаемом [$holderHost], программа [$($f[21])]"
+        (($f[19] -eq $holderLogin) -and ($f[20] -eq $holderHost) -and ($f[21] -match '(?i)sqlcmd')) `
+        "логин [$($f[19])] при ожидаемом [$holderLogin], узел [$($f[20])] при ожидаемом [$holderHost], программа [$($f[21])]"
 
     # И жертву - тем же способом. Соединение с её сеансом в запросе очереди стоит ПЕРВЫМ:
     # им уже берутся узел, процесс и программа, и логин из той же строки не стоит ничего.
@@ -396,9 +429,15 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # а вопрос "кто ждал" задают ровно так же часто. Учётная запись NAV рядом - из отметки
     # контекста, и её нет у чужого соединения; логин есть ВСЕГДА.
     # На прежнем коде: этих двух полей не было вовсе.
+    # Логины сторон сверяются и МЕЖДУ СОБОЙ. Равенство каждого своему имени уже красит
+    # перестановку колонок, но условие "они разные" стоит рядом нарочно: оно краснеет и
+    # тогда, когда логин на обе колонки приедет один - а именно так выглядит инструмент,
+    # читающий не ту колонку сессии (original_login_name вместо login_name) или берущий
+    # обе стороны из одной строки очереди.
     Check 'сервер назвал и жертву: логин, узел и программа' `
-        (($f[22] -ne '') -and ($f[25] -eq $victimHost) -and ($f[23] -match '(?i)sqlcmd')) `
-        "логин жертвы [$($f[22])], узел [$($f[25])] при ожидаемом [$victimHost], программа [$($f[23])]"
+        (($f[22] -eq $victimLogin) -and ($f[22] -ne $f[19]) -and
+         ($f[25] -eq $victimHost) -and ($f[23] -match '(?i)sqlcmd')) `
+        "логин жертвы [$($f[22])] при ожидаемом [$victimLogin], логин виновника [$($f[19])], узел [$($f[25])] при ожидаемом [$victimHost], программа [$($f[23])]"
 
     Write-Host 'Отпускаю блокировку и делаю второй проход'
     Stop-Sqlcmd $blocker
@@ -772,6 +811,11 @@ finally {
     # смениться, а забытая таблица переживёт прогон и запутает следующий.
     $cleanup += " DECLARE @drop nvarchar(max) = N'';"
     $cleanup += " SELECT @drop = @drop + N'DROP TABLE [' + name + N'];' FROM sys.tables WHERE name LIKE 'LW Probe%';"
+    # Тем же образцом имени сметаются и опытные логины, и сметаются они В ПОРЯДКЕ: сперва
+    # пользователь базы, потом сам логин - иначе сервер не отдаст логин, у которого есть
+    # пользователь. Забытый логин переживёт не прогон, а всю установку.
+    $cleanup += " SELECT @drop = @drop + N'DROP USER [' + name + N'];' FROM sys.database_principals WHERE name LIKE 'LW Probe%' AND type = 'S';"
+    $cleanup += " SELECT @drop = @drop + N'DROP LOGIN [' + name + N'];' FROM sys.server_principals WHERE name LIKE 'LW Probe%' AND type = 'S';"
     $cleanup += " IF @drop <> N'' EXEC sp_executesql @drop;"
     & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }

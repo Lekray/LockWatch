@@ -61,6 +61,17 @@ $service = "MicrosoftDynamicsNavServer`$$Instance"
 # Кто из них жертва, решает не случай, а ключ DEADLOCK_PRIORITY, поэтому имена закреплены.
 $victimHost = 'LW-DEAD-VICTIM'
 $winnerHost = 'LW-DEAD-WINNER'
+# Логины сторон круга. Граф называет обоих участников сам, и логин берёт из того же узла
+# процесса, что и узел с программой; пока логин у сторон был ОДИН - учётная запись, из-под
+# которой идёт прогон, - проверять его было нечем, кроме непустоты, и перестановка колонок
+# местами прошла бы молча. Подключиться логином SQL стенд не даёт (смешанный режим
+# выключен), поэтому сессия входит в свой логин через EXECUTE AS.
+#
+# Вопрос "а несёт ли ГРАФ подменённый логин или подключённый" решён замером 10.09.2026:
+# несёт подменённый. Граф пишет в узел процесса тот логин, под которым сессия держала
+# блокировку, - тот же самый, что показывает sys.dm_exec_sessions.login_name.
+$victimLogin = 'LW Probe Dead Victim'
+$winnerLogin = 'LW Probe Dead Winner'
 # Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
 # Строку состояния сторожа заводит первый же проход, но здесь она нужна РАНЬШЕ: отметку
 # "прочитано до" надо поставить прежде, чем проход впервые откроет кольцевой буфер, иначе
@@ -106,6 +117,21 @@ function Start-Sqlcmd([string]$name, [string]$sql, [string]$workstation = '') {
     $sqlArgs = @('-S', $Server, '-d', $Database, '-E', '-l', '30', '-i', $file)
     if ($workstation) { $sqlArgs += @('-H', $workstation) }
     Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList $sqlArgs
+}
+
+# Логин заводится прогоном и им же убирается: оставленный на стенде опытный логин - это
+# чужая учётная запись в списке безопасности сервера, которую никто не заказывал.
+function New-ProbeLogin([string]$login) {
+    # Пароль случайный и никуда не записывается. Войти этим логином всё равно нельзя -
+    # смешанный режим выключен, - но синтаксис CREATE LOGIN пароля требует. Права даются
+    # РОВНО на строки-мишени: за них идёт круг, и ничего другого опытной учётной записи
+    # знать не положено.
+    $password = [Guid]::NewGuid().ToString('N') + 'Aa1!'
+    Invoke-Sql @"
+IF SUSER_ID(N'$login') IS NULL CREATE LOGIN [$login] WITH PASSWORD = '$password', CHECK_POLICY = OFF;
+IF DATABASE_PRINCIPAL_ID(N'$login') IS NULL CREATE USER [$login] FOR LOGIN [$login];
+GRANT SELECT, UPDATE ON $mark TO [$login];
+"@ | Out-Null
 }
 
 $probeFile = Join-Path $outDir 'wait-nav.ps1'
@@ -173,6 +199,12 @@ function CircleHold {
     return '00:00:10'
 }
 function Invoke-Deadlock([string]$why) {
+    # Стороны круга выходят на сервер каждая под своим логином. Заводить их здесь можно
+    # столько раз, сколько будет кругов: заводчик спрашивает, есть ли логин, прежде чем
+    # создавать.
+    New-ProbeLogin $victimLogin
+    New-ProbeLogin $winnerLogin
+
     # Круг - опыт ВЕРОЯТНОСТНЫЙ, и это его свойство, а не недоделка. Обе стороны обязаны
     # взять свою первую блокировку прежде, чем первая пойдёт за второй; если одна из них
     # запаздывает со стартом дольше паузы, круга не выйдет вовсе - обе отработают по
@@ -187,8 +219,10 @@ function Invoke-Deadlock([string]$why) {
         $before = Scalar $graphNewest
         # Жертва назначается ключом: без него сервер выбирает по стоимости отката, и проверка
         # "жертва та самая" стала бы угадыванием.
-        $a = "SET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'A1' WHERE [Server Instance Id]=-11`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'A2' WHERE [Server Instance Id]=-12`nCOMMIT`n"
-        $b = "SET DEADLOCK_PRIORITY HIGH`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'B1' WHERE [Server Instance Id]=-12`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'B2' WHERE [Server Instance Id]=-11`nCOMMIT`n"
+        # EXECUTE AS стоит ДО открытия транзакции: в граф обязан попасть тот логин, под
+        # которым сессия взяла блокировку, а не тот, под которым она подключилась.
+        $a = "EXECUTE AS LOGIN = N'$victimLogin'`nSET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'A1' WHERE [Server Instance Id]=-11`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'A2' WHERE [Server Instance Id]=-12`nCOMMIT`n"
+        $b = "EXECUTE AS LOGIN = N'$winnerLogin'`nSET DEADLOCK_PRIORITY HIGH`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'B1' WHERE [Server Instance Id]=-12`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'B2' WHERE [Server Instance Id]=-11`nCOMMIT`n"
         $script:pa = Start-Sqlcmd 'dead-a.sql' $a $victimHost
         $script:pb = Start-Sqlcmd 'dead-b.sql' $b $winnerHost
         $pa = $script:pa
@@ -293,10 +327,18 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # половину журнала на честном слове.
     # На прежнем коде: у жертвы этих двух полей не было, а у виновника они были и не
     # проверялись ни одной проверкой.
+    # Логины сверяются ПО ИМЕНИ: у сторон они теперь разные, и перестановка колонок красит
+    # проверку сразу. Пока логин был один на обоих, непустота проходила при любой ошибке -
+    # логин-то есть у обоих, и он совпал бы при любой путанице.
+    #
+    # Сломано нарочно 10.09.2026 - номера колонок читателя у двух логинов переставлены
+    # местами в разборе графа: 14 из 15, и красная эта проверка, "виновник [LW Probe Dead
+    # Victim] при ожидаемом [LW Probe Dead Winner]". На прежнем условии перестановка
+    # прошла бы молча: обе колонки непусты и обе содержали одно и то же имя.
     Check 'граф назвал обоих: логины и программы' `
-        (($f[15] -ne '') -and ($f[17] -ne '') -and
+        (($f[15] -eq $winnerLogin) -and ($f[17] -eq $victimLogin) -and
          ($f[16] -match '(?i)sqlcmd') -and ($f[18] -match '(?i)sqlcmd')) `
-        "виновник [$($f[15])] / [$($f[16])], жертва [$($f[17])] / [$($f[18])]"
+        "виновник [$($f[15])] при ожидаемом [$winnerLogin] / [$($f[16])], жертва [$($f[17])] при ожидаемом [$victimLogin] / [$($f[18])]"
 
     # Непустота обеих колонок ещё не значит, что они не перепутаны местами: логин и
     # программа у сторон опыта одинаковые, и перестановка прошла бы молча. Узел - это то
@@ -364,6 +406,13 @@ finally {
     # опытом. Прогон убрал бы за собой в журнале и оставил мину в настройке.
     $cleanup += " UPDATE $state SET [Deadlocks Read Until] = GETDATE(), [Deadlocks Read At] = $blankDate;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
+    # Опытные логины сметаются по образцу имени и В ПОРЯДКЕ: сперва пользователь базы,
+    # потом сам логин - иначе сервер не отдаст логин, у которого есть пользователь.
+    # Забытый логин переживёт не прогон, а всю установку.
+    $cleanup += " DECLARE @drop nvarchar(max) = N'';"
+    $cleanup += " SELECT @drop = @drop + N'DROP USER [' + name + N'];' FROM sys.database_principals WHERE name LIKE 'LW Probe%' AND type = 'S';"
+    $cleanup += " SELECT @drop = @drop + N'DROP LOGIN [' + name + N'];' FROM sys.server_principals WHERE name LIKE 'LW Probe%' AND type = 'S';"
+    $cleanup += " IF @drop <> N'' EXEC sp_executesql @drop;"
     & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
     if ($StopInstance) { Stop-Service $service -Force }
 }
