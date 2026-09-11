@@ -25,6 +25,13 @@
     она его подписку. После проверки объект из базы удаляется: оставлять на стенде
     подписчика на чужой таблице прогон не вправе.
 
+    Сломано нарочно 11.09.2026: у переходника убрана проверка галки в строке контекста.
+    На прежнем устройстве прогона это не изменило НИЧЕГО - 5 из 5, - потому что вариант,
+    названный "выключен", строки контекста не имел вовсе: переходник выходил на GET, до
+    галки не доходя. Строка заводится теперь во втором варианте сразу со снятой галкой, и
+    третий отличается от второго ровно ею; с той же поломкой прогон даёт 4 из 5, красная -
+    "выключен 1".
+
 .EXAMPLE
     pwsh scripts/Test-Adapter.ps1
 #>
@@ -202,24 +209,36 @@ try {
     Write-Host "  $($noAdapter.Ms) мс на $($noAdapter.Rows) строк, $($noAdapter.Us) мкс на строку, отметка $($noAdapter.Marked)"
 
     # ---------- вариант 2: подписчик есть, но выключен ----------
+    #
+    # Строка контекста заводится ЗДЕСЬ и сразу со снятой галкой. Раньше её здесь не было
+    # вовсе, и вариант назывался "выключен", а мерил "строки нет": переходник выходил на
+    # ContextTable.GET, до галки не доходя. Обещание "снятая галка выключает переходник"
+    # не проверялось тогда ничем - доказано поломкой 11.09.2026: убрали у переходника
+    # проверку галки целиком, и прогон остался зелёным, 5 из 5.
     Write-Host 'Вариант второй: подписчик есть, строка контекста выключена'
     Import-Object (Join-Path $root 'objects\c110237_LockWatch_Context_Adapter.txt') 'sample-adapter'
     Compile-Codeunit $SampleAdapterId 'sample-adapter'
-    Restart-Nav 'подписчик вернулся'
+    Invoke-Sql @"
+DELETE FROM $context WHERE [Table No_] = $sampleTableNo;
+INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
+VALUES ($sampleTableNo,N'Sales Line',3,N'Document No.',N'Строка продажи',0);
+"@ | Out-Null
+    Restart-Nav 'подписчик вернулся, галка снята'
     $offAdapter = Measure-Mode 'замер с выключенной подпиской'
     Write-Host "  $($offAdapter.Ms) мс на $($offAdapter.Rows) строк, $($offAdapter.Us) мкс на строку, отметка $($offAdapter.Marked)"
 
     # ---------- вариант 3: подписчик работает ----------
+    # Разница между вторым вариантом и третьим теперь РОВНО В ГАЛКЕ: строка одна и та же,
+    # переходник один и тот же, меняется одно поле. Так и спрашивается обещание.
     Write-Host 'Вариант третий: подписчик работает'
-    Invoke-Sql @"
-INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
-VALUES ($sampleTableNo,N'Sales Line',3,N'Document No.',N'Строка продажи',1);
-"@ | Out-Null
-    Restart-Nav 'строка контекста заведена'
+    Invoke-Sql "UPDATE $context SET [Enabled] = 1 WHERE [Table No_] = $sampleTableNo;" | Out-Null
+    Restart-Nav 'галка поставлена'
     $onAdapter = Measure-Mode 'замер с включённой подпиской'
     Write-Host "  $($onAdapter.Ms) мс на $($onAdapter.Rows) строк, $($onAdapter.Us) мкс на строку, отметка $($onAdapter.Marked)"
 
-    Check 'три варианта и вправду разные, а не три одинаковых числа' `
+    # Три варианта отличаются ровно тем, чем названы: подписчика нет / есть, но галка
+    # снята / есть и галка стоит. Отметка обязана появиться только в третьем.
+    Check 'нет подписчика - нет отметки; снятая галка - тоже нет; и только галка её даёт' `
         (($noAdapter.Marked -eq 0) -and ($offAdapter.Marked -eq 0) -and ($onAdapter.Marked -eq 1)) `
         "отметка: без подписчика $($noAdapter.Marked), выключен $($offAdapter.Marked), включён $($onAdapter.Marked)"
 
