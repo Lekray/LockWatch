@@ -36,6 +36,7 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
+    [int]    $TaskCodeunitId = 110236,
     [int]    $PassCodeunitId = 110235,
     [switch] $KeepJournal,
     [switch] $StopInstance
@@ -202,6 +203,7 @@ function CircleHold {
     # не успела, и круг не состоялся вовсе.
     return '00:00:10'
 }
+$staleRing = $false
 function Invoke-Deadlock([string]$why) {
     # Стороны круга выходят на сервер каждая под своим логином. Заводить их здесь можно
     # столько раз, сколько будет кругов: заводчик спрашивает, есть ли логин, прежде чем
@@ -221,6 +223,9 @@ function Invoke-Deadlock([string]$why) {
     # отсутствующей: её перестают читать.
     for ($attempt = 1; $attempt -le (CircleAttempts); $attempt++) {
         $before = Scalar $graphNewest
+        # Момент круга спрашивается У СЕРВЕРА и по UTC - в этой же шкале буфер метит
+        # события. Взять его у часов этой машины значило бы сравнивать две шкалы.
+        $circleAt = Scalar "SELECT CONVERT(varchar(30),SYSUTCDATETIME(),126);"
         # Жертва назначается ключом: без него сервер выбирает по стоимости отката, и проверка
         # "жертва та самая" стала бы угадыванием.
         # EXECUTE AS стоит ДО открытия транзакции: в граф обязан попасть тот логин, под
@@ -253,6 +258,20 @@ function Invoke-Deadlock([string]$why) {
                 Start-Sleep -Milliseconds 500
             }
             $after = Scalar $graphNewest
+            # Изменившаяся отметка ещё НЕ значит, что в выдаче наш круг. Кольцо отдаёт XML
+            # не мгновенно, и на забитом дневными опытами буфере в выдаче всплывает граф
+            # ПРЕДЫДУЩЕГО захода - отметка меняется, а нашего события там нет. Опыт тогда
+            # объявляет успех, проход законно не находит ничего нового, и прогон краснеет
+            # на "в журнале пусто", называя виноватым инструмент.
+            #
+            # Измерено 11.09.2026: круг состоялся, стороны названы, счёт графов вырос с 16
+            # до 17 - а новейшая отметка в выдаче отставала от круга на одиннадцать минут.
+            # После очистки сессии system_health тот же прогон дал 16 из 16.
+            if (($after -ne $before) -and ($after -lt $circleAt)) {
+                $script:staleRing = $true
+                Write-Host "  $why - кольцо отдало граф СТАРШЕ круга: $after при круге в $circleAt" -ForegroundColor Yellow
+                continue
+            }
             if ($after -ne $before) {
                 $note = if ($attempt -gt 1) { ", попыток $attempt" } else { '' }
                 Write-Host "  $why - жертва $victim, победитель $winner, графов в буфере $(Scalar $graphCount)$note"
@@ -262,6 +281,11 @@ function Invoke-Deadlock([string]$why) {
         } else {
             Write-Host "  $why - сеансы опыта с попытки $attempt не опознаны" -ForegroundColor Yellow
         }
+    }
+    if ($staleRing) {
+        Fail ("$why - круги случались, но кольцо system_health отдаёт события с задержкой: в выдаче " +
+              'графы старше самого круга. Буфер забит опытами, и лечится это очисткой сессии - ' +
+              'ALTER EVENT SESSION [system_health] ON SERVER STATE = STOP, затем START. Инструмент тут ни при чём.')
     }
     Fail "$why - круга не вышло за $(CircleAttempts) попытки, опыт не удался, инструмент тут ни при чём"
 }
@@ -277,8 +301,16 @@ try {
     #
     # Пустая дата у NAV в SQL, кстати, не NULL, а 1753-01-01: столбцы объявлены NOT NULL.
     # Отметку "когда читали" обнуляем именно ею - иначе первый проход буфер не откроет.
+    # Сторож гасится нарочно, и это не уборка, а условие опыта. Буфер взаимоблокировок
+    # проход читает не чаще раза в минуту, и отметку "читали в" ставит СЕБЕ любой проход -
+    # в том числе фоновый. Заведённый сторож успевает пройти между подготовкой и кругом,
+    # находит пустой буфер, закрывает окно чтения на минуту - и проход этого прогона буфер
+    # уже не открывает. В журнале тогда пусто, прогон краснеет, а инструмент ни при чём.
+    # Измерено 11.09.2026: круг состоялся, граф в буфере лежал, журнал остался пустым.
+    # Проходы здесь делаются РУКАМИ, и сторож прогону не нужен вовсе.
     Invoke-Sql @"
-UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 1;
+UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 1, [Enabled] = 0;
+DELETE FROM [dbo].[Scheduled Task] WHERE [Run Codeunit] = $TaskCodeunitId;
 $stateSeed
 UPDATE $state SET [Watchdog Message] = N'',
   [Deadlocks Read Until] = GETUTCDATE(), [Deadlocks Read At] = $blankDate;
