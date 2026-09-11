@@ -49,7 +49,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       ChkCycleTxt@1000000035 : TextConst 'ENU=a ring is broken and reported, not spun in;RUS=кольцо обрывается и отмечается, а не крутится';
       CycleTxt@1000000036 : TextConst 'ENU=ring %1, steps counted %2;RUS=кольцо %1, шагов насчитано %2';
       ChkVictimsTxt@1000000037 : TextConst 'ENU=victims behind one head are counted, so one trouble is not read as many;RUS=жертвы за одной головой сосчитаны, и одна беда не читается как много';
-      VictimsTxt@1000000038 : TextConst 'ENU=behind the head %1 of %2 waiters;RUS=за головой %1 из %2 ждущих';
+      VictimsTxt@1000000038 : TextConst 'ENU=behind the shared head %1, behind the other one %2;RUS=за общей головой %1, за чужой %2';
       ChkClassTxt@1000000039 : TextConst 'ENU=escalation outranks a sleeping transaction, and idling under the threshold is plain;RUS=эскалация старше спящей транзакции, а простой ниже порога - обычный случай';
       ClassTxt@1000000040 : TextConst 'ENU=escalation %1, sleeping %2, under threshold %3, working %4;RUS=эскалация %1, спит %2, ниже порога %3, работает %4';
       ChkPrintTxt@1000000041 : TextConst 'ENU=the same graph gives the same fingerprint and a different one differs;RUS=один и тот же граф даёт один отпечаток, а другой - другой';
@@ -359,16 +359,24 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Ring@1000000007 : ARRAY [500] OF Boolean;
       Behind@1000000008 : ARRAY [500] OF Integer;
     BEGIN
-      // Три ждущих, одна голова. Отчёт, считающий это тремя бедами, отправит чинить три
-      // операции вместо одной. Считается всё разом: головы, глубины, кольца и жертвы за
-      // головой - один проход на пачку, а не по проходу на строку.
+      // Три ждущих за одной головой и четвёртый - за своей. Отчёт, считающий первых троих
+      // тремя бедами, отправит чинить три операции вместо одной. Считается всё разом:
+      // головы, глубины, кольца и жертвы за головой - один проход на пачку, а не по
+      // проходу на строку.
+      //
+      // Чужая голова здесь не для полноты картины, а ради самой проверки. На наборе с
+      // ОДНОЙ головой за ней стоят все, и счёт жертв неотличим от счёта ждущих вовсе:
+      // Behind := Count прошёл бы такую проверку зелёным, а на бою слил бы в одну беду
+      // все споры сервера разом. Различает их только вторая голова: за ней жертва одна.
       Waiter[1] := 3; Blocker[1] := 2;
       Waiter[2] := 2; Blocker[2] := 1;
       Waiter[3] := 4; Blocker[3] := 1;
-      Parse.Chains(Waiter,Blocker,3,Head,Depth,Ring,Behind);
+      Waiter[4] := 6; Blocker[4] := 5;
+      Parse.Chains(Waiter,Blocker,4,Head,Depth,Ring,Behind);
       Check(Passed,Total,Report,ChkVictimsTxt,
-        (Head[1] = 1) AND (Behind[1] = 3) AND (Behind[3] = 3),
-        STRSUBSTNO(VictimsTxt,Behind[1],3));
+        (Head[1] = 1) AND (Behind[1] = 3) AND (Behind[3] = 3) AND
+        (Head[4] = 5) AND (Behind[4] = 1),
+        STRSUBSTNO(VictimsTxt,Behind[1],Behind[4]));
     END;
 
     LOCAL PROCEDURE CheckClass@26(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);

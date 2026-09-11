@@ -29,9 +29,9 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       DirtyErr@1000000006 : TextConst 'ENU=The journal is not empty (%1 rows from real observation). The bench opens and closes episodes of its own and trims by retention, so it runs on a stand with an empty journal - never beside a live watch.;RUS=Журнал не пуст (%1 строк настоящего наблюдения). Мерный прогон открывает и закрывает СВОИ эпизоды и чистит по сроку, поэтому идёт на стенде с пустым журналом, а не рядом с работающим сторожем.';
       EnabledErr@1000000007 : TextConst 'ENU=The watch is switched on in the setup. A pass of the bench would close the episodes of the real one.;RUS=Сторож включён в настройке. Проход мерного прогона закрыл бы эпизоды настоящего.';
       ChkOpenTxt@1000000008 : TextConst 'ENU=the first pass opens exactly one episode per waiter;RUS=первый проход открывает ровно по эпизоду на ждущего';
-      OpenTxt@1000000009 : TextConst 'ENU=opened %1 of %2 waiters, updated %3, closed %4;RUS=открыто %1 из %2 ждущих, обновлено %3, закрыто %4';
+      OpenTxt@1000000009 : TextConst 'ENU=opened %1 of %2 waiters, updated %3, closed %4, rows in the journal %5;RUS=открыто %1 из %2 ждущих, обновлено %3, закрыто %4, строк в журнале %5';
       ChkUpdateTxt@1000000010 : TextConst 'ENU=the second pass updates the same rows instead of breeding new ones;RUS=второй проход обновляет те же строки, а не плодит новые';
-      UpdateTxt@1000000011 : TextConst 'ENU=updated %1, opened %2, rows in the journal %3;RUS=обновлено %1, открыто %2, строк в журнале %3';
+      UpdateTxt@1000000011 : TextConst 'ENU=updated %1, opened %2, rows in the journal %3, of them with the new wait %4;RUS=обновлено %1, открыто %2, строк в журнале %3, из них с новым ожиданием %4';
       ChkCloseTxt@1000000012 : TextConst 'ENU=a waiter gone from the queue closes the episode, and the outcome is judged;RUS=ушедший из очереди закрывает эпизод, и исход при этом судится';
       CloseTxt@1000000013 : TextConst 'ENU=closed %1 of %2, of them granted %3, still open %4;RUS=закрыто %1 из %2, из них дождалось %3, осталось открытых %4';
       ChkSummaryHistoryTxt@1000000060 : TextConst 'ENU=the summary counts history when asked to and leaves it out when not;RUS=свод считает историю, когда его просят, и не считает, когда не просят';
@@ -67,7 +67,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       ChkLatchWindowTxt@1000000036 : TextConst 'ENU=an alert older than the latch window does not hold back the next one;RUS=тревога старше окна защёлки следующую не придерживает';
       LatchWindowTxt@1000000037 : TextConst 'ENU=rows after the aged alert %1 of the expected %2;RUS=строк после состаренной тревоги %1 при ожидаемых %2';
       ChkNameAgainTxt@1000000038 : TextConst 'ENU=an episode left without a name is asked again while it is still running;RUS=эпизод, оставшийся без имени, переспрашивается, пока идёт';
-      NameAgainTxt@1000000039 : TextConst 'ENU=picked the first time %1, picked again after an empty answer %2, expected 2 and 2;RUS=выбрано в первый раз %1, после пустого ответа %2, ожидалось 2 и 2';
+      NameAgainTxt@1000000039 : TextConst 'ENU=picked the first time %1, picked again after an empty answer %2, in the buffer %3 and %4, expected 2 each;RUS=выбрано в первый раз %1, после пустого ответа %2, в буфере %3 и %4, ожидалось по 2';
       ChkNameLateTxt@1000000040 : TextConst 'ENU=the attempt count survives the next observation, and a late name reaches the row;RUS=счёт попыток переживает следующий съём, а позднее имя доезжает до строки';
       NameLateTxt@1000000041 : TextConst 'ENU=attempts after the observation %1 of the expected 1, culprit "%2", victim "%3", document "%4";RUS=попыток после съёма %1 при ожидаемой 1, виновник "%2", жертва "%3", документ "%4"';
       ChkNameHeldTxt@1000000042 : TextConst 'ENU=a late empty answer erases nothing, and a named episode is not asked again;RUS=поздний пустой ответ ничего не стирает, а названный эпизод больше не спрашивают';
@@ -149,6 +149,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       NameAttemptsB@1000000042 : Integer;
       NamePickedNamed@1000000043 : Integer;
       NamePickedCeiling@1000000044 : Integer;
+      NameBufferFirst@1000000073 : Integer;
+      NameBufferAgain@1000000074 : Integer;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -157,15 +159,26 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
 
       Waiters := Parse.MaxWaitersPerPass;
 
+      // Счётчик прохода и число строк в журнале - РАЗНЫЕ величины, и спрашиваются обе.
+      // Счётчик наращивает тот же код, что и вставляет: уйди вставка - он всё равно
+      // скажет "открыто пятьсот", и проверка с одним счётчиком осталась бы зелёной над
+      // пустым журналом. "Ровно по эпизоду на ждущего" - утверждение про строки.
       OpenMs := PassOfWaiters(Waiters,FirstWaitMs,Opened,Updated,Closed,Restarted);
       Check(Passed,Total,Report,ChkOpenTxt,
-            (Opened = Waiters) AND (Updated = 0) AND (Closed = 0),
-            STRSUBSTNO(OpenTxt,Opened,Waiters,Updated,Closed));
+            (Opened = Waiters) AND (Updated = 0) AND (Closed = 0) AND
+            (BenchRowCount = Waiters),
+            STRSUBSTNO(OpenTxt,Opened,Waiters,Updated,Closed,BenchRowCount));
 
+      // Половина "не плодит новые" держится на числе строк, и она здесь была. Половина
+      // "обновляет" держалась на счётчике - а он растёт и при MODIFY, которого не было:
+      // проход, потерявший запись, отчитался бы о пятистах обновлениях над нетронутыми
+      // строками. Спрашивается поэтому само значение: второе ожидание больше первого, и
+      // доехать оно обязано до КАЖДОЙ строки.
       UpdateMs := PassOfWaiters(Waiters,SecondWaitMs,Opened,Updated,Closed,Restarted);
       Check(Passed,Total,Report,ChkUpdateTxt,
-            (Updated = Waiters) AND (Opened = 0) AND (Restarted = 0) AND (BenchRowCount = Waiters),
-            STRSUBSTNO(UpdateTxt,Updated,Opened,BenchRowCount));
+            (Updated = Waiters) AND (Opened = 0) AND (Restarted = 0) AND
+            (BenchRowCount = Waiters) AND (BenchRowsWithWait(SecondWaitMs) = Waiters),
+            STRSUBSTNO(UpdateTxt,Updated,Opened,BenchRowCount,BenchRowsWithWait(SecondWaitMs)));
 
       CloseMs := PassOfWaiters(0,0,Opened,Updated,Closed,Restarted);
       CountOutcomes(Granted,StillOpen);
@@ -341,13 +354,22 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       NamePass(NameIndexA,NameIndexB);
       NameA := EntryOfIndex(NameIndexA);
       NameB := EntryOfIndex(NameIndexB);
+      // Спрашивается не только ЧИСЛО выбранных, но и сам буфер. Счёт растёт отдельно от
+      // вставки в него: уйди вставка - разбор всё равно ответит "двое", а разбирать
+      // проходу будет нечего, и имена перестанут доезжать до журнала молча. Буфер здесь и
+      // есть то, что забирает вызывающий; число рядом с ним - только его опись.
       NamePickedFirst := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
+      NameBufferFirst := NamePending.COUNT;
       Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'');
       Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'');
       NamePickedAgain := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
+      NameBufferAgain := NamePending.COUNT;
       Check(Passed,Total,Report,ChkNameAgainTxt,
-            (NamePickedFirst = 2) AND (NamePickedAgain = 2),
-            STRSUBSTNO(NameAgainTxt,NamePickedFirst,NamePickedAgain));
+            (NamePickedFirst = 2) AND (NamePickedAgain = 2) AND
+            (NameBufferFirst = 2) AND (NameBufferAgain = 2) AND
+            NamePending.GET(NameA) AND NamePending.GET(NameB),
+            STRSUBSTNO(NameAgainTxt,NamePickedFirst,NamePickedAgain,
+                       NameBufferFirst,NameBufferAgain));
 
       NamePass(NameIndexA,NameIndexB);
       Episode.GET(NameA);
@@ -531,6 +553,17 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     BEGIN
       Episode.RESET;
       Episode.SETFILTER("Victim SPID",'<%1',0);
+      EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE BenchRowsWithWait@57(WaitMs@1000000000 : Integer) : Integer;
+    BEGIN
+      // Сколько своих строк ДОНЕСЛИ до колонки названное ожидание. Мерка нужна там, где
+      // счётчик прохода отвечает сам за себя: он считает, сколько раз код собирался
+      // обновить строку, а эта - на скольких строках обновление осталось лежать.
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      Episode.SETRANGE("Max Wait (ms)",WaitMs);
       EXIT(Episode.COUNT);
     END;
 
