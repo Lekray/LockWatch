@@ -119,7 +119,7 @@ function Stop-Tree([int]$id) {
 $runs = @(
     @{
         Name = 'onstand'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 46; Critical = $true; WithInstance = $true
+        Checks = 48; Critical = $true; WithInstance = $true
         Why = 'выкладка первой: всё дальнейшее меряет то, что она положила на стенд'
         What = 'сборка пакета, выкладка компилятором, разбор без базы, мерный прогон журнала'
     }
@@ -170,7 +170,7 @@ $runs = @(
     }
     @{
         Name = 'load'; Script = 'Test-Load.ps1'; Extra = @()
-        Checks = 5; WithInstance = $true
+        Checks = 6; WithInstance = $true
         Why = 'сотня ждущих греет сервер: раньше сторожа нельзя, его цена мерялась бы на нагретом'
         What = 'цена прохода целиком и под нагрузкой'
     }
@@ -200,7 +200,7 @@ $runs = @(
     }
     @{
         Name = 'redeploy'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 46; WithInstance = $true
+        Checks = 48; WithInstance = $true
         Why = 'возвращает стенд в рабочее состояние - и это же второй замер: выкладка на ОЧИЩЕННУЮ базу'
         What = 'повторная выкладка на базу, с которой инструмент только что сняли'
     }

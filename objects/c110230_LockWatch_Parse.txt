@@ -30,6 +30,7 @@ OBJECT Codeunit 110230 LockWatch Parse
       EvTimedOutTxt@1000000016 : TextConst 'ENU=refused on the limit, %1 ms;RUS=отказ по пределу, %1 мс';
       EvLongWaitTxt@1000000017 : TextConst 'ENU=%1 ms against the threshold of %2 ms;RUS=%1 мс при пороге %2 мс';
       CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено сторожем блокировок, весь оператор %1 знаков, оставлено %2';
+      OverrunTxt@1000000019 : TextConst 'ENU=The pass took %1 ms against the declared ceiling of %2.;RUS=Проход занял %1 мс при объявленном потолке %2.';
 
     [External]
     PROCEDURE NavLockTimeoutMs@10() : Integer;
@@ -735,6 +736,21 @@ OBJECT Codeunit 110230 LockWatch Parse
       IF FullLength <= STRLEN(Body) THEN
         EXIT(Body);
       EXIT(Body + CrLf + STRSUBSTNO(CutTxt,FullLength,STRLEN(Body)));
+    END;
+
+    [External]
+    PROCEDURE PassOverrunNote@64(Milliseconds@1000000000 : Integer;Ceiling@1000000001 : Integer) : Text;
+    BEGIN
+      // Потолок прохода объявлен настройкой с первого дня, а сравнивал его с настоящей
+      // ценой только мерный прогон на стенде разработчика. На установке заказчика
+      // прогонов нет: проход мерил себя сам, число ложилось в строку состояния, и
+      // наблюдение, съедающее период целиком, выглядело там ровно как дешёвое.
+      //
+      // Ноль потолка - это "не спрашивать", а не "всё превышено": пустая настройка не
+      // должна поднимать тревогу на каждом проходе.
+      IF (Ceiling <= 0) OR (Milliseconds <= Ceiling) THEN
+        EXIT('');
+      EXIT(STRSUBSTNO(OverrunTxt,Milliseconds,Ceiling));
     END;
 
     [External]

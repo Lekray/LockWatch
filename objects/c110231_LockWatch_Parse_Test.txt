@@ -52,8 +52,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       VictimsTxt@1000000038 : TextConst 'ENU=behind the shared head %1, behind the other one %2;RUS=за общей головой %1, за чужой %2';
       ChkClassTxt@1000000039 : TextConst 'ENU=escalation outranks a sleeping transaction, and idling under the threshold is plain;RUS=эскалация старше спящей транзакции, а простой ниже порога - обычный случай';
       ClassTxt@1000000040 : TextConst 'ENU=escalation %1, sleeping %2, under threshold %3, working %4;RUS=эскалация %1, спит %2, ниже порога %3, работает %4';
-      ChkPrintTxt@1000000041 : TextConst 'ENU=the same graph gives the same fingerprint and a different one differs;RUS=один и тот же граф даёт один отпечаток, а другой - другой';
-      PrintTxt@1000000042 : TextConst 'ENU=same [%1] and [%2], other [%3], empty [%4];RUS=одинаковые [%1] и [%2], другой [%3], пустой [%4]';
+      ChkPrintTxt@1000000041 : TextConst 'ENU=the fingerprint is stable, sensitive, and equal to the recorded one;RUS=отпечаток устойчив, чувствителен и равен записанному';
+      PrintTxt@1000000042 : TextConst 'ENU=same [%1] and [%2], other [%3], empty [%4], recorded [%5];RUS=одинаковые [%1] и [%2], другой [%3], пустой [%4], записанный [%5]';
       ChkPatternTxt@1000000044 : TextConst 'ENU=a field name becomes a LIKE pattern where every replaceable sign stands for any one sign;RUS=имя поля превращается в образец LIKE, где каждый заменяемый знак подходит к любому одному';
       PatternTxt@1000000045 : TextConst 'ENU=[%1], cyrillic [%2], the ampersand kept its place [%3];RUS=[%1], кириллица [%2], амперсанд остался на месте [%3]';
       ChkSameNameTxt@1000000046 : TextConst 'ENU=an SQL name is recognised as the NAV one only where the difference is a replaceable sign;RUS=имя из SQL признаётся именем NAV только там, где расхождение приходится на заменяемый знак';
@@ -68,6 +68,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CounterDeltaTxt@1000000055 : TextConst 'ENU=gain %1, no move %2, after a reset %3, reset seen %4;RUS=прирост %1, без движения %2, после обнуления %3, обнуление замечено %4';
       ChkRingHeadTxt@1000000056 : TextConst 'ENU=in a ring the culprit is the immediate blocker, not the victim itself;RUS=в кольце виновником назван непосредственный блокирующий, а не сама жертва';
       RingHeadTxt@1000000057 : TextConst 'ENU=head %1 expected %2, depth %3 expected 1;RUS=голова %1 при ожидаемой %2, глубина %3 при ожидаемой 1';
+      ChkCutTxt@1000000058 : TextConst 'ENU=truncation is visible to the reader, and a whole statement is left alone;RUS=усечение видно читающему, а целый оператор не тронут';
+      CutMarkTxt@1000000059 : TextConst 'ENU=kept %1 of %2, with the mark %3 chars, mark starts with [%4], whole %5, empty %6;RUS=оставлено %1 из %2, с отметкой %3 знаков, отметка начинается с [%4], целый %5, пустой %6';
+      ChkOverrunTxt@1000000060 : TextConst 'ENU=the pass says it overran the ceiling, and says nothing when it did not;RUS=проход говорит о превышении потолка и молчит, когда его не было';
+      OverrunTxt@1000000061 : TextConst 'ENU=over [%1], exactly [%2], under [%3], ceiling off [%4];RUS=выше [%1], ровно [%2], ниже [%3], потолок снят [%4]';
       FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -113,6 +117,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckAdviceEvidence(Passed,Total,Report);
       CheckAdviceQuiet(Passed,Total,Report);
       CheckCounterDelta(Passed,Total,Report);
+      CheckStatementCut(Passed,Total,Report);
+      CheckPassOverrun(Passed,Total,Report);
     END;
 
     LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -405,13 +411,23 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     BEGIN
       // Один и тот же граф придёт при каждом чтении кольцевого буфера, пока не
       // вытеснится. Без устойчивого отпечатка журнал наполнится копиями одной беды.
+      //
+      // Устойчивости в пределах прогона МАЛО, и рядом с множителем свёртывания написано
+      // почему: "важно, что оно НЕ МЕНЯЕТСЯ никогда - отпечатки лежат в базе, и смена
+      // множителя развалит дедупликацию задним числом". Устойчивость, чувствительность и
+      // пустоту на пустом даст ЛЮБОЙ множитель: смени 131 на 137 - и проверка осталась бы
+      // зелёной вся, а всякий старый граф пришёл бы как новый.
+      //
+      // Ловит это только ЗАПИСАННОЕ число. Красный цвет здесь и есть предупреждение:
+      // лежащее в базе больше не сойдётся с тем, что посчитает новый код.
       First := Parse.TextFingerprint(SampleGraph);
       Second := Parse.TextFingerprint(SampleGraph);
       Other := Parse.TextFingerprint(SampleGraph + ' ');
       Empty := Parse.TextFingerprint('');
       Check(Passed,Total,Report,ChkPrintTxt,
-        (First = Second) AND (First <> '') AND (First <> Other) AND (Empty = ''),
-        STRSUBSTNO(PrintTxt,First,Second,Other,Empty));
+        (First = Second) AND (First <> '') AND (First <> Other) AND (Empty = '') AND
+        (First = KnownPrint),
+        STRSUBSTNO(PrintTxt,First,Second,Other,Empty,KnownPrint));
     END;
 
     LOCAL PROCEDURE CheckAdviceOrder@59(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -597,6 +613,96 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     LOCAL PROCEDURE SampleObjectLock@52() : Text;
     BEGIN
       EXIT('objectlock lockPartition=0 objid=1115203073 subresource=FULL dbid=7 id=lock1870ff96880 mode=X');
+    END;
+
+    LOCAL PROCEDURE CheckStatementCut@64(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Body@1000000003 : Text;
+      Cut@1000000004 : Text;
+      Whole@1000000005 : Text;
+      Blank@1000000006 : Text;
+    BEGIN
+      // Обещание стоит рядом с усечением с первого дня и не мерялось ничем: "усечение
+      // обязано быть видно ТОМУ, КТО ЧИТАЕТ". Обрезанный текст без отметки выглядит как
+      // целый запрос, и человек ищет ошибку в том, чего в запросе просто нет. Проверка
+      // "текст непустой" проходит на обрезке ровно так же, как на целом.
+      //
+      // Спрашиваются три случая, и в каждом своё. Обрезанный: отметка пришла, и в ней ОБА
+      // числа - без "сколько потеряно" остаётся гадать. Целый: отметки нет вовсе, иначе
+      // лишняя строка легла бы в конец каждого запроса на всю базу. Пустой: пусто, а не
+      // одна голая отметка.
+      //
+      // Спрашиваются и первые два знака отметки: текст из журнала копируют в studio и
+      // запускают, и отметка обязана быть комментарием SQL, а не мусором в запросе.
+      Body := CutBody;
+      Cut := Parse.StatementWithMark(Body,CutWhole);
+      Whole := Parse.StatementWithMark(Body,STRLEN(Body));
+      Blank := Parse.StatementWithMark('',CutWhole);
+      Check(Passed,Total,Report,ChkCutTxt,
+        (STRPOS(Cut,Body) = 1) AND (STRLEN(Cut) > STRLEN(Body)) AND
+        (STRPOS(Cut,FORMAT(CutWhole)) > 0) AND (STRPOS(Cut,FORMAT(STRLEN(Body))) > 0) AND
+        (COPYSTR(Cut,STRLEN(Body) + 3,2) = '--') AND
+        (Whole = Body) AND (Blank = ''),
+        STRSUBSTNO(CutMarkTxt,STRLEN(Body),CutWhole,STRLEN(Cut),
+                   COPYSTR(Cut,STRLEN(Body) + 3,2),STRLEN(Whole),STRLEN(Blank)));
+    END;
+
+    LOCAL PROCEDURE CheckPassOverrun@65(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Over@1000000003 : Text;
+      Exact@1000000004 : Text;
+      Under@1000000005 : Text;
+      NoCeiling@1000000006 : Text;
+    BEGIN
+      // Потолок прохода сравнивал с настоящей ценой только мерный прогон на стенде, а на
+      // установке заказчика прогонов нет. Теперь сравнивает сам проход, и спрашивается
+      // здесь обе стороны обещания: сказать о превышении И ПРОМОЛЧАТЬ, когда его не было.
+      // Без второй половины проверку прошёл бы сторож, жалующийся всегда, - а такой хуже
+      // молчащего: на него перестают смотреть через неделю.
+      //
+      // Равенство потолку - не превышение: "уложился ровно" и "вышел за" читаются
+      // по-разному, и граница обязана лежать там, где названа.
+      Over := Parse.PassOverrunNote(CeilingUnderTest + 1,CeilingUnderTest);
+      Exact := Parse.PassOverrunNote(CeilingUnderTest,CeilingUnderTest);
+      Under := Parse.PassOverrunNote(CeilingUnderTest - 1,CeilingUnderTest);
+      NoCeiling := Parse.PassOverrunNote(CeilingUnderTest + 1,0);
+      Check(Passed,Total,Report,ChkOverrunTxt,
+        (STRPOS(Over,FORMAT(CeilingUnderTest + 1)) > 0) AND
+        (STRPOS(Over,FORMAT(CeilingUnderTest)) > 0) AND
+        (Exact = '') AND (Under = '') AND (NoCeiling = ''),
+        STRSUBSTNO(OverrunTxt,Over,Exact,Under,NoCeiling));
+    END;
+
+    LOCAL PROCEDURE KnownPrint@66() : Code[20];
+    BEGIN
+      // Отпечаток образца, снятый 11.09.2026. Не украшение и не настройка: это же число
+      // лежит в базе у всякого, кто уже наблюдал, и новый код обязан считать его так же.
+      EXIT('733180484');
+    END;
+
+    LOCAL PROCEDURE CutBody@67() : Text;
+    BEGIN
+      // Ни одной цифры в теле нарочно: проверка ищет числа отметки по всей строке, и
+      // цифра из самого оператора нашлась бы вместо неё.
+      EXIT('SELECT * FROM [Sales Line]');
+    END;
+
+    LOCAL PROCEDURE CutWhole@68() : Integer;
+    BEGIN
+      // Сколько знаков было в операторе ДО усечения. Число трёхзначное нарочно: разделитель
+      // разрядов в FORMAT развалил бы поиск по строке, а мерится отметка, а не формат.
+      EXIT(999);
+    END;
+
+    LOCAL PROCEDURE CeilingUnderTest@69() : Integer;
+    BEGIN
+      // Потолок для опыта. Значение неважно, важно, что все четыре случая берутся ОТ НЕГО:
+      // подставь числа руками - и проверка перестанет мерить границу, а станет мерить то,
+      // что кто-то однажды набрал.
+      //
+      // Трёхзначное нарочно: числа ищутся в тексте отметки поиском, а разделитель разрядов
+      // в FORMAT сделал бы из тысячи две части и поиск бы не нашёл ничего.
+      EXIT(250);
     END;
 
     LOCAL PROCEDURE SampleGraph@53() : Text;

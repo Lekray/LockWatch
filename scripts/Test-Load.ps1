@@ -63,6 +63,11 @@ function Scalar([string]$query) {
 }
 function WaitingNow { [int](Scalar "SELECT COUNT(*) FROM sys.dm_os_waiting_tasks WHERE wait_type LIKE 'LCK[_]%';") }
 
+# Потолок, который превысит ЛЮБОЙ проход. Единица - не "поменьше на глазок", а наименьшее,
+# что принимает поле (MinValue=1): проход по пустой очереди стоит десяток миллисекунд, и
+# ошибиться тут можно только в одну сторону.
+function CeilingProbeMs { 1 }
+
 $passed = 0; $total = 0; $report = @(); $timings = @()
 function Check([string]$what, [bool]$ok, [string]$detail) {
     $script:total++
@@ -89,6 +94,8 @@ $markEsc  = $mark.Replace('$', '`$')
 $stopFile = Join-Path $outDir 'load-stop.flag'
 $loadFile = Join-Path $outDir 'load-waiters.ps1'
 $crowd = $null
+# Ноль значит "не успели снять": уборка тогда потолка не трогает вовсе, а не пишет ноль.
+$ceilingWas = 0
 
 # Один процесс на всю толпу. Сотня процессов sqlcmd съела бы память рабочей станции, а
 # память на этом стенде уже однажды уронила SQL Server: он перестал выдавать рабочие
@@ -153,7 +160,12 @@ try {
     # Здесь у этого есть и вторая причина: разбор буфера стоит около 150 мс, и раз в минуту
     # он лёг бы в худший проход. Цена буфера измерена отдельно и известна; смешивать её с
     # потолком NAV-половины значило бы мерить потолок тем, что от нагрузки не зависит.
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0;" | Out-Null
+    # Потолок опускается ЗДЕСЬ, до общего перезапуска. Правку настройки мимо NAV работающая
+    # служба не видит - строка лежит у неё в кэше, - а отдельный перезапуск ради одной цифры
+    # стоил бы дороже самой сцены.
+    $ceilingWas = [int](Scalar "SELECT [Max Pass (ms)] FROM $setup;")
+    if ($ceilingWas -le 0) { Fail 'потолок прохода в настройке не задан - сцену потолка мерить нечем' }
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Max Pass (ms)] = $(CeilingProbeMs);" | Out-Null
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
     Invoke-Sql @"
@@ -174,6 +186,34 @@ exit 1
 "@
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
+
+    # ---------- потолок прохода: объявленное число обязано сравниваться с настоящим ----------
+    # Потолок объявлен настройкой с первого дня, а сравнивал его с настоящей ценой только
+    # этот прогон - снаружи и на стенде разработчика. На установке заказчика прогонов нет, и
+    # проход, съедающий период целиком, выглядел там ровно как дешёвый: число ложилось в
+    # строку состояния и молчало. Теперь сравнивает сам проход, и спрашивается это здесь.
+    #
+    # Спрашиваются ОБЕ стороны. Сказать о превышении - половина обещания; вторая половина -
+    # ПРОМОЛЧАТЬ, когда его не было, и без неё проверку прошёл бы сторож, жалующийся всегда.
+    # На такого перестают смотреть через неделю, и это хуже молчания.
+    #
+    # Арифметика самой границы проверяется без базы, в мерном прогоне разбора: там
+    # спрашиваются и равенство потолку, и снятый потолок. Здесь спрашивается ДРУГОЕ - что
+    # проход зовёт её со своим временем и своим потолком. Вынь вызов - мерный прогон
+    # останется зелёным весь, а сторож замолчит.
+    Write-Host "Сцена потолка: опущен до $(CeilingProbeMs) мс, столько не стоит ни один проход"
+    Invoke-Pass | Out-Null
+    $saidOver = Scalar "SELECT [Watchdog Message] FROM $state;"
+    Invoke-Sql "UPDATE $setup SET [Max Pass (ms)] = $ceilingWas;" | Out-Null
+    Restart-Service $service -Force
+    & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
+    Invoke-Pass | Out-Null
+    $saidQuiet = Scalar "SELECT [Watchdog Message] FROM $state;"
+    Check 'проход сам сравнивает себя с объявленным потолком и молчит, когда уложился' `
+        (($saidOver -match 'declared ceiling|объявленном потолке') -and
+         ($saidQuiet -notmatch 'declared ceiling|объявленном потолке')) `
+        "при потолке $(CeilingProbeMs) мс сторож пишет: $saidOver; при потолке $ceilingWas мс: $saidQuiet"
 
     Write-Host 'Собираю толпу'
     $crowdLog = Join-Path $outDir 'load-crowd.log'
@@ -248,7 +288,11 @@ exit 1
 finally {
     New-Item -ItemType File -Path $stopFile -Force -ErrorAction SilentlyContinue | Out-Null
     if ($crowd -and -not $crowd.HasExited) { Start-Sleep -Seconds 2; if (-not $crowd.HasExited) { $crowd.Kill() } }
-    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; UPDATE $setup SET [Deadlocks Enabled] = 1;" 2>&1 | Out-Null
+    # Потолок возвращается и здесь: прогон, умерший посреди сцены, оставил бы в настройке
+    # единицу, и следующий сказал бы "проход не уложился" на ровном месте.
+    $restore = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; UPDATE $setup SET [Deadlocks Enabled] = 1"
+    if ($ceilingWas -gt 0) { $restore += ", [Max Pass (ms)] = $ceilingWas" }
+    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "$restore;" 2>&1 | Out-Null
     if (Test-Path $stopFile) { Remove-Item $stopFile -Force }
     if ($StopInstance) { Stop-Service $service -Force }
 }
