@@ -56,6 +56,8 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 $episode = "[$Company`$LockWatch Episode]"
 $setup   = "[$Company`$LockWatch Setup]"
 $mark    = "[$Company`$LockWatch Context Mark]"
+# Та же таблица, но именем, каким её пишет в журнал разбор: без компании и без скобок.
+$markName = 'LockWatch Context Mark'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 $expectedUser = "$env:USERDOMAIN\$env:USERNAME"
 
@@ -228,7 +230,18 @@ WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($waiter.Id);
 
     Invoke-Codeunit $PassCodeunitId 'RunPass' 'проход по живой очереди' | Out-Null
     $rows = [int](Scalar "SELECT COUNT(*) FROM $episode;")
-    Check 'эпизод по блокировке сессии NAV заведён' ($rows -ge 1) "строк в журнале $rows"
+    # Спрашивается не "в журнале есть строка", а ЧЬЯ она. Счёт строк выполняется журналом,
+    # в котором уже что-то лежало - ключом -KeepJournal или чужим наблюдением на той же
+    # базе, - и условие проходило бы состоянием, которого опыт не создавал. Здесь же весь
+    # опыт держится на том, что блокировку держит СЕССИЯ NAV: имя человека платформа
+    # обещает только ей, и спор двух чужих соединений отвечал бы на другой вопрос.
+    $who = Scalar "SELECT TOP 1 [NAV Table Name] + '|' + [Blocker Program] + '|' + [Victim Program] FROM $episode ORDER BY [Entry No_] DESC;"
+    $w = @(($who -split '\|') | ForEach-Object { $_.Trim() })
+    while ($w.Count -lt 3) { $w += '' }
+    Check 'эпизод по блокировке сессии NAV заведён' `
+        (($rows -ge 1) -and ($w[0] -eq $markName) -and
+         ($w[1] -match '(?i)dynamics nav') -and ($w[2] -match '(?i)sqlcmd')) `
+        "строк в журнале $rows, таблица [$($w[0])] при ожидаемой [$markName], держал [$($w[1])], ждал [$($w[2])]"
 
     # ---------- главная проверка: правду о мёртвой карте ----------
     # Здесь и выясняется цена всей затеи. Ключ взведён, права на месте, сессия мониторинга

@@ -46,6 +46,9 @@ $history = "[$Company`$LockWatch Episode History]"
 $setup   = "[$Company`$LockWatch Setup]"
 $state   = "[$Company`$LockWatch Watchdog]"
 $mark    = "[$Company`$LockWatch Context Mark]"
+# Та же таблица, но именем, каким её пишет в журнал разбор: без компании и без скобок.
+# Спор в опыте идёт за неё, и спрашивать эпизод надо по ЭТОМУ имени.
+$markName = 'LockWatch Context Mark'
 $tasks   = '[dbo].[Scheduled Task]'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
@@ -343,17 +346,30 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     Start-Sleep -Seconds 2
     $waiter = Start-Sqlcmd 'watch-want.sql' $want
 
-    $caught = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1;")) -gt 0 } 60
+    # Спрашивается эпизод НА СВОЕЙ таблице, а не "хоть какой-нибудь открытый". Счёт
+    # открытых строк выполняется всякой чужой блокировкой: на тихом стенде её нет, а на
+    # боевой базе - на той самой, ради которой инструмент и ставят, - она есть всегда.
+    # Условие выполнялось бы состоянием, которого опыт не создавал, и поймай сторож что
+    # угодно вместо нашего замка - сказать об этом было бы некому. Имя таблицы прогон и
+    # так печатал рядом: спросить его стоило ровно ничего.
+    $caught = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1 AND [NAV Table Name] = N'$markName';")) -gt 0 } 60
+    # Номер СВОЕГО эпизода: по нему дальше спрашивается его судьба, а не судьба соседа.
+    $caughtNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [NAV Table Name] = N'$markName' ORDER BY [Entry No_] DESC;"
+    if ('' -eq $caughtNo) { $caughtNo = '-1' }
     $seen = Scalar "SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' + CONVERT(varchar(11),[Head SPID]) FROM $episode ORDER BY [Entry No_] DESC;"
-    Check 'сторож поймал настоящую блокировку сам' $caught "в журнале: $seen"
+    Check 'сторож поймал настоящую блокировку сам' $caught `
+        "эпизод $caughtNo на [$markName]; последняя строка журнала: $seen"
 
     Write-Host 'Отпускаю блокировку и жду, пока эпизод закроется САМ'
     Stop-Sqlcmd $blocker
     Stop-Sqlcmd $waiter
     $blocker = $null
-    $closed = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 0;")) -gt 0 } 60
+    # Закрыться обязан ТОТ ЖЕ эпизод. "Есть закрытая строка" выполняется любой чужой,
+    # закрывшейся когда угодно и кем угодно, а наш при этом остался бы открытым навсегда -
+    # ровно та беда, ради которой закрытие и проверяют.
+    $closed = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $caughtNo AND [Open] = 0;")) -gt 0 } 60
     Check 'эпизод закрылся сам, без нажатия' $closed `
-        "закрытых $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 0;"), открытых $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1;")"
+        "эпизод $caughtNo $(if ($closed) { 'закрыт' } else { 'ОТКРЫТ' }); закрытых всего $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 0;"), открытых $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1;")"
 
     # Переезд в историю виден только на ЖИВОМ стороже. Мерный прогон журнала зовёт
     # MoveOldEntries сам и потому проверяет арифметику срока, а не то, что переезд вообще
@@ -369,7 +385,10 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     # прогон журнала на том же коде остался зелёным ВЕСЬ, 19 из 19: он зовёт переезд сам.
     Write-Host 'Старю закрытый эпизод и снова НИЧЕГО не нажимаю'
     $retention = [int](Scalar "SELECT [Retention (Days)] FROM $setup;")
-    $movedNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [Open] = 0 ORDER BY [Entry No_] DESC;"
+    # Старится и едет СВОЙ эпизод, тот самый, что поймал сторож. Самая свежая закрытая
+    # строка - это не то же самое: на базе, где наблюдение уже шло, ею оказалась бы чужая,
+    # и переезд проверялся бы на ней.
+    $movedNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [Open] = 0 AND [Entry No_] = $caughtNo;"
     if (($retention -le 0) -or ('' -eq $movedNo)) {
         Fail "стареть нечего: срок $retention дней, закрытых эпизодов нет - опыт не удался"
     }
