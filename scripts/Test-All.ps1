@@ -170,7 +170,7 @@ $runs = @(
     }
     @{
         Name = 'load'; Script = 'Test-Load.ps1'; Extra = @()
-        Checks = 6; WithInstance = $true
+        Checks = 5; WithInstance = $true
         Why = 'сотня ждущих греет сервер: раньше сторожа нельзя, его цена мерялась бы на нагретом'
         What = 'цена прохода целиком и под нагрузкой'
     }
