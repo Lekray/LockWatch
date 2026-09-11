@@ -14,15 +14,15 @@ OBJECT Codeunit 110230 LockWatch Parse
   {
     VAR
       AdvDeadlockTxt@1000000000 : TextConst 'ENU=The server broke the cycle itself. This is cured by the order of acquisition - both sides must take the same records in the same order - and neither by an index nor by a retry.;RUS=Круг разорвал сам сервер. Лечится порядком захвата - обе стороны обязаны брать одни и те же записи в одном порядке, - а не индексом и не повтором.';
-      AdvEscalationTxt@1000000001 : TextConst 'ENU=Escalation: the lock left the rows for the whole table and stopped everyone at once. This is cured by the size of the batch - commit more often - and not by an index.;RUS=Эскалация: блокировка ушла со строк на таблицу целиком и остановила всех разом. Лечится размером пачки - фиксировать чаще, - а не индексом.';
+      AdvWholeTableTxt@1000000001 : TextConst 'ENU=The fight is over the whole table, not over a row: the lock is held on the object itself, and that stops everyone at once. Two causes look the same from here - a batch that grew past the escalation limit (commit more often) and a table taken whole on purpose (LOCKTABLE or a TABLOCK hint). An index cures neither.;RUS=Спор идёт за таблицу целиком, а не за строку: замок стоит на самом объекте и останавливает всех разом. Отсюда неотличимы две причины - пачка, переросшая предел эскалации (фиксировать чаще), и таблица, взятая целиком нарочно (LOCKTABLE или указание TABLOCK). Индексом не лечится ни та, ни другая.';
       AdvSleepingTxt@1000000002 : TextConst 'ENU=The culprit holds a transaction and sends no statements at all. That is a forgotten dialog or a wait for a human, and it is cured by a phone call rather than by a change to the code.;RUS=Виновник держит транзакцию и не шлёт ни одного оператора. Это забытое окно или ожидание человека, и лечится оно звонком, а не правкой кода.';
       AdvForeignTxt@1000000003 : TextConst 'ENU=The head of the chain is not a NAV session. The tool cannot see inside it, so the answer is on that side - a job of its own, an outside utility, a restore - and not in NAV code.;RUS=Голова цепочки - не сессия NAV. Внутрь неё инструмент не видит, и разбираться надо на той стороне - своё задание, чужая утилита, восстановление, - а не в коде NAV.';
       AdvSiftTxt@1000000004 : TextConst 'ENU=The fight is over a SIFT aggregate, not over a data row. That is cured by the key: maintenance of SIFT on this key is either switched off or narrowed down.;RUS=Спор идёт за SIFT-агрегат, а не за строку данных. Лечится ключом: ведение SIFT по этому ключу либо отключается, либо сужается.';
       AdvQueueTxt@1000000005 : TextConst 'ENU=A queue has formed behind one head: the trouble is one and the journal rows are many. The head of the chain is what has to be fixed, not each victim in turn.;RUS=За одной головой выстроилась очередь: беда одна, а строк в журнале много. Чинить надо голову цепочки, а не каждую жертву по очереди.';
       AdvTimedOutTxt@1000000006 : TextConst 'ENU=The victim did not get its lock: the platform gave up on its own limit and a human saw the refusal. Look at what holds the lock that long, not at the victim.;RUS=Жертва не дождалась: платформа сняла ожидание по своему пределу, и человек увидел отказ. Смотреть надо на то, что держит блокировку так долго, а не на жертву.';
-      AdvLongWaitTxt@1000000007 : TextConst 'ENU=The wait is longer than the alert threshold, and there are no signs of escalation, of a sleeping transaction or of a queue. Look at the operation itself and at the document the fight is over.;RUS=Ожидание дольше порога тревоги, а признаков эскалации, сна и очереди нет. Смотреть надо на саму операцию и на документ, за который идёт спор.';
+      AdvLongWaitTxt@1000000007 : TextConst 'ENU=The wait is longer than the alert threshold, and there are no signs of a whole-table lock, of a sleeping transaction or of a queue. Look at the operation itself and at the document the fight is over.;RUS=Ожидание дольше порога тревоги, а признаков спора за таблицу целиком, сна и очереди нет. Смотреть надо на саму операцию и на документ, за который идёт спор.';
       EvDeadlockTxt@1000000010 : TextConst 'ENU=deadlock, waited %1 ms;RUS=взаимоблокировка, ожидание %1 мс';
-      EvEscalationTxt@1000000011 : TextConst 'ENU=escalation, waited %1 ms;RUS=эскалация, ожидание %1 мс';
+      EvWholeTableTxt@1000000011 : TextConst 'ENU=the lock is on the whole object, waited %1 ms;RUS=замок на объекте целиком, ожидание %1 мс';
       EvSleepingTxt@1000000012 : TextConst 'ENU=the culprit is in a transaction and silent, waited %1 ms;RUS=виновник в транзакции и молчит, ожидание %1 мс';
       EvForeignTxt@1000000013 : TextConst 'ENU=the head of the chain is not a NAV session, waited %1 ms;RUS=голова цепочки - не сессия NAV, ожидание %1 мс';
       EvSiftTxt@1000000014 : TextConst 'ENU=a SIFT aggregate, NAV key %1;RUS=SIFT-агрегат, ключ NAV %1';
@@ -156,9 +156,26 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
-    PROCEDURE ClassEscalation@19() : Integer;
+    PROCEDURE ClassWholeTable@19() : Integer;
     BEGIN
+      // Значение то же, что было у "эскалации": строк с ним в журналах нет и быть не может -
+      // класс этот не заводился ни разу, потому что в живую дорогу передавался ноль. Значит
+      // номер свободен, и старые строки от переименования не сдвинутся.
       EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE WholeTableKind@75() : Text;
+    BEGIN
+      // Род ресурса, которым сервер называет замок на таблице целиком. Замерено на стенде
+      // 12.09.2026: обновление 19 545 строк одним оператором дало прирост
+      // index_lock_promotion_count на единицу, держателю - OBJECT|X, а ждущему -
+      // "objectlock ... subresource=FULL ... mode=X".
+      //
+      // Про раздел (hobtlock) тут не говорится НИЧЕГО: на стенде он не встретился, а
+      // называть род, которого не видел, значило бы гадать. Секционированная таблица
+      // заказчика пройдёт как спор за строку, и это записано честнее, чем догадка.
+      EXIT('objectlock');
     END;
 
     [External]
@@ -439,16 +456,22 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
-    PROCEDURE EpisodeClass@22(CulpritIsSleeping@1000 : Boolean;CulpritHasRequest@1001 : Boolean;CulpritIdleMs@1002 : Integer;EscalationsInWindow@1003 : Integer) : Integer;
+    PROCEDURE EpisodeClass@22(CulpritIsSleeping@1000 : Boolean;CulpritHasRequest@1001 : Boolean;CulpritIdleMs@1002 : Integer;WholeTableLock@1003 : Boolean) : Integer;
     BEGIN
       // Классы лечатся по-разному, поэтому и подписываются отдельно:
-      //   эскалация - размером пачки, а не индексом,
+      //   спор за таблицу целиком - размером пачки или чужим LOCKTABLE, а не индексом,
       //   забытая транзакция - звонком, а не правкой кода,
       //   обычный спор за строку - кодом или ключом.
-      // Эскалация старше сна: она останавливает всех разом, и она же чаще причина,
-      // а не следствие. Взаимоблокировку сюда не выводим - её называет разбор графа.
-      IF EscalationsInWindow > 0 THEN
-        EXIT(ClassEscalation);
+      // Спор за таблицу старше сна: он останавливает всех разом. Взаимоблокировку сюда не
+      // выводим - её называет разбор графа.
+      //
+      // Раньше на этом месте стояло число эскалаций в окне, и оно НИКОГДА не приходило:
+      // живая дорога передавала ноль, класс не заводился ни разу, а советчик при этом
+      // говорил "признаков эскалации нет" - при роде ресурса OBJECTLOCK в той же строке
+      // (FINDINGS, раздел 64). Счётчик эскалаций тут и не годился бы: он общий на таблицу,
+      // и прирост в окне мог прийти от чужой пачки. Род ресурса - признак САМОГО эпизода.
+      IF WholeTableLock THEN
+        EXIT(ClassWholeTable);
       IF CulpritIsSleeping AND (NOT CulpritHasRequest) AND (CulpritIdleMs >= IdleInTranMs) THEN
         EXIT(ClassSleepingTran);
       EXIT(ClassPlain);
@@ -467,7 +490,7 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
-    PROCEDURE AdviceEscalation@43() : Integer;
+    PROCEDURE AdviceWholeTable@43() : Integer;
     BEGIN
       EXIT(2);
     END;
@@ -537,10 +560,10 @@ OBJECT Codeunit 110230 LockWatch Parse
         EXIT(AdviceDeadlock);
       END;
 
-      IF EpisodeClassNo = ClassEscalation THEN BEGIN
-        AdviceText := AdvEscalationTxt;
-        Evidence := STRSUBSTNO(EvEscalationTxt,MaxWaitMs);
-        EXIT(AdviceEscalation);
+      IF EpisodeClassNo = ClassWholeTable THEN BEGIN
+        AdviceText := AdvWholeTableTxt;
+        Evidence := STRSUBSTNO(EvWholeTableTxt,MaxWaitMs);
+        EXIT(AdviceWholeTable);
       END;
 
       IF EpisodeClassNo = ClassSleepingTran THEN BEGIN

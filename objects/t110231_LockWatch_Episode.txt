@@ -87,9 +87,9 @@ OBJECT Table 110231 LockWatch Episode
                                                    OptionString=Undetermined,Granted,TimedOut,Deadlocked }
     { 48  ;   ;Class               ;Option        ;CaptionML=[ENU=Class;
                                                               RUS=Класс];
-                                                   OptionCaptionML=[ENU=Plain,Escalation,Sleeping transaction,Deadlock;
-                                                                    RUS=Спор за строку,Эскалация,Спит в транзакции,Взаимоблокировка];
-                                                   OptionString=Plain,Escalation,SleepingTran,Deadlock }
+                                                   OptionCaptionML=[ENU=Plain,Whole table,Sleeping transaction,Deadlock;
+                                                                    RUS=Спор за строку,Спор за таблицу целиком,Спит в транзакции,Взаимоблокировка];
+                                                   OptionString=Plain,WholeTable,SleepingTran,Deadlock }
     { 49  ;   ;Deadlock Id         ;Code20        ;CaptionML=[ENU=Deadlock Id;
                                                               RUS=Отпечаток графа];
                                                    Editable=No }

@@ -188,7 +188,10 @@ OBJECT Codeunit 110234 LockWatch Sql
             // Ресурс, который мы не поняли, показывается СЫРЫМ. Выбросить строку значило
             // бы соврать тишиной, а показать пустую - соврать дважды.
             Observed."SQL Object Name" := COPYSTR(ResourceText,1,MAXSTRLEN(Observed."SQL Object Name"));
-          Observed.Class := EpisodeClassOf(SqlReader);
+          // Род ресурса уже разобран выше и уже лёг в строку - он же решает класс. Второго
+          // запроса на это не нужно, и гадать тоже не о чем: "замок на объекте целиком" -
+          // это то, что сервер сказал сам.
+          Observed.Class := EpisodeClassOf(SqlReader,Kind);
           VictimBody := '';
           BlockerBody := '';
           IF WantStatements THEN BEGIN
@@ -1276,7 +1279,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(Sql);
     END;
 
-    LOCAL PROCEDURE EpisodeClassOf@11(VAR SqlReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader") : Integer;
+    LOCAL PROCEDURE EpisodeClassOf@11(VAR SqlReader@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";Kind@1000000005 : Text) : Integer;
     VAR
       Status@1000000001 : Text;
       IdleMs@1000000002 : Integer;
@@ -1285,8 +1288,11 @@ OBJECT Codeunit 110234 LockWatch Sql
     BEGIN
       // Спящая транзакция - это не медленный запрос, а забытое модальное окно: виновник
       // НЕ исполняет ничего, но транзакцию держит. Лечится звонком, а не правкой кода,
-      // и потому подписывается отдельным классом. Эскалацию сюда не заводим: она видна
-      // не по сессии, а по счётчикам, и приходит другим слоем.
+      // и потому подписывается отдельным классом.
+      //
+      // Второй класс - спор за таблицу целиком - виден прямо тут, родом ресурса. Раньше на
+      // его месте стояла "эскалация по счётчикам, приходящая другим слоем": слоя этого не
+      // появилось, в вызов уходил ноль, и класс не заводился ни разу (FINDINGS, раздел 64).
       //
       // Спящий БЕЗ открытой транзакции не держит ничего и виновником быть не может -
       // такую сессию называть "уснувшей в транзакции" значит обвинять невиновного.
@@ -1296,7 +1302,8 @@ OBJECT Codeunit 110234 LockWatch Sql
       IdleMs := ReaderInt(SqlReader,12);
       OpenTrans := ReaderInt(SqlReader,13);
       Sleeping := (Status = SleepingStatus) AND (OpenTrans > 0);
-      EXIT(Parse.EpisodeClass(Sleeping,ReaderInt(SqlReader,14) = 1,IdleMs,0));
+      EXIT(Parse.EpisodeClass(Sleeping,ReaderInt(SqlReader,14) = 1,IdleMs,
+                             LOWERCASE(Kind) = Parse.WholeTableKind));
     END;
 
     LOCAL PROCEDURE NavFlag@12(ProgramName@1000000000 : Text) : Integer;

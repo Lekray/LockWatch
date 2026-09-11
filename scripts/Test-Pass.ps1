@@ -224,6 +224,11 @@ $navImport
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $PassCodeunitId -MethodName RunPass -ErrorAction Stop
 "@
 $ps51 = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+# Сколько строк брать одним оператором, чтобы сервер перевёл замки на таблицу целиком.
+# Предел эскалации у SQL Server - пять тысяч замков на ОДИН оператор; шесть тысяч проходят
+# его с запасом и остаются дешёвыми: вставка и откат такой пачки не стоят и секунды.
+function BulkRows { 6000 }
+
 function Invoke-Pass([string]$why) {
     $log = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runFile 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { Fail "$why не отработал:`n$log" }
@@ -854,6 +859,101 @@ FROM $episode WHERE [Victim SPID] = $spidMid AND [Open] = 1 ORDER BY [Entry No_]
     Check 'сосед по цепочке в своём эпизоде назван пострадавшим, а не виновником' `
         (($mid[0] -eq '1') -and ($mid[1] -eq $holderUser) -and ($mid[2] -eq $middleUser)) `
         "глубина $($mid[0]) при ожидаемой 1, виновник [$($mid[1])] при ожидаемом [$holderUser], ждал [$($mid[2])] при ожидаемом [$middleUser]"
+
+    # Спор за таблицу ЦЕЛИКОМ. Класс этот до 12.09.2026 не заводился ни разу: в живую дорогу
+    # передавался ноль, и советчик говорил "признаков эскалации нет" при роде ресурса
+    # OBJECTLOCK в той же строке (FINDINGS, раздел 64).
+    #
+    # Эскалация устраивается по-настоящему и на СВОЕЙ таблице: больше пяти тысяч строк одним
+    # оператором - и сервер переводит построчные замки на таблицу. Чужая таблица для этого не
+    # нужна, а свою ещё и метёт уборка прогона.
+    Write-Host 'Спор за таблицу целиком: беру больше пяти тысяч строк одним оператором'
+    foreach ($p in @($blocker, $waiter, $probeHoldA, $probeHoldB, $probeWaiter, $headProc, $midProc, $tailProc)) {
+        Stop-Sqlcmd $p
+    }
+    # Ждём, пока с отметок сойдут ЧУЖИЕ замки. Эскалация при них не случается вовсе: сервер
+    # откладывает её и берёт строки по одной, а сцена тогда меряла бы спор за строку.
+    $busy = 'x'
+    $deadline = (Get-Date).AddSeconds(30)
+    while (((Get-Date) -lt $deadline) -and $busy) {
+        $busy = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),l.request_session_id)
+FROM sys.dm_tran_locks l
+WHERE l.request_mode LIKE 'X%'
+  AND l.resource_associated_entity_id IN (
+        SELECT p.hobt_id FROM sys.partitions p WHERE p.object_id = OBJECT_ID(N'[$markName]'));
+"@
+        if ($busy) { Start-Sleep -Milliseconds 500 }
+    }
+    Invoke-Sql @"
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+SELECT TOP $(BulkRows) -3, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'STAND', N'$Company', 0, N'BULK', GETUTCDATE()
+FROM sys.all_columns;
+"@ | Out-Null
+    $escSql = @"
+SELECT ISNULL(CONVERT(varchar(20),SUM(s.index_lock_promotion_count)),'0')
+FROM sys.dm_db_index_operational_stats(DB_ID(),OBJECT_ID(N'[$markName]'),NULL,NULL) s;
+"@
+    $escBefore = [int64](Scalar $escSql)
+    $bulkHold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'BULK-HELD' WHERE [Server Instance Id] = -3`nWAITFOR DELAY '00:02:00'`nROLLBACK`n"
+    $bulkProc = Start-Sqlcmd 'lock-bulk-hold.sql' $bulkHold
+    # Ждём ФАКТА, а не спим: замок на объекте виден в dm_tran_locks, и он же отличает
+    # "сервер перевёл замки на таблицу" от "оператор ещё идёт по строкам".
+    $tableLock = ''
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        $tableLock = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),l.request_session_id)
+FROM sys.dm_tran_locks l
+WHERE l.resource_type = 'OBJECT' AND l.resource_associated_entity_id = OBJECT_ID(N'[$markName]')
+  AND l.request_status = 'GRANT' AND l.request_mode LIKE 'X%';
+"@
+        if ($tableLock) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    $escAfter = [int64](Scalar $escSql)
+    if (-not $tableLock) {
+        Fail ("замок на таблицу целиком так и не встал за 60 с - опыт не состоялся: эскалаций у " +
+              "таблицы было $escBefore, стало $escAfter, строк в пачке $(BulkRows), держатель " +
+              "$(if ($bulkProc.HasExited) { "вышел с кодом $($bulkProc.ExitCode)" } else { 'ещё идёт' })")
+    }
+    $bulkWant = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'BULK-WANT' WHERE [Server Instance Id] = -3 AND [Session Id] = 1`nROLLBACK`n"
+    $bulkWaiter = Start-Sqlcmd 'lock-bulk-want.sql' $bulkWant
+    $bulkWait = ''
+    $deadline = (Get-Date).AddSeconds(40)
+    while ((Get-Date) -lt $deadline) {
+        $bulkWait = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),wt.session_id)
+FROM sys.dm_os_waiting_tasks wt
+JOIN sys.dm_exec_sessions s ON s.session_id = wt.session_id
+WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($bulkWaiter.Id);
+"@
+        if ($bulkWait) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $bulkWait) {
+        Fail ("ждущий за таблицей в очередь не встал - опыт не состоялся: замок держит сеанс " +
+              "$tableLock, ждущий $(if ($bulkWaiter.HasExited) { "вышел с кодом $($bulkWaiter.ExitCode)" } else { 'ещё идёт' })")
+    }
+    Start-Sleep -Seconds 2
+    Invoke-Pass 'проход по спору за таблицу'
+    $bulkRow = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),[Class]) + '|' + [Resource Kind] + '|' + [NAV Table Name] + '|' +
+       LEFT([Advice Evidence],60)
+FROM $episode WHERE [Victim SPID] = $bulkWait ORDER BY [Entry No_] DESC;
+"@
+    $b = @(($bulkRow -split '\|') | ForEach-Object { $_.Trim() })
+    while ($b.Count -lt 4) { $b += '' }
+    $bulkAdvice = Scalar "SELECT TOP 1 LEFT([Advice],90) FROM $episode WHERE [Victim SPID] = $bulkWait ORDER BY [Entry No_] DESC;"
+    Stop-Sqlcmd $bulkWaiter
+    Stop-Sqlcmd $bulkProc
+    # Спрашивается и класс, и СОВЕТ: класс без совета - это число в колонке, которое никто не
+    # читает. На прежнем коде класс тут 0, а совет - про долгое ожидание, и в нём прямо
+    # сказано "признаков эскалации нет".
+    Check 'спор за таблицу целиком назван таковым, а не спором за строку' `
+        (($b[0] -eq '1') -and ($b[1] -eq 'OBJECTLOCK') -and ($b[2] -eq 'LockWatch Context Mark') -and
+         ($bulkAdvice -match 'whole table|таблицу целиком')) `
+        "класс $($b[0]) при ожидаемом 1, род [$($b[1])], таблица [$($b[2])], эскалаций у таблицы $escBefore -> $escAfter; улика [$($b[3])]; совет: $bulkAdvice"
 }
 finally {
     Stop-Sqlcmd $blocker
