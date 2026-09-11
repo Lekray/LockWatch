@@ -100,7 +100,25 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
     if ($LASTEXITCODE -ne 0) { Fail "$why не отработал:`n$log" }
     return $log
 }
+# Ответ держателя и его ОШИБКА - разные потоки, и второй до сих пор уходил в никуда. Держатель
+# тут - наш же объект C/AL, и упасть он может по-своему; отказ, не показавший этих слов,
+# посылает смотреть на стенд там, где упал объект.
+$holdOut = Join-Path $outDir 'hold-answer.txt'
+$holdErr = Join-Path $outDir 'hold-error.txt'
+# Читать файл, открытый на запись чужим процессом, обычным способом нельзя: Get-Content
+# отказывает по занятости. Отсюда общий доступ и пустая строка вместо отказа - читаем мы это
+# только ради слов в отказе, и падать на самом чтении бессмысленно.
+function Read-Shared([string]$path) {
+    if (-not (Test-Path $path)) { return '' }
+    try {
+        $fs = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try { return (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+    } catch { return '' }
+}
 function Start-Codeunit([int]$id, [string]$method) {
+    # Слова прошлого прогона гасятся ДО запуска: отказ читает эти файлы и принял бы чужой
+    # ответ за сегодняшний - то самое состояние, которого опыт не создавал.
+    foreach ($f in @($holdOut, $holdErr)) { if (Test-Path $f) { Remove-Item $f -Force } }
     $runFile = Join-Path $outDir "invoke-plat-bg-$id-$method.ps1"
     Write-Ps51 $runFile @"
 `$ErrorActionPreference = 'Stop'
@@ -108,7 +126,7 @@ $navImport
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $id -MethodName $method -ErrorAction Stop
 "@
     return Start-Process -FilePath $ps51 -PassThru -WindowStyle Hidden `
-        -RedirectStandardOutput (Join-Path $outDir 'hold-answer.txt') `
+        -RedirectStandardOutput $holdOut -RedirectStandardError $holdErr `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$runFile`""
 }
 function Set-Monitoring([string]$value, [string]$why) {
@@ -198,7 +216,16 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'PLATFORM-TARGET',GETUTCDATE());
         if ($doc -eq 'HELD-BY-NAV') { $held = $true; break }
         Start-Sleep -Milliseconds 500
     }
-    if (-not $held) { Fail 'сессия NAV блокировку так и не взяла - опыт не удался, инструмент тут ни при чём' }
+    if (-not $held) {
+        # "Инструмент тут ни при чём" было сказано зря: блокировку держит НАШ объект C/AL, и
+        # его молчание отличается от "не успел" только по самому процессу и по тому, что он
+        # сказал. Спросить надо и то и другое.
+        $holdSaid = ((((Read-Shared $holdOut) + ' ' + (Read-Shared $holdErr))) -replace '\s+', ' ').Trim()
+        if ($holdSaid.Length -gt 200) { $holdSaid = $holdSaid.Substring(0, 200) + '...' }
+        Fail ('сессия NAV блокировку так и не взяла за 90 с: держатель ' +
+              $(if ($holder.HasExited) { "вышел с кодом $($holder.ExitCode)" } else { 'ещё идёт' }) +
+              $(if ($holdSaid) { ", сказал: $holdSaid" } else { ', не сказал ничего' }))
+    }
 
     $waiter = Start-Sqlcmd 'platform-want.sql' "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'WANT' WHERE [Server Instance Id] = -1`nROLLBACK`n"
     # Ждущий, умерший на старте, выглядит точно как ждущий, который не успел встать в
@@ -218,7 +245,16 @@ WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($waiter.Id);
         if ($waitRow) { break }
         Start-Sleep -Milliseconds 500
     }
-    if (-not $waitRow) { Fail 'ожидание в очереди сервера так и не появилось - опыт не удался' }
+    if (-not $waitRow) {
+        # Две стороны спора - две разные беды, и обе видны только по самим процессам: ушёл
+        # ждущий - это опыт, отпустил держатель - это наш объект C/AL. "Опыт не удался"
+        # называло первую и молчало о второй.
+        Fail ('ожидание в очереди сервера так и не появилось за 40 с: ждущий ' +
+              $(if ($waiter.HasExited) { "вышел с кодом $($waiter.ExitCode)" } else { 'ещё идёт' }) +
+              ', держатель ' +
+              $(if ($holder.HasExited) { "вышел с кодом $($holder.ExitCode)" } else { 'ещё идёт' }) +
+              ", отметка держателя [$(Scalar "SELECT [Document No_] FROM $mark WITH (READUNCOMMITTED) WHERE [Server Instance Id] = -1;")]")
+    }
 
     # Что платформа видит в этот миг - печатается ВСЕГДА, а не только при отказе: когда имя
     # не назовётся, разбираться придётся именно по этому списку.
@@ -276,7 +312,6 @@ finally {
     if ($holder -and -not $holder.HasExited) { $holder.WaitForExit(90000) | Out-Null }
     # Ответ держателя читается ПОСЛЕ его конца: он и есть решающий опыт про карту
     # транзакций - видит ли сессия хотя бы собственную блокировку.
-    $holdOut = Join-Path $outDir 'hold-answer.txt'
     if (Test-Path $holdOut) {
         $answer = [IO.File]::ReadAllText($holdOut)
         if ($answer -match 'LOCKHOLD user (\S+) session (\d+) ms (\d+) ownrows (\d+) laterows (\d+)') {

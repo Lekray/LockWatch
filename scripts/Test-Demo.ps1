@@ -193,7 +193,15 @@ try {
     Write-Host 'Завожу сторожа и жду, пока проход случится САМ'
     Invoke-Method $TaskCodeunitId 'StartWatch'
     $beforeStart = LastPass
-    if (-not (Wait-For { (LastPass) -ne $beforeStart } 60)) { Fail 'фоновая задача не проснулась - опыт не удался' }
+    # "Опыт не удался" тут было неправдой: опыт к этому месту сделал ровно одно - позвал
+    # StartWatch, и вызов отработал, иначе отказал бы сам Invoke-Method. Молчание цепочки -
+    # беда инструмента или стенда, и отличить их может только замер: стоит ли выключатель,
+    # есть ли задача в очереди и что сказал сам сторож.
+    if (-not (Wait-For { (LastPass) -ne $beforeStart } 60)) {
+        Fail ("прохода не случилось за 60 с, а опыт только завёл сторожа: выключатель " +
+              "$(Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"), задач в очереди $(TaskCount), " +
+              "отметка последнего прохода [$(LastPass)], сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")")
+    }
 
     Write-Host 'Нажимаю показ и больше НИЧЕГО не нажимаю'
     Invoke-Method $DemoCodeunitId 'RunDemo'

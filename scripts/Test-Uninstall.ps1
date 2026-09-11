@@ -37,6 +37,8 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 
 $ps51  = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $tasks = '[dbo].[Scheduled Task]'
+$setup = "[$Company`$LockWatch Setup]"
+$state = "[$Company`$LockWatch Watchdog]"
 
 function Scalar([string]$query) {
     # -b обязателен: без него sqlcmd возвращает НОЛЬ и на ошибке SQL, и проверка кода
@@ -47,11 +49,17 @@ function Scalar([string]$query) {
     if ($rows.Count -eq 0) { return '' }
     return "$($rows[0])".Trim()
 }
+# Пустая дата NAV (1753 год) - это "прохода не было", а не отметка: строку состояния заводит
+# сам завод, и путать её появление с проходом нельзя.
+function PassStamp {
+    Scalar "SELECT ISNULL(CONVERT(varchar(30),NULLIF([Last Pass At],CONVERT(datetime,'17530101')),121),'') FROM $state;"
+}
 function TaskCount {
     [int](Scalar "SELECT COUNT(*) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';")
 }
 
 Write-Host 'Завожу сторожа: снимать будем РАБОТАЮЩИЙ инструмент'
+$beforePass = PassStamp
 $runner = Join-Path $outDir 'test-uninstall-start.ps1'
 $body = @"
 `$ErrorActionPreference = 'Stop'
@@ -61,19 +69,44 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
 # Модуль NAV живёт только в Windows PowerShell 5.1, а он читает файл без BOM как ANSI и
 # ломается на кириллице в кавычках - потому BOM здесь обязателен.
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
-& $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail 'сторож не завёлся - снимать работающий инструмент не выйдет' }
+# Ответ вызова НЕ выбрасывается: сторож не заводится по разным причинам, и платформа их
+# называет сама. Отказ, съевший этот текст, посылает искать причину заново.
+$startLog = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+    Fail "сторож не завёлся - снимать работающий инструмент не выйдет: $(($startLog -replace '\s+', ' ').Trim())"
+}
 
-# Ждём ФАКТА, а не спим наугад: задача в планировщике должна ПОЯВИТЬСЯ. Без неё проверка
-# «остановлен своим путём» пуста, и снятие прошло бы вхолостую, ничего не доказав.
+# Ждём ФАКТА, и факт этот - ПРОХОД, а не строка задачи. Строка появляется и там, где
+# проходов не будет никогда: замер 12.09.2026 - при EnableTaskScheduler = false у экземпляра
+# StartWatch отрабатывает МОЛЧА, задача встаёт в очередь, выключатель в настройке стоит, а
+# за сорок секунд не случается ни одного прохода; сторож при этом пишет "первый проход
+# вот-вот" и будет писать это всегда. Прежняя мерка на таком стенде пропускала прогон
+# целиком, и все шесть проверок снятия зеленели на инструменте, который не работал ни разу.
+#
+# Сравнение идёт с отметкой, снятой ДО завода: "отметка непуста" выполнилось бы прошлым
+# проходом прошлого прогона, то есть состоянием, которого опыт не создавал.
+# Тридцати секунд хватает с запасом - первая задача встаёт через секунду после завода, а
+# проход по пустой очереди укладывается в объявленный потолок в тысячу миллисекунд.
 $armed = $false
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) {
-    if ((TaskCount) -gt 0) { $armed = $true; break }
+    if (((TaskCount) -gt 0) -and ((PassStamp) -ne $beforePass)) { $armed = $true; break }
     Start-Sleep -Milliseconds 500
 }
-if (-not $armed) { Fail 'задача сторожа в планировщике не появилась - опыт не удался' }
-Write-Host "  сторож заведён, задач в планировщике $(TaskCount)"
+# "Опыт не удался" тут было неправдой дважды. Опыт к этому месту позвал ровно StartWatch, и
+# вызов отработал - иначе отказ был бы выше. Проходы - дело инструмента и стенда, и молчание
+# их надо не назвать одним словом, а РАЗДЕЛИТЬ: задачи нет вовсе - это одно, задача стоит и
+# не исполняется - совсем другое, и именно так выглядит выключенный планировщик экземпляра.
+if (-not $armed) {
+    $tasksNow = TaskCount
+    Fail ("StartWatch отработал, а прохода за 30 с не случилось - отвечает за это инструмент " +
+          "или стенд, но не опыт: он только завёл сторожа. Задач в очереди $tasksNow" +
+          $(if ($tasksNow -gt 0) { ' - задача стоит и не исполняется, так выглядит экземпляр с EnableTaskScheduler = false' }
+            else { ' - задача не встала вовсе' }) +
+          ", выключатель $(Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;")" +
+          ", отметка прохода [$(PassStamp)], сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")")
+}
+Write-Host "  сторож заведён и ПРОШЁЛ: задач в планировщике $(TaskCount), отметка прохода $(PassStamp)"
 
 Write-Host ''
 $argList = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'Uninstall-LockWatch.ps1'),

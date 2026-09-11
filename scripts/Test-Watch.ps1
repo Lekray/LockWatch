@@ -178,6 +178,47 @@ WHERE l.request_status = 'WAIT'
 "@
 function Wait-PassStuck([int]$seconds) { Wait-For { '' -ne (Scalar $stuckSql) } $seconds }
 
+# Кто держит замок на журнале. Спрашивается ради ОТКАЗА: за "окно не открылось" стоят две
+# разные беды - замок не встал (это опыт) и проходов нет вовсе (это инструмент или стенд), -
+# а по самому "не встал" они неотличимы.
+$holderSql = @"
+SELECT TOP 1 ISNULL(s.program_name,'?') + ' (' + CONVERT(varchar(11),l.request_session_id) + ', ' + l.request_mode + ')'
+FROM sys.dm_tran_locks l JOIN sys.dm_exec_sessions s ON s.session_id = l.request_session_id
+WHERE l.request_status = 'GRANT' AND l.resource_type = 'OBJECT'
+  AND l.resource_associated_entity_id = OBJECT_ID(N'$episode')
+  AND l.request_mode LIKE 'X%';
+"@
+
+# Сколько смотреть на отметку прохода, прежде чем сказать "проходов нет". Период опроса по
+# умолчанию три секунды, сам проход обязан уложиться в объявленный потолок - секунду.
+# Десять секунд - это два полных круга с запасом, и тратятся они только на отказе.
+function PassProbeSeconds { 10 }
+
+# Отказ обязан называть то, что ИЗМЕРИЛ. Прежнее слово было "окно не открылось, опыт не
+# удался" - и читалось оно как "замок не встал", то есть посылало смотреть на sqlcmd даже
+# тогда, когда замок стоял, а не шли проходы. Различает их только замер обеих сторон.
+function Fail-NoWindow([string]$scene) {
+    $holder = Scalar $holderSql
+    $was = LastPass
+    Start-Sleep -Seconds (PassProbeSeconds)
+    $now = LastPass
+    Fail ("$scene - проход на журнале не встал за 60 с. Замок на журнале: " +
+          $(if ($holder) { "держит $holder" } else { 'НИКТО не держит' }) + '; проходы: ' +
+          $(if ($now -ne $was) { "идут, отметка [$was] -> [$now]" } else { "НЕ ИДУТ, отметка [$was] стоит $(PassProbeSeconds) с" }) +
+          "; задач в очереди $(TaskCount), сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")")
+}
+
+# То же различение для "прохода не случилось". Опыт к этому непричастен ВСЕГДА: он тут
+# только зовёт StartWatch, и не отработай вызов - отказал бы сам Invoke-Method. Отвечает за
+# молчание либо инструмент (цепочка не перевзвелась), либо стенд (планировщик экземпляра не
+# исполняет задачи), и назвать надо замер, а не виноватого.
+function Fail-NoPass([string]$scene) {
+    Fail ("$scene - прохода не случилось за 60 с, и опыт тут ни при чём: он только завёл сторожа. " +
+          "Выключатель $(Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"), " +
+          "задач в очереди $(TaskCount), отметка последнего прохода [$(LastPass)], " +
+          "сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")")
+}
+
 # Сколько ждать, пока задержанный проход СОРВЁТСЯ. Предел ожидания блокировки у NAV -
 # 10 000 мс: столько проход держится на замке, прежде чем упасть. К этому прибавляется
 # период опроса - задача должна была ещё и проснуться. Тридцать секунд - это трижды с
@@ -318,7 +359,7 @@ FROM $state;
     $stopProc = Start-Prepared 'stop' 'StopWatch'
 
     $cover = Start-Sqlcmd 'watch-journal-hold.sql' $journalHold
-    if (-not (Wait-PassStuck 60)) { Fail 'проход на журнале не встал - окно не открылось, опыт не удался' }
+    if (-not (Wait-PassStuck 60)) { Fail-NoWindow 'завод поверх идущего прохода' }
     $armSaid = Invoke-Prepared $armProc 20
     Stop-Sqlcmd $cover
     $cover = $null
@@ -389,8 +430,16 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     # строка - это не то же самое: на базе, где наблюдение уже шло, ею оказалась бы чужая,
     # и переезд проверялся бы на ней.
     $movedNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [Open] = 0 AND [Entry No_] = $caughtNo;"
-    if (($retention -le 0) -or ('' -eq $movedNo)) {
-        Fail "стареть нечего: срок $retention дней, закрытых эпизодов нет - опыт не удался"
+    # Бед тут две, и они разные. Срок не задан - это стенд, и подставлять свой ради опыта
+    # нельзя: переезд меряется БОЕВЫМ сроком. Свой эпизод не закрылся - это инструмент, и
+    # проверка выше уже красная. А "закрытых эпизодов нет" было просто неправдой: чужих
+    # закрытых на базе сколько угодно, спор же идёт за СВОЙ.
+    if ($retention -le 0) {
+        Fail "срок переезда в настройке $retention дней - старить нечем, а подставлять свой срок значило бы мерить не то, что пойдёт в бою"
+    }
+    if ('' -eq $movedNo) {
+        Fail ("эпизод $caughtNo закрытым не стал, и переезд мерить не на чем - это отказ " +
+              "инструмента, не опыта: закрытых эпизодов на базе $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 0;"), но спор идёт за свой")
     }
     # Строка сторожа обнуляется ПЕРЕД старением: её пишет каждый проход, и "уехало" от
     # прошлого переезда осталось бы в ней от прежнего прогона. Проверка читала бы чужой
@@ -444,13 +493,23 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     Write-Host 'Завожу заново и останавливаю уже ВО ВРЕМЯ прохода'
     Invoke-Method 'StartWatch'
     $beforeStop = LastPass
-    if (-not (Wait-For { (LastPass) -ne $beforeStop } 60)) { Fail 'сторож не пошёл заново - опыт не удался' }
+    if (-not (Wait-For { (LastPass) -ne $beforeStop } 60)) { Fail-NoPass 'завод перед опытом с остановкой' }
     $cover = Start-Sqlcmd 'watch-journal-hold-stop.sql' $journalHold
-    if (-not (Wait-PassStuck 60)) { Fail 'проход на журнале не встал - окно не открылось, опыт не удался' }
+    if (-not (Wait-PassStuck 60)) { Fail-NoWindow 'остановка во время прохода' }
     # Номер ИДУЩЕЙ задачи запоминается, пока она стоит на замке: по нему потом отличается
     # своя строка от чужой. Строка идущей задачи в очереди одна и та же - это и меряем.
     $heldId = Scalar "SELECT TOP 1 CONVERT(varchar(40),[ID]) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';"
-    if (((TaskCount) -ne 1) -or ('' -eq $heldId)) { Fail "во время прохода в очереди не одна задача, а $(TaskCount) - опыт не удался" }
+    # Задач тут обязана быть ровно одна, и обе стороны от единицы - беда ИНСТРУМЕНТА, а не
+    # опыта: ноль значит, что цепочка оборвалась, два - что она раздвоилась, и второе ровно
+    # то, о чём проверка выше. Опыт держит замок на журнале, а задачи ставит сторож.
+    $tasksHeld = TaskCount
+    if (($tasksHeld -ne 1) -or ('' -eq $heldId)) {
+        Fail ("во время прохода задач в очереди $tasksHeld при ожидаемой одной" +
+              $(if ($tasksHeld -eq 0) { ' - цепочка оборвалась' }
+                elseif ($tasksHeld -gt 1) { ' - цепочка раздвоилась' }
+                else { ', а номер идущей задачи не прочитался' }) +
+              "; опыт тут ни при чём - он только держит замок. Сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")")
+    }
     $stopSaid = Invoke-Prepared $stopProc 20
     Stop-Sqlcmd $cover
     $cover = $null
@@ -490,9 +549,9 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     Write-Host 'Завожу заново и держу журнал дольше предела ожидания NAV'
     Invoke-Method 'StartWatch'
     $beforeFall = LastPass
-    if (-not (Wait-For { (LastPass) -ne $beforeFall } 60)) { Fail 'сторож не пошёл заново - опыт не удался' }
+    if (-not (Wait-For { (LastPass) -ne $beforeFall } 60)) { Fail-NoPass 'завод перед опытом с падением' }
     $cover = Start-Sqlcmd 'watch-journal-hold-fall.sql' $journalHold
-    if (-not (Wait-PassStuck 60)) { Fail 'проход на журнале не встал - окно не открылось, опыт не удался' }
+    if (-not (Wait-PassStuck 60)) { Fail-NoWindow 'падение прохода на замке' }
     # Слово ловится ДО отпускания замка: следующий удачный проход перепишет строку сторожа
     # своим "проход прошёл", и спрашивать будет уже не о чем.
     $fell = Wait-For {
