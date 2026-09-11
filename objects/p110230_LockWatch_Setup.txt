@@ -21,6 +21,11 @@ OBJECT Page 110230 LockWatch Setup
 
     OnAfterGetCurrRecord=BEGIN
                            ScheduledTasks := Task.ScheduledCount;
+                           WatchSilent := Task.SilentNote;
+                           IF WatchSilent <> '' THEN
+                             WatchSilentStyle := 'Unfavorable'
+                           ELSE
+                             WatchSilentStyle := 'Standard';
                          END;
 
     ActionList=ACTIONS
@@ -161,11 +166,23 @@ OBJECT Page 110230 LockWatch Setup
                 Name=ScheduledTasks;
                 CaptionML=[ENU=Scheduled Tasks;
                            RUS=Запланированных задач];
-                ToolTipML=[ENU=Specifies how many passes are queued in the task scheduler. One is right. Zero with the watch enabled means the chain broke. More than one means two watches would be closing each other episodes.;
-                           RUS=Определяет, сколько проходов стоит в планировщике. Правильно - один. Ноль при включённом стороже означает, что цепочка оборвалась. Больше одного - что два наблюдателя закрывают эпизоды друг другу.];
+                ToolTipML=[ENU=Specifies how many passes are queued in the task scheduler. One is right. Zero with the watch enabled means the chain broke. More than one means two watches would be closing each other episodes. One does not promise the passes happen - a queued task on an instance with the task scheduler off never runs, and the line below says so.;
+                           RUS=Определяет, сколько проходов стоит в планировщике. Правильно - один. Ноль при включённом стороже означает, что цепочка оборвалась. Больше одного - что два наблюдателя закрывают эпизоды друг другу. Одна задача не обещает, что проходы идут: при выключенном планировщике экземпляра она стоит в очереди и не исполняется, и об этом говорит строка ниже.];
                 ApplicationArea=#All;
                 Editable=FALSE;
                 SourceExpr=ScheduledTasks }
+
+    { 59  ;2   ;Field     ;
+                Name=WatchSilent;
+                CaptionML=[ENU=Chain Health;
+                           RUS=Здоровье цепочки];
+                ToolTipML=[ENU=Specifies what the silence of the chain means. Empty is the good answer. A watch that is on and has not passed for a long time is not watching anything, and nothing else on this page says it out loud.;
+                           RUS=Определяет, что означает молчание цепочки. Пусто - это хороший ответ. Включённый сторож, у которого давно не было прохода, не наблюдает ничего, и вслух об этом на странице не говорит больше ничто.];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                MultiLine=Yes;
+                StyleExpr=WatchSilentStyle;
+                SourceExpr=WatchSilent }
 
     { 5   ;2   ;Field     ;
                 Name=SQLServer;
@@ -375,6 +392,8 @@ OBJECT Page 110230 LockWatch Setup
     VAR
       Task@1000000000 : Codeunit 110236;
       ScheduledTasks@1000000001 : Integer;
+      WatchSilent@1000000004 : Text;
+      WatchSilentStyle@1000000005 : Text;
       Platform@1000000002 : Codeunit 110241;
       Demo@1000000003 : Codeunit 110244;
 
@@ -400,6 +419,10 @@ OBJECT Page 110230 LockWatch Setup
       Число запланированных задач вынесено на экран нарочно. Ноль при включённом стороже
       означает, что цепочка оборвалась, и это единственный видимый признак: сама по себе
       строка настройки при этом выглядит совершенно здоровой.
+
+      Одной задачи, однако, мало для спокойствия: при выключенном планировщике экземпляра
+      она стоит в очереди и не исполняется НИ РАЗУ - замерено 12.09.2026. Поэтому рядом
+      стоит здоровье цепочки: оно считает молчание в периодах опроса и называет его словами.
     }
     END.
   }

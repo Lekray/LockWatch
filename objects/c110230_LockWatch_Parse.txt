@@ -32,6 +32,8 @@ OBJECT Codeunit 110230 LockWatch Parse
       CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено сторожем блокировок, весь оператор %1 знаков, оставлено %2';
       OverrunTxt@1000000019 : TextConst 'ENU=The pass took %1 ms against the declared ceiling of %2.;RUS=Проход занял %1 мс при объявленном потолке %2.';
       RingSilentTxt@1000000020 : TextConst 'ENU=Deadlocks counted by the server: %1, and the system_health ring gave back none. Its output is capped - restart the session.;RUS=Сервер насчитал кругов %1, кольцо system_health не отдало ни одного. Выдача кольца переполнена - нужен перезавод сессии.';
+      WatchSilentTxt@1000000021 : TextConst 'ENU=The watch is on, and the last pass was %1 min ago. The chain of passes is not running - check EnableTaskScheduler in the service instance configuration.;RUS=Сторож включён, а последний проход был %1 мин назад. Цепочка проходов не идёт - проверьте EnableTaskScheduler в конфигурации экземпляра службы.';
+      WatchNeverTxt@1000000022 : TextConst 'ENU=The watch is on, and no pass has happened at all. The chain of passes has not started - check EnableTaskScheduler in the service instance configuration.;RUS=Сторож включён, а прохода не случилось ни одного. Цепочка проходов не пошла - проверьте EnableTaskScheduler в конфигурации экземпляра службы.';
 
     [External]
     PROCEDURE NavLockTimeoutMs@10() : Integer;
@@ -758,6 +760,72 @@ OBJECT Codeunit 110230 LockWatch Parse
       IF (Circles <= 0) OR (GraphsRead > 0) THEN
         EXIT('');
       EXIT(STRSUBSTNO(RingSilentTxt,Circles));
+    END;
+
+    [External]
+    PROCEDURE WatchSilentNote@66(Enabled@1000000000 : Boolean;LastPassAt@1000000001 : DateTime;Asked@1000000002 : DateTime;PollPeriodMs@1000000003 : Integer) : Text;
+    VAR
+      SilentMs@1000000004 : Decimal;
+    BEGIN
+      // Молчащая цепочка не скажет о себе сама - в этом вся беда. Проходов нет, значит нет
+      // и того, кто пишет строку сторожа, и наблюдение выглядит живым ровно до тех пор,
+      // пока никто не посмотрит на дату последнего прохода.
+      //
+      // Замер 12.09.2026 (FINDINGS, раздел 63): при EnableTaskScheduler = false у
+      // экземпляра завод отрабатывает МОЛЧА, галка стоит, задача в очереди стоит - и не
+      // исполняется ни разу. Ключа этого из C/AL не видно: TASKSCHEDULER.CANCREATETASK
+      // отвечает не про него. Остаётся мерить не причину, а СЛЕДСТВИЕ - тишину.
+      //
+      // Выключенный сторож молчит по праву: галку сняли нарочно, и ругать его за это
+      // значило бы кричать при каждой остановке.
+      IF NOT Enabled THEN
+        EXIT('');
+      IF LastPassAt = 0DT THEN
+        EXIT(WatchNeverTxt);
+      // Часы тут РАЗНЫЕ: отметку прохода ставит SQL, а спрашиваем мы у NAV. На стенде они
+      // расходятся на секунды (прогон сторожа меряет это отдельно), и порог, не бывающий
+      // меньше минуты, эту разницу перекрывает с запасом.
+      SilentMs := Asked - LastPassAt;
+      IF SilentMs <= SilenceCeilingMs(PollPeriodMs) THEN
+        EXIT('');
+      EXIT(STRSUBSTNO(WatchSilentTxt,ROUND(SilentMs / MsPerMinute,1)));
+    END;
+
+    PROCEDURE SilenceCeilingMs@67(PollPeriodMs@1000000000 : Integer) : Decimal;
+    VAR
+      Ceiling@1000000001 : Decimal;
+    BEGIN
+      // Сколько молчания значит "цепочка не идёт". Цепочка перевзводит себя каждым проходом,
+      // и опоздать двадцать периодов подряд она может только если её нет вовсе.
+      Ceiling := PollPeriodMs;
+      Ceiling := Ceiling * SilentPeriods;
+      IF Ceiling < MinSilenceMs THEN
+        Ceiling := MinSilenceMs;
+      EXIT(Ceiling);
+    END;
+
+    LOCAL PROCEDURE SilentPeriods@68() : Integer;
+    BEGIN
+      // Двадцать. Одно опоздание бывает от дорогого прохода, три - от занятого планировщика,
+      // а двадцать подряд - уже не невезение. Тревога, поднятая зря, стоит дороже молчания:
+      // сторож, кричащий на ровном месте, перестаёт читаться до того, как окажется прав.
+      EXIT(20);
+    END;
+
+    LOCAL PROCEDURE MinSilenceMs@69() : Integer;
+    BEGIN
+      // Пол тревоги - минута, и не ради круглого числа: период опроса бывает мелким, а
+      // перезапуск службы съедает десятки секунд сам по себе, и цепочка после него
+      // поднимается не мгновенно.
+      EXIT(MsPerMinute);
+    END;
+
+    PROCEDURE MsPerMinute@70() : Integer;
+    BEGIN
+      // Минута в миллисекундах. Целого тут хватает, в отличие от суток: в Integer
+      // укладывается тридцать пять тысяч минут, то есть три недели с лишним, а умножаем мы
+      // её на единицы и десятки.
+      EXIT(60000);
     END;
 
     [External]

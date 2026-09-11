@@ -258,6 +258,37 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
     if ($LASTEXITCODE -ne 0) { Fail "$method не отработал:`n$log" }
 }
 
+# Тот же вызов, но с ОТВЕТОМ: слово инструмента приходит через MESSAGE, а командлет отдаёт
+# его предупреждением в свой вывод. Отдельная функция нужна затем, что обычный вызов ответа
+# не возвращает - иначе каждый StartWatch печатал бы приветствие модуля прямо в отчёт.
+function Ask-Method([string]$method) {
+    $file = Join-Path $outDir "invoke-$method.ps1"
+    Write-Ps51 $file @"
+`$ErrorActionPreference = 'Stop'
+$navImport
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TaskCodeunitId -MethodName $method -ErrorAction Stop
+"@
+    $log = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $file 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { Fail "$method не отработал:`n$log" }
+    # Приветствие модуля управления режется по его же концу, а не по длине: длина завтра
+    # другая, а строка отчёта от него втрое длиннее самого ответа.
+    $log = ($log -replace '\s+', ' ').Trim()
+    $log = ($log -replace '^.*Microsoft\.Dynamics\.Nav\.Apps\.Management\s*', '') -replace '^WARNING: ', ''
+    return $log.Trim()
+}
+
+# Сколько молчания инструмент считает бедой - то же правило, что и у него самого: двадцать
+# периодов опроса, но не меньше минуты. Повторено здесь НАРОЧНО: прогон, спрашивающий порог
+# у проверяемого, проверял бы согласие инструмента с самим собой, а не с обещанием.
+function SilenceWaitSeconds {
+    $ms = ([int](Scalar "SELECT [Poll Period (ms)] FROM $setup;")) * 20
+    if ($ms -lt 60000) { $ms = 60000 }
+    return [int][math]::Ceiling($ms / 1000)
+}
+# Запас поверх порога: часы у отметки прохода - SQL, а спрашивает время NAV, и на стенде они
+# расходятся на секунды. Пять секунд перекрывают эту разницу, не пряча самой границы.
+function SilenceSlackSeconds { 5 }
+
 try {
     Write-Host 'Подготовка стенда'
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
@@ -565,6 +596,61 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     Check 'упавший проход подхвачен задачей, и цепочка не оборвалась' `
         ($fell -and $resumed -and ((TaskCount) -eq 1)) `
         "сорвался $(if ($fell) { 'и сказал об этом' } else { 'МОЛЧА' }), проходы после замка $(if ($resumed) { 'пошли' } else { 'НЕ ПОШЛИ' }), задач $(TaskCount); сторож писал: $fellSaid"
+
+    # Цепочка умеет стоять в очереди и не исполняться НИ РАЗУ: при выключенном планировщике
+    # экземпляра завод отрабатывает молча, галка стоит, задача стоит - а проходов нет
+    # (замер 12.09.2026, FINDINGS, раздел 63). Сказать об этом некому: строку сторожа пишет
+    # проход, а прохода нет, - и наблюдение выглядит живым, пока никто не смотрит на дату.
+    #
+    # Настоящий ключ экземпляра тут не трогается: это перезапуск службы посреди прогона.
+    # Устраивается то же СОСТОЯНИЕ - задача снимается из очереди, а выключатель остаётся
+    # стоять. В нём вся соль: выключенного сторожа ругать не за что.
+    #
+    # Строку задачи снимаем в цикле: идущая задача перевзводит себя ПОСЛЕ снятия, и одного
+    # DELETE мало - он уберёт строку, а следующий проход поставит новую.
+    Write-Host 'Роняю цепочку и спрашиваю здоровье'
+    $dead = $false
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        Invoke-Sql "DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';" | Out-Null
+        Start-Sleep -Milliseconds 300
+        if ((TaskCount) -eq 0) {
+            $quiet = LastPass
+            Start-Sleep -Seconds 5
+            if (((TaskCount) -eq 0) -and ((LastPass) -eq $quiet)) { $dead = $true; break }
+        }
+    }
+    if (-not $dead) {
+        Fail "цепочку уронить не вышло: задач в очереди $(TaskCount), отметка прохода двигается - опыт не состоялся"
+    }
+    # Спрашивается СРАЗУ, пока молчание короткое: слово, говорящееся всегда, тут обязано
+    # промолчать. Без этой половины проверку прошёл бы сторож, кричащий после каждой
+    # остановки, - а такой хуже молчащего.
+    $earlyAge = [int](Scalar "SELECT DATEDIFF(second,[Last Pass At],SYSUTCDATETIME()) FROM $state;")
+    $earlySaid = Ask-Method 'SayHealth'
+    # Отметку прохода НЕ подставляем: писать её мимо NAV значило бы спорить с кэшем сервера,
+    # а порог тут всего минута - его дешевле выждать по-настоящему. Заодно проверяется и сам
+    # порог: слово обязано появиться не раньше, чем цепочка вправду замолчала.
+    #
+    # Ждём тут не события, а ЧАСОВ - другого способа перейти порог нет, - но смотрим на
+    # возраст отметки у СЕРВЕРА, а не на свой будильник: время инструмент берёт там же.
+    $wait = (SilenceWaitSeconds) + (SilenceSlackSeconds)
+    Write-Host "  жду порог молчания: $wait с"
+    $aged = Wait-For {
+        ([int](Scalar "SELECT DATEDIFF(second,[Last Pass At],SYSUTCDATETIME()) FROM $state;")) -gt $wait
+    } ($wait + 30)
+    if (-not $aged) { Fail 'отметка прохода не состарилась - часы сервера стоят, мерить нечем' }
+    $silentSaid = Ask-Method 'SayHealth'
+    $spoke = $silentSaid -match 'chain of passes|Цепочка проходов'
+    # Цепочка возвращается, и спрашивается ТО ЖЕ САМОЕ: живую оболгать нельзя.
+    Invoke-Method 'StartWatch'
+    $beforeAlive = LastPass
+    if (-not (Wait-For { (LastPass) -ne $beforeAlive } 60)) { Fail-NoPass 'завод после опыта с молчанием' }
+    $aliveSaid = Ask-Method 'SayHealth'
+    Check 'замолчавшая цепочка названа словами, а идущая - не оболгана' `
+        ($spoke -and ($earlySaid -notmatch 'chain of passes|Цепочка проходов') -and
+         ($aliveSaid -notmatch 'chain of passes|Цепочка проходов')) `
+        "через $earlyAge с молчания: $earlySaid; за порогом в $(SilenceWaitSeconds) с: $silentSaid; при живой цепочке: $aliveSaid"
 }
 finally {
     Stop-Sqlcmd $blocker

@@ -74,6 +74,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       OverrunTxt@1000000061 : TextConst 'ENU=over [%1], exactly [%2], under [%3], ceiling off [%4];RUS=выше [%1], ровно [%2], ниже [%3], потолок снят [%4]';
       ChkRingTxt@1000000062 : TextConst 'ENU=a ring gone silent is named, and a ring that spoke is not blamed;RUS=замолчавшее кольцо названо, а отдавшее - не оболгано';
       RingTxt@1000000063 : TextConst 'ENU=silent [%1], spoke [%2], quiet [%3];RUS=смолчало [%1], отдало [%2], тихо [%3]';
+      ChkSilentTxt@1000000064 : TextConst 'ENU=a chain gone quiet is named, and a live one is not blamed;RUS=замолчавшая цепочка названа, а идущая - не оболгана';
+      SilentTxt@1000000065 : TextConst 'ENU=fresh [%1], silent [%2], never [%3], stopped [%4];RUS=свежий [%1], молчит [%2], ни разу [%3], остановлен [%4]';
       FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -122,6 +124,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckStatementCut(Passed,Total,Report);
       CheckPassOverrun(Passed,Total,Report);
       CheckRingSilent(Passed,Total,Report);
+      CheckWatchSilent(Passed,Total,Report);
     END;
 
     LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -700,6 +703,58 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Check(Passed,Total,Report,ChkRingTxt,
         (STRPOS(Silent,FORMAT(RingCirclesUnderTest)) > 0) AND (Spoke = '') AND (Quiet = ''),
         STRSUBSTNO(RingTxt,Silent,Spoke,Quiet));
+    END;
+
+    LOCAL PROCEDURE CheckWatchSilent@72(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Asked@1000000003 : DateTime;
+      Ceiling@1000000004 : Duration;
+      Gap@1000000005 : Duration;
+      Fresh@1000000006 : Text;
+      Silent@1000000007 : Text;
+      Never@1000000008 : Text;
+      Stopped@1000000009 : Text;
+    BEGIN
+      // Цепочка, стоящая в очереди и не исполняющаяся ни разу, - состояние измеренное, а не
+      // выдуманное (FINDINGS, раздел 63). Сказать о нём некому: строку сторожа пишет проход,
+      // а прохода нет. Говорит поэтому страница, и спрашиваются тут все четыре ответа.
+      //
+      // Свежий: молчание РОВНО в порог - ещё не беда. Граница обязана лежать там, где
+      // названа, иначе тревога поднимается на ровном месте.
+      //
+      // Молчит: за порогом слово обязано быть, и в нём обязано стоять ЧИСЛО минут - без
+      // числа "давно" не отличить от "только что".
+      //
+      // Ни разу: прохода не было вовсе, и это ДРУГАЯ беда - цепочка не пошла с самого
+      // завода. Слово обязано быть своё.
+      //
+      // Остановлен: галку сняли нарочно, и молчание тут законно. Без этой половины сторож
+      // кричал бы после каждой остановки и перестал бы читаться до того, как окажется прав.
+      Asked := CREATEDATETIME(DMY2DATE(1,6,2026),120000T);
+      Ceiling := Parse.SilenceCeilingMs(PollPeriodUnderTest);
+      Gap := SilentMinutesUnderTest * Parse.MsPerMinute;
+      Fresh := Parse.WatchSilentNote(TRUE,Asked - Ceiling,Asked,PollPeriodUnderTest);
+      Silent := Parse.WatchSilentNote(TRUE,Asked - Gap,Asked,PollPeriodUnderTest);
+      Never := Parse.WatchSilentNote(TRUE,0DT,Asked,PollPeriodUnderTest);
+      Stopped := Parse.WatchSilentNote(FALSE,Asked - Gap,Asked,PollPeriodUnderTest);
+      Check(Passed,Total,Report,ChkSilentTxt,
+        (Fresh = '') AND (Stopped = '') AND (Never <> '') AND (Silent <> Never) AND
+        (STRPOS(Silent,FORMAT(SilentMinutesUnderTest)) > 0),
+        STRSUBSTNO(SilentTxt,Fresh,Silent,Never,Stopped));
+    END;
+
+    LOCAL PROCEDURE PollPeriodUnderTest@73() : Integer;
+    BEGIN
+      // Период по умолчанию. Порог при нём упирается в свой пол - минуту, - и проверка
+      // меряет ту же границу, что и установка из коробки.
+      EXIT(3000);
+    END;
+
+    LOCAL PROCEDURE SilentMinutesUnderTest@74() : Integer;
+    BEGIN
+      // Девять минут: заведомо за порогом, и цифры этой нет ни в одном из слов - проверка
+      // ищет её в тексте поиском, и цифра из самого сообщения нашлась бы вместо неё.
+      EXIT(9);
     END;
 
     LOCAL PROCEDURE RingCirclesUnderTest@71() : Integer;

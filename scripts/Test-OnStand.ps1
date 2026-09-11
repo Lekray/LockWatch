@@ -192,6 +192,15 @@ foreach ($literal in $mlLiterals) {
 }
 if ($mlProblems) { Fail ("многоязычный текст не переживёт импорт:`n" + (($mlProblems | Select-Object -Unique | Select-Object -First 5) -join "`n")) }
 
+# Два [External] подряд C/SIDE проглатывает молча, и так же молча теряет атрибут функция,
+# у которой его увели вставкой НАД строкой PROCEDURE. Беда не смертельная - звать функцию
+# без атрибута всё равно можно, - но правка при этом делает не то, что написано, а поймать
+# это глазом нельзя: в отчёте не меняется ничто. Ловилось дважды, 11 и 12.09.2026.
+$doubles = ([regex]::Matches($monolith, '\[External\]\s*\r?\n\s*\[External\]')).Count
+if ($doubles -gt 0) {
+    Fail "атрибут [External] стоит дважды подряд ($doubles раз): вставка легла над чужой функцией и увела её атрибут"
+}
+
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $monolith, (New-Object System.Text.UTF8Encoding($false)))

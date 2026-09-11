@@ -20,8 +20,10 @@ OBJECT Codeunit 110236 LockWatch Task
       Setup@1000000000 : Record 110230;
       Watchdog@1000000007 : Record 110237;
       Parse@1000000006 : Codeunit 110230;
-      NoSchedulerErr@1000000001 : TextConst 'ENU=The service instance runs with the task scheduler switched off (EnableTaskScheduler in the service configuration). Until it is on, the watch cannot arm itself.;RUS=Экземпляр службы работает с выключенным планировщиком задач (EnableTaskScheduler в конфигурации службы). Пока он выключен, сторож завестись не может.';
+      NoSchedulerErr@1000000001 : TextConst 'ENU=The platform will not let this session create a scheduled task (TASKSCHEDULER.CANCREATETASK says no). Measured separately - this answer is not about the EnableTaskScheduler key.;RUS=Платформа не даёт этой сессии завести запланированную задачу (TASKSCHEDULER.CANCREATETASK отвечает "нет"). Замерено отдельно - с ключом EnableTaskScheduler этот ответ не связан.';
       StartedTxt@1000000002 : TextConst 'ENU=The watch is armed, the first pass is due shortly.;RUS=Сторож заведён, первый проход вот-вот.';
+      HealthMsg@1000000009 : TextConst 'ENU=LOCKWATCH-HEALTH %1;RUS=LOCKWATCH-HEALTH %1';
+      QuietTxt@1000000010 : TextConst 'ENU=the chain goes, the last pass is fresh;RUS=цепочка идёт, последний проход свежий';
       StoppedTxt@1000000003 : TextConst 'ENU=The watch is stopped by hand.;RUS=Сторож остановлен вручную.';
       DisabledTxt@1000000004 : TextConst 'ENU=The watch is switched off in the setup, the chain of passes ends here.;RUS=Сторож выключен в настройке, цепочка проходов на этом кончается.';
       PassFailedTxt@1000000005 : TextConst 'ENU=The pass fell over and was picked up by the task: %1;RUS=Проход упал и был подхвачен задачей: %1';
@@ -39,6 +41,10 @@ OBJECT Codeunit 110236 LockWatch Task
       // (прогон, командлет) его не назначает - у неё язык службы, а не человека.
       IF GUIALLOWED AND (Setup."Journal Language ID" = 0) THEN
         Setup."Journal Language ID" := GLOBALLANGUAGE;
+      // Отвечает эта проверка НЕ про ключ экземпляра, и это замерено: при
+      // EnableTaskScheduler = false она вернула истину, завод отработал молча, задача встала
+      // в очередь и не исполнилась ни разу (FINDINGS, раздел 63). Выключенный планировщик
+      // ловится не здесь, а тишиной - WatchSilentNote.
       IF NOT TASKSCHEDULER.CANCREATETASK THEN
         ERROR(NoSchedulerErr);
       // Поколение поднимается ПЕРВЫМ, до снятия задач, и порядок тут значащий. Строка
@@ -105,6 +111,30 @@ OBJECT Codeunit 110236 LockWatch Task
           END;
         UNTIL ContextTable.NEXT = 0;
       EXIT(Changed);
+    END;
+
+    [External]
+    PROCEDURE SilentNote@13() : Text;
+    BEGIN
+      // Одно место на двоих: страница показывает это же, а прогон зовёт SayHealth. Разойдись
+      // они - проверенным оказалось бы не то, чем пользуются.
+      Setup.FetchOnce;
+      IF NOT Watchdog.GET THEN
+        Watchdog.INIT;
+      EXIT(Parse.WatchSilentNote(Setup.Enabled,Watchdog."Last Pass At",CURRENTDATETIME,Setup."Poll Period (ms)"));
+    END;
+
+    [External]
+    PROCEDURE SayHealth@14();
+    VAR
+      Note@1000000000 : Text;
+    BEGIN
+      // Зовёт это прогон: страницу он не открывает, а спросить обязан то же самое.
+      // Молчание говорится СЛОВОМ: пустой ответ снаружи не отличить от "вызов не дошёл".
+      Note := SilentNote;
+      IF Note = '' THEN
+        Note := QuietTxt;
+      MESSAGE(HealthMsg,Note);
     END;
 
     [External]
