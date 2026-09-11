@@ -908,8 +908,17 @@ Write-Host 'ЖУРНАЛ ЭПИЗОДОВ' -ForegroundColor Cyan
 Write-Host ''
 Write-Host ('{0,-4} {1,-9} {2,-24} {3,-4} {4,-18} {5,-19} {6,8} {7,-18} {8}' -f `
     '№', 'начало', 'таблица', 'ключ', 'эпизод', 'исход', 'ждали', 'документ', 'кто')
+# Время в этой таблице - местное, как на часах сервера и как в клиенте NAV. В самом журнале
+# оно лежит по UTC; перевод делается ТОЛЬКО здесь, на печати, и только для человека.
+# Журнал лежит по UTC, и это правильная шкала: в ней NAV хранит DateTime (FINDINGS, раздел
+# 56). Но эту таблицу читает ЧЕЛОВЕК, и читает рядом с клиентом NAV, который показывает
+# время в своём поясе. Напечатай UTC как есть - и показ разойдётся с соседним экраном ровно
+# на пояс: скажет 04:39 там, где часы показывают 07:39, и человек решит, что журнал отстаёт.
+# Переводит сервер своей же разницей: взять её у часов ЭТОЙ машины значило бы сложить две
+# шкалы - показ ходит и с других машин.
+$localStarted = 'DATEADD(minute,DATEDIFF(minute,GETUTCDATE(),GETDATE()),[Started At])'
 $lines = Invoke-Sql @"
-SELECT CONVERT(varchar(11),[Entry No_]) + '|' + CONVERT(varchar(8),[Started At],108) + '|' +
+SELECT CONVERT(varchar(11),[Entry No_]) + '|' + CONVERT(varchar(8),$localStarted,108) + '|' +
   LEFT([NAV Table Name],24) + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
   $classWords + '|' + $outcomeWords + '|' + CONVERT(varchar(11),[Max Wait (ms)]) + '|' +
   CASE WHEN [Document No_] = '' THEN '-' ELSE [Document No_] END + '|' +
