@@ -72,6 +72,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CutMarkTxt@1000000059 : TextConst 'ENU=kept %1 of %2, with the mark %3 chars, mark starts with [%4], whole %5, empty %6;RUS=оставлено %1 из %2, с отметкой %3 знаков, отметка начинается с [%4], целый %5, пустой %6';
       ChkOverrunTxt@1000000060 : TextConst 'ENU=the pass says it overran the ceiling, and says nothing when it did not;RUS=проход говорит о превышении потолка и молчит, когда его не было';
       OverrunTxt@1000000061 : TextConst 'ENU=over [%1], exactly [%2], under [%3], ceiling off [%4];RUS=выше [%1], ровно [%2], ниже [%3], потолок снят [%4]';
+      ChkRingTxt@1000000062 : TextConst 'ENU=a ring gone silent is named, and a ring that spoke is not blamed;RUS=замолчавшее кольцо названо, а отдавшее - не оболгано';
+      RingTxt@1000000063 : TextConst 'ENU=silent [%1], spoke [%2], quiet [%3];RUS=смолчало [%1], отдало [%2], тихо [%3]';
       FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -119,6 +121,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckCounterDelta(Passed,Total,Report);
       CheckStatementCut(Passed,Total,Report);
       CheckPassOverrun(Passed,Total,Report);
+      CheckRingSilent(Passed,Total,Report);
     END;
 
     LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -671,6 +674,39 @@ OBJECT Codeunit 110231 LockWatch Parse Test
         (STRPOS(Over,FORMAT(CeilingUnderTest)) > 0) AND
         (Exact = '') AND (Under = '') AND (NoCeiling = ''),
         STRSUBSTNO(OverrunTxt,Over,Exact,Under,NoCeiling));
+    END;
+
+    LOCAL PROCEDURE CheckRingSilent@70(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Silent@1000000003 : Text;
+      Spoke@1000000004 : Text;
+      Quiet@1000000005 : Text;
+    BEGIN
+      // Кольцо system_health умеет замолкать целиком, и заметить это можно только счётом
+      // самого сервера (FINDINGS, раздел 62). Спрашиваются обе стороны и одна граница.
+      //
+      // Смолчало: круги сервер насчитал, кольцо не отдало ничего - слово обязано быть, и в
+      // нём обязано стоять ЧИСЛО: "что-то потерялось" без числа не отличить от опечатки.
+      //
+      // Отдало: круги были И кольцо их отдало - слова быть не должно. Без этой половины
+      // проверку прошёл бы сторож, ругающий кольцо после каждого прочитанного графа, а
+      // такой хуже молчащего: верить перестанут и тогда, когда кольцо замолчит взаправду.
+      //
+      // Тихо: кругов не было вовсе - молчание тут единственный честный ответ. Ноль кругов
+      // и ноль графов - это исправная тишина, а не потеря.
+      Silent := Parse.RingSilentNote(RingCirclesUnderTest,0);
+      Spoke := Parse.RingSilentNote(RingCirclesUnderTest,2);
+      Quiet := Parse.RingSilentNote(0,0);
+      Check(Passed,Total,Report,ChkRingTxt,
+        (STRPOS(Silent,FORMAT(RingCirclesUnderTest)) > 0) AND (Spoke = '') AND (Quiet = ''),
+        STRSUBSTNO(RingTxt,Silent,Spoke,Quiet));
+    END;
+
+    LOCAL PROCEDURE RingCirclesUnderTest@71() : Integer;
+    BEGIN
+      // Семь - число, которого в самих словах нет. Проверка ищет его в тексте поиском, и
+      // цифра из самого сообщения нашлась бы вместо него.
+      EXIT(7);
     END;
 
     LOCAL PROCEDURE KnownPrint@66() : Code[20];

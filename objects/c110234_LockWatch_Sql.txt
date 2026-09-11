@@ -729,22 +729,23 @@ OBJECT Codeunit 110234 LockWatch Sql
     END;
 
     [External]
-    PROCEDURE ReadDeadlocks@50(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer) : Boolean;
+    PROCEDURE ReadDeadlocks@50(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer;VAR Counted@1000000007 : BigInteger) : Boolean;
     BEGIN
       LastError := '';
       Rows := 0;
       OldestAt := 0DT;
       BufferPresent := FALSE;
+      Counted := 0;
       Found.RESET;
       Found.DELETEALL;
-      IF TryReadDeadlocks(SinceAt,MaxRows,WantStatements,Found,BufferPresent,OldestAt,Rows) THEN
+      IF TryReadDeadlocks(SinceAt,MaxRows,WantStatements,Found,BufferPresent,OldestAt,Rows,Counted) THEN
         EXIT(TRUE);
       LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
       EXIT(FALSE);
     END;
 
     [TryFunction]
-    LOCAL PROCEDURE TryReadDeadlocks@51(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer);
+    LOCAL PROCEDURE TryReadDeadlocks@51(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer;VAR Counted@1000000019 : BigInteger);
     VAR
       SqlConn@1000000007 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
@@ -772,6 +773,10 @@ OBJECT Codeunit 110234 LockWatch Sql
       IF SqlReader.Read THEN BEGIN
         BufferPresent := ReaderInt(SqlReader,0) <> 0;
         OldestAt := SqlMoment(ReaderInt(SqlReader,1),ReaderInt(SqlReader,2));
+        // Счёт кругов у самого сервера. Едет он ТУТ ЖЕ, четвёртым столбцом первого набора,
+        // а не отдельным запросом: соединение и так открыто, а лишний заход к серверу стоит
+        // дороже самого счёта. Права он не требует новых - всё тот же VIEW SERVER STATE.
+        Counted := ReaderBigInt(SqlReader,3);
       END;
       SqlReader.NextResult;
 
@@ -917,7 +922,14 @@ OBJECT Codeunit 110234 LockWatch Sql
       Sql := Sql +
         'SELECT CASE WHEN @x IS NULL THEN 0 ELSE 1 END,' +
         ' ISNULL(DATEDIFF(day,CONVERT(datetime,0),MIN(v.EventAt)),0),' +
-        ' ISNULL(DATEDIFF(ms,CONVERT(date,MIN(v.EventAt)),MIN(v.EventAt)),0)' +
+        ' ISNULL(DATEDIFF(ms,CONVERT(date,MIN(v.EventAt)),MIN(v.EventAt)),0),' +
+        // Круги сервер считает сам, и счёт этот от кольца не зависит вовсе: кольцо может
+        // замолчать целиком, а счётчик продолжит расти. Имя счётчика кончается на "/sec",
+        // но величина накопительная - это давняя странность имён у счётчиков SQL Server.
+        // Отбор по имени нестрогий: counter_name объявлен nchar(128) и добит пробелами.
+        ' ISNULL((SELECT TOP 1 c.cntr_value FROM sys.dm_os_performance_counters c' +
+        ' WHERE c.counter_name LIKE ' + Q + 'Number of Deadlocks/sec%' + Q +
+        ' AND c.instance_name ' + Eq + ' ' + Q + '_Total' + Q + '),0)' +
         ' FROM (SELECT n.e' + XVal('@timestamp','datetime2(3)') +
         ' AS EventAt FROM @x.nodes(' + Events + ') AS n(e)) v;';
 

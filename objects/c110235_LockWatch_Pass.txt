@@ -205,6 +205,11 @@ OBJECT Codeunit 110235 LockWatch Pass
       Added@1000000008 : Integer;
       BufferPresent@1000000009 : Boolean;
       Note@1000000010 : Text;
+      Counted@1000000012 : BigInteger;
+      WasCounted@1000000013 : BigInteger;
+      Circles@1000000014 : BigInteger;
+      CountReset@1000000015 : Boolean;
+      Ring@1000000016 : Text;
     BEGIN
       IF NOT Setup."Deadlocks Enabled" THEN
         EXIT('');
@@ -222,10 +227,14 @@ OBJECT Codeunit 110235 LockWatch Pass
       State."Deadlocks Read At" := CURRENTDATETIME;
       WasReadUntil := State."Deadlocks Read Until";
 
+      WasCounted := State."Deadlocks Counted";
       IF NOT Sql.ReadDeadlocks(WasReadUntil,Parse.MaxDeadlocksPerPass,
-                               Setup."Collect Statement Values",Found,BufferPresent,OldestAt,Rows)
+                               Setup."Collect Statement Values",Found,BufferPresent,OldestAt,Rows,Counted)
       THEN
         EXIT(' ' + STRSUBSTNO(DeadlockFailedTxt,Sql.LastErrorText));
+      // Счёт запоминается СРАЗУ после удачного чтения, до всякого разбора: иначе первое же
+      // расхождение обвинило бы кольцо в кругах, случившихся когда угодно раньше.
+      State."Deadlocks Counted" := Counted;
 
       IF NOT BufferPresent THEN
         // Выключенная сессия и отсутствие взаимоблокировок дают одну и ту же пустую
@@ -248,6 +257,18 @@ OBJECT Codeunit 110235 LockWatch Pass
       // "взаимоблокировок не было", а это ровно противоположный вывод.
       IF (WasReadUntil <> 0DT) AND (OldestAt <> 0DT) AND (OldestAt > WasReadUntil) THEN
         Note := ' ' + DeadlockLostTxt;
+      // Третий случай молчания кольца, и два соседних его не ловят: сессия работает, самое
+      // старое событие в выдаче старое - и проверка выше, и NoBufferTxt молчат обе.
+      // Спрашивается поэтому счёт САМОГО СЕРВЕРА, приехавший вместе с границей буфера.
+      //
+      // Нулевой прежний счёт - это "мерить не с чем", а не "кругов не было": первый проход
+      // после выкладки только заводит отметку. Обнуление счётчика перезапуском сервера
+      // разбирается тем же способом, что и обнуление счётчиков охвата, - и молчит по той же
+      // причине: прирост после него мерить не от чего.
+      Circles := Parse.CounterDelta(WasCounted,Counted,CountReset);
+      Ring := Parse.RingSilentNote(Circles,Rows);
+      IF (WasCounted > 0) AND (NOT CountReset) AND (Ring <> '') THEN
+        Note := Note + ' ' + Ring;
       IF Added > 0 THEN
         Note := Note + ' ' + STRSUBSTNO(DeadlocksTxt,Added);
       EXIT(Note);
@@ -342,12 +363,13 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Строка перечитывается под замком прямо перед ней: между началом прохода и его
       // концом человек мог нажать "стоп" или "начать счёт заново", а NAV сверяет версию
       // строки при записи. Отметки чтения, добытые проходом, переносятся в свежую строку
-      // поимённо - их три, и список этот стоит держать на виду.
+      // поимённо - их четыре, и список этот стоит держать на виду.
       Milliseconds := Elapsed;
       Fresh.FetchToWrite;
       Fresh."Deadlocks Read At" := State."Deadlocks Read At";
       Fresh."Deadlocks Read Until" := State."Deadlocks Read Until";
       Fresh."Coverage Since" := State."Coverage Since";
+      Fresh."Deadlocks Counted" := State."Deadlocks Counted";
       Fresh."Last Pass At" := At;
       Fresh."Last Pass (ms)" := Milliseconds;
       Fresh."Last Pass Rows" := Rows;

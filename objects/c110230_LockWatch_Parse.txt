@@ -31,6 +31,7 @@ OBJECT Codeunit 110230 LockWatch Parse
       EvLongWaitTxt@1000000017 : TextConst 'ENU=%1 ms against the threshold of %2 ms;RUS=%1 мс при пороге %2 мс';
       CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено сторожем блокировок, весь оператор %1 знаков, оставлено %2';
       OverrunTxt@1000000019 : TextConst 'ENU=The pass took %1 ms against the declared ceiling of %2.;RUS=Проход занял %1 мс при объявленном потолке %2.';
+      RingSilentTxt@1000000020 : TextConst 'ENU=Deadlocks counted by the server: %1, and the system_health ring gave back none. Its output is capped - restart the session.;RUS=Сервер насчитал кругов %1, кольцо system_health не отдало ни одного. Выдача кольца переполнена - нужен перезавод сессии.';
 
     [External]
     PROCEDURE NavLockTimeoutMs@10() : Integer;
@@ -711,7 +712,6 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
-    [External]
     PROCEDURE MaxStatementChars@56() : Integer;
     BEGIN
       // Шестнадцать тысяч знаков - это около двухсот строк, и узнать по ним запрос можно с
@@ -736,6 +736,28 @@ OBJECT Codeunit 110230 LockWatch Parse
       IF FullLength <= STRLEN(Body) THEN
         EXIT(Body);
       EXIT(Body + CrLf + STRSUBSTNO(CutTxt,FullLength,STRLEN(Body)));
+    END;
+
+    [External]
+    PROCEDURE RingSilentNote@65(Circles@1000000000 : BigInteger;GraphsRead@1000000001 : Integer) : Text;
+    BEGIN
+      // Кольцо system_health умеет замолкать ЦЕЛИКОМ. Выдача его имеет предел по размеру, и
+      // по достижении предела новое в неё не попадает вовсе - при работающей сессии и
+      // нулевом droppedCount. Замерено 11.09.2026: выдача стояла четыре часа на 4 191 392
+      // знаках, а сервер за это время насчитал три круга (FINDINGS, раздел 62).
+      //
+      // Два соседних случая инструмент различал и до этого: выключенную сессию - по пустой
+      // выдаче вовсе, вытеснение событий - по самому старому событию новее отметки.
+      // Замершую выдачу не ловит ни один из них: сессия работает, старое событие старое, и
+      // оба условия молчат разом. Ловится она только счётом САМОГО СЕРВЕРА - он считает
+      // круги независимо от кольца и стоит одну строку.
+      //
+      // Счёт этот общий на весь экземпляр, и потому слова подобраны осторожно: сказано,
+      // сколько насчитал СЕРВЕР и что кольцо не отдало ничего. Говорить "ваши
+      // взаимоблокировки потеряны" нельзя - прирост мог прийти и из чужой базы.
+      IF (Circles <= 0) OR (GraphsRead > 0) THEN
+        EXIT('');
+      EXIT(STRSUBSTNO(RingSilentTxt,Circles));
     END;
 
     [External]

@@ -22,6 +22,8 @@ OBJECT Table 110237 LockWatch Watchdog
     { 32  ;   ;Deadlocks Read At   ;DateTime      ;CaptionML=[ENU=Deadlocks Read At;
                                                               RUS=Буфер читали в];
                                                    Editable=No }
+    { 33  ;   ;Deadlocks Counted   ;BigInteger    ;CaptionML=[ENU=Deadlocks Counted by Server;
+                                                              RUS=Кругов насчитано сервером] }
     { 34  ;   ;Coverage Since      ;DateTime      ;CaptionML=[ENU=Coverage Since;
                                                               RUS=Охват считается с];
                                                    Editable=No }
