@@ -58,6 +58,7 @@ param(
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
     [int]    $PassCodeunitId = 110235,
+    [int]    $CoverageCodeunitId = 110238,
     [switch] $ContextRoad,
     [switch] $KeepJournal,
     [switch] $StopInstance
@@ -168,6 +169,7 @@ function Check([string]$what, [bool]$ok, [string]$detail) {
 $blocker = $null; $waiter = $null
 $probeHoldA = $null; $probeHoldB = $null; $probeWaiter = $null
 $headProc = $null; $midProc = $null; $tailProc = $null
+$raceProc = $null; $pressProc = $null; $passProc = $null
 # Запрос уезжает ФАЙЛОМ, а не параметром -Q. Start-Process склеивает элементы -ArgumentList
 # пробелом и кавычек вокруг них не ставит: запрос с пробелами рассыпается на аргументы,
 # sqlcmd молча выходит с ошибкой, а выглядит это как "блокировка не случилась".
@@ -243,6 +245,33 @@ function SweepAgeDays {
     # Три дня. Уборка берёт отметки старше суток, и трёхдневная старше этого с запасом на
     # любые часы стенда.
     3
+}
+
+function RaceHoldId {
+    # Мёртвый экземпляр той отметки, на которой проход встанет. Номер свой, не из занятых
+    # сценами выше, и БОЛЬШЕ их всех: уборка идёт по возрастанию номера, и встать проход
+    # обязан ПОСЛЕ того, как сметёт пачки предыдущей сцены, а не вместо этого.
+    -6
+}
+function RaceGoId {
+    # Отметка-знак: её появление говорит держателю "отпускай". Номер больше держателя, и
+    # кладётся она свежей - уборка дойдёт до неё после и не тронет по сроку.
+    -5
+}
+function RaceHoldTries {
+    # Держатель спрашивает знак каждые двести миллисекунд. Шестьсот попыток - две минуты:
+    # дольше держать замок незачем, к этому мигу опыт либо случился, либо провален.
+    600
+}
+function PressWaitSeconds {
+    # Столько ждём само нажатие. Модуль NAV в этом процессе уже загружен, и вызов идёт
+    # секунды; минута - запас вдесятеро, а превышение её значит, что служба не ответила.
+    60
+}
+function PassWaitSeconds {
+    # Столько ждём конца прохода, отпущенного из-под чужого замка. Проход на стенде идёт
+    # доли секунды, но поднимает свою сессию NAV; три минуты перекрывают это с запасом.
+    180
 }
 
 function Invoke-Pass([string]$why) {
@@ -816,6 +845,21 @@ WHERE wt.session_id = $spid AND wt.blocking_session_id = $by AND wt.wait_type LI
         return $false
     }
 
+    # Кто встал за держателем - неважно, чей это сеанс: сессию NAV по номеру процесса не
+    # спросишь, соединение держит служба. Спрашивается ФАКТ очереди за известным держателем.
+    function Wait-BlockedOn([int]$by) {
+        $stop = (Get-Date).AddSeconds(120)
+        while ((Get-Date) -lt $stop) {
+            $seen = Scalar @"
+SELECT TOP 1 CONVERT(varchar(11),wt.session_id) FROM sys.dm_os_waiting_tasks wt
+WHERE wt.blocking_session_id = $by AND wt.wait_type LIKE 'LCK[_]%';
+"@
+            if ($seen) { return [int]$seen }
+            Start-Sleep -Milliseconds 300
+        }
+        return 0
+    }
+
     $chainA = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'CHAIN-HEAD' WHERE [Server Instance Id] = -21`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
     $chainB = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'CHAIN-MID' WHERE [Server Instance Id] = -22`nUPDATE $mark SET [Document No_] = N'WANT-HEAD' WHERE [Server Instance Id] = -21`nROLLBACK`n"
     $chainC = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'CHAIN-TAIL' WHERE [Server Instance Id] = -23`nUPDATE $mark SET [Document No_] = N'WANT-MID' WHERE [Server Instance Id] = -22`nROLLBACK`n"
@@ -1020,6 +1064,124 @@ FROM sys.all_columns;
         (($b[0] -eq '1') -and ($b[1] -eq 'OBJECTLOCK') -and ($b[2] -eq 'LockWatch Context Mark') -and
          ($bulkAdvice -match 'whole table|таблицу целиком')) `
         "класс $($b[0]) при ожидаемом 1, род [$($b[1])], таблица [$($b[2])], эскалаций у таблицы $escBefore -> $escAfter; улика [$($b[3])]; совет: $bulkAdvice"
+
+    # Счёт охвата, начатый заново ВО ВРЕМЯ прохода. Состояние сторожа проход читает первым
+    # делом, а пишет последним, и между этими мигами лежит весь его труд - туда и попадает
+    # нажатие. Хозяев у отметки охвата двое: проход ставит её, когда её нет, а человек
+    # кнопкой ставит заново вместе с обнулением приростов. Пока конец прохода переписывал
+    # отметку тем, что прочитал в начале, нажатие отменялось молча - приросты обнулены,
+    # отметка прежняя, и доля охвата уходила за сотню процентов ровно там, где человек
+    # попросил начать заново.
+    #
+    # Окно делается ЗАМКОМ, а не сном. Уборка мёртвых отметок - ПЕРВАЯ запись прохода, и
+    # чужой замок на убираемой строке останавливает его сразу после чтения состояния и
+    # задолго до записи. Сон вместо замка мерил бы расторопность машины: сессия NAV
+    # поднимается секундами, и промах вышел бы в обе стороны.
+    Write-Host 'Счёт охвата, начатый заново во время прохода'
+    $sinceBefore = Scalar "SELECT CONVERT(varchar(30),[Coverage Since],126) FROM $state;"
+    if (-not $sinceBefore) { Fail 'отметки охвата нет - начинать заново нечего, опыт не удался' }
+    # Отметка под замок кладётся МЁРТВАЯ и старая: живую или свежую уборка пропустит по
+    # своим же правилам, и проход не встанет вовсе.
+    Invoke-Sql @"
+DELETE FROM $mark WHERE [Server Instance Id] IN ($(RaceHoldId),$(RaceGoId));
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+VALUES ($(RaceHoldId),1,N'STAND',N'$Company',0,N'RACE-HOLD',DATEADD(day,-$(SweepAgeDays),GETUTCDATE()));
+"@ | Out-Null
+    # Держатель отпускает по ЗНАКУ, а не по часам: проход поднимает сессию секундами, и
+    # замок "на глазок" либо отпустили бы до его прихода, либо передержали сверх предела
+    # ожидания NAV. Знак - появление второй отметки, и читает её держатель грязным чтением:
+    # обычное чтение встало бы за той самой уборкой, которую он и держит.
+    $raceHoldSql = @"
+SET LOCK_TIMEOUT -1
+BEGIN TRAN
+UPDATE $mark SET [Document No_] = N'RACE-HOLD' WHERE [Server Instance Id] = $(RaceHoldId)
+DECLARE @tries int = 0
+WHILE (@tries < $(RaceHoldTries)) AND NOT EXISTS (SELECT 1 FROM $mark WITH (NOLOCK) WHERE [Server Instance Id] = $(RaceGoId))
+BEGIN
+    WAITFOR DELAY '00:00:00.200'
+    SET @tries = @tries + 1
+END
+ROLLBACK
+"@
+    $raceProc = Start-Sqlcmd 'race-hold.sql' $raceHoldSql $holderHost
+    $spidRace = Get-Spid $raceProc
+    if ($spidRace -eq 0) { Fail 'держатель отметки не подключился - опыт не удался' }
+    if (-not (Wait-MarkHeld $spidRace)) { Fail 'держатель отметку не запер - опыт не удался' }
+
+    # Нажатие готовится ЗАРАНЕЕ. Модуль NAV грузится секундами, а проход стоит на чужом
+    # замке не дольше десяти (предел ожидания блокировки у NAV - 10 000 мс): нажатие,
+    # начатое с нуля уже внутри окна, не успело бы, и опыт мерил бы загрузку модуля.
+    # Процесс поднимается, греет дорогу к службе, говорит "готов" файлом и ждёт знака.
+    $readyFile = Join-Path $outDir 'press-ready.txt'
+    $goFile = Join-Path $outDir 'press-go.txt'
+    # Знаки прошлого захода снимаются: оставленный знак "жми" сработал бы до опыта.
+    Remove-Item $readyFile, $goFile -ErrorAction SilentlyContinue
+    $pressFile = Join-Path $outDir 'press-startover.ps1'
+    Write-Ps51 $pressFile @"
+`$ErrorActionPreference = 'Stop'
+$navImport
+Get-NAVServerSession -ServerInstance $Instance | Out-Null
+Set-Content -Path '$readyFile' -Value 'ready'
+while (-not (Test-Path '$goFile')) { Start-Sleep -Milliseconds 100 }
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $CoverageCodeunitId -MethodName StartOver -ErrorAction Stop
+"@
+    $pressOut = Join-Path $outDir 'press.out'
+    $pressErr = Join-Path $outDir 'press.err'
+    $pressProc = Start-Process -FilePath $ps51 -NoNewWindow -PassThru `
+        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $pressFile `
+        -RedirectStandardOutput $pressOut -RedirectStandardError $pressErr
+    $ready = $false
+    $readyBy = (Get-Date).AddSeconds((PassWaitSeconds))
+    while ((Get-Date) -lt $readyBy) {
+        if (Test-Path $readyFile) { $ready = $true; break }
+        if ($pressProc.HasExited) { break }
+        Start-Sleep -Milliseconds 300
+    }
+    if (-not $ready) {
+        Fail ('нажимающий не приготовился - опыт не удался: ' +
+              (((Get-Content $pressErr -Raw -ErrorAction SilentlyContinue)) -replace '\s+', ' '))
+    }
+
+    $passOut = Join-Path $outDir 'race-pass.out'
+    $passErr = Join-Path $outDir 'race-pass.err'
+    $passProc = Start-Process -FilePath $ps51 -NoNewWindow -PassThru `
+        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runFile `
+        -RedirectStandardOutput $passOut -RedirectStandardError $passErr
+    $blockedSpid = Wait-BlockedOn $spidRace
+    if ($blockedSpid -eq 0) { Fail 'проход на запертой отметке не встал - опыт не удался' }
+    # Знак "жми" - и сразу следом знак "отпускай": предел ожидания у NAV отсчитывается с
+    # того мига, как проход встал, и лишняя секунда здесь стоила бы опыта целиком.
+    Set-Content -Path $goFile -Value 'go'
+    $pressed = $pressProc.WaitForExit((PressWaitSeconds) * 1000)
+    if (-not $pressed) { $pressProc.Kill(); $pressProc.WaitForExit() }
+    if ((-not $pressed) -or ($pressProc.ExitCode -ne 0)) {
+        Fail ('нажатие не отработало - опыт не удался: ' +
+              ((((Get-Content $pressOut -Raw -ErrorAction SilentlyContinue)) +
+                ((Get-Content $pressErr -Raw -ErrorAction SilentlyContinue))) -replace '\s+', ' '))
+    }
+    # Отметка спрашивается ДО того, как проход отпущен: это и есть то, что поставил человек.
+    $sinceAfter = Scalar "SELECT CONVERT(varchar(30),[Coverage Since],126) FROM $state;"
+    Invoke-Sql @"
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+VALUES ($(RaceGoId),1,N'STAND',N'$Company',0,N'RACE-GO',GETUTCDATE());
+"@ | Out-Null
+    $finished = $passProc.WaitForExit((PassWaitSeconds) * 1000)
+    if (-not $finished) { $passProc.Kill(); $passProc.WaitForExit() }
+    Stop-Sqlcmd $raceProc
+    if ((-not $finished) -or ($passProc.ExitCode -ne 0)) {
+        Fail ('проход из-под чужого замка не отработал - опыт не удался: ' +
+              ((((Get-Content $passOut -Raw -ErrorAction SilentlyContinue)) +
+                ((Get-Content $passErr -Raw -ErrorAction SilentlyContinue))) -replace '\s+', ' '))
+    }
+    $sinceEnd = Scalar "SELECT CONVERT(varchar(30),[Coverage Since],126) FROM $state;"
+    $raceLeft = [int](Scalar "SELECT COUNT(*) FROM $mark WHERE [Server Instance Id] = $(RaceHoldId);")
+    if ($raceLeft -ne 0) { Fail 'проход до запертой отметки не добрался - окна не было, опыт не удался' }
+    # Половины две, и порознь они пусты: отметка обязана остаться ТОЙ, что поставил человек,
+    # и обязана отличаться от прежней - иначе проверка прошла бы и на неслучившемся нажатии.
+    Check 'счёт охвата, начатый во время прохода, концом прохода не отменяется' `
+        (($sinceEnd -eq $sinceAfter) -and ($sinceEnd -ne $sinceBefore)) `
+        ("до нажатия $sinceBefore, после нажатия $sinceAfter, после конца прохода $sinceEnd; " +
+         "проход встал сеансом $blockedSpid за держателем $spidRace")
 }
 finally {
     Stop-Sqlcmd $blocker
@@ -1030,6 +1192,11 @@ finally {
     Stop-Sqlcmd $headProc
     Stop-Sqlcmd $midProc
     Stop-Sqlcmd $tailProc
+    Stop-Sqlcmd $raceProc
+    # Нажимающий ждёт знака файлом и без знака не кончится сам: упавшая посреди сцена
+    # оставила бы процесс висеть до конца сеанса.
+    Stop-Sqlcmd $pressProc
+    Stop-Sqlcmd $passProc
     # Убираем за собой И строку-мишень, И эпизоды. Оставленный эпизод - не мусор, а помеха:
     # мерный прогон журнала отказывается работать по непустому журналу, и следующий прогон
     # упал бы с виду беспричинно. Оставить его можно нарочно, ключом -KeepJournal.
