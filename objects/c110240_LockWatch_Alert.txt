@@ -95,29 +95,6 @@ OBJECT Codeunit 110240 LockWatch Alert
       Latched := LatchedCount;
     END;
 
-    [External]
-    PROCEDURE TrimOldEntries@4(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
-    VAR
-      Threshold@1000000002 : DateTime;
-      Age@1000000003 : Duration;
-      Removed@1000000004 : Integer;
-    BEGIN
-      // Срок тот же, что у журнала эпизодов, и чистка такая же порционная: тревоги
-      // показывают чужие учётные записи, и бессрочное хранение - отдельный разговор.
-      IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
-        EXIT(0);
-      Age := RetentionDays * Parse.MsPerDay;
-      Threshold := CURRENTDATETIME - Age;
-      Alert.RESET;
-      Alert.SETCURRENTKEY("Raised At");
-      Alert.SETFILTER("Raised At",'<%1',Threshold);
-      IF Alert.FINDSET(TRUE) THEN
-        REPEAT
-          Alert.DELETE;
-          Removed := Removed + 1;
-        UNTIL (Removed >= MaxRows) OR (Alert.NEXT = 0);
-      EXIT(Removed);
-    END;
 
     LOCAL PROCEDURE Announce@5(VAR Row@1000000000 : Record 110236;SourceName@1000000001 : Text);
     VAR
@@ -185,6 +162,9 @@ OBJECT Codeunit 110240 LockWatch Alert
          источника событий, не выдали прав, - и тогда тревога всё равно остаётся здесь, а
          причина молчания видна. Молчащий канал, о котором никто не знает, хуже
          отсутствующего.
+      4. Убирает тревоги ЧЕЛОВЕК кнопкой на странице тревог, и никто больше. Срез по
+         сроку здесь был написан и снят: он удалял бы записи о разговоре с мониторингом
+         по числу дней, которого никто не называл, и не звал его ни один проход.
 
       Наружу тревога уходит в журнал событий Windows, и это выбор не от бедности. Своего
       канала в журнал событий у C/AL 2018 нет вовсе; почта требует настроенного SMTP,

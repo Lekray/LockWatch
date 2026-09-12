@@ -134,6 +134,19 @@ OBJECT Page 110231 LockWatch Episodes
                                  CurrPage.UPDATE(FALSE);
                                END;
                                 }
+      { 52      ;1   ;Action    ;
+                      Name=ShowPlatformLocks;
+                      CaptionML=[ENU=What the Platform Sees;
+                                 RUS=Что видит платформа];
+                      ToolTipML=[ENU=Show the standard lock table as the platform sees it right now. It is needed exactly when a name did not come back: an empty table and a table without the transaction in question are two different troubles, and they are cured differently.;
+                                 RUS=Показать штатную таблицу блокировок такой, какой её видит платформа сейчас. Нужно это ровно тогда, когда имя не назвалось: пустая таблица и таблица, где нет нужной транзакции, - две разные беды, и лечатся они по-разному.];
+                      ApplicationArea=#All;
+                      Image=ViewDetails;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 Platform.ShowLocks;
+                               END;
+                                }
       { 47      ;1   ;Action    ;
                       Name=NamePlatformUser;
                       CaptionML=[ENU=Name the User;

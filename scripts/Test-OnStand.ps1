@@ -241,8 +241,10 @@ function Split-CalArgs([string]$src, [int]$openAt) {
 # Ключ объекта - РОД И НОМЕР, а не номер: таблица 110230, кодюнит 110230 и страница 110230
 # живут рядом, и по одному номеру кодюнит разбора подменялся таблицей настройки.
 $pureCodeunits = @(110230, 110232)
-$benchCodeunits = @(110231, 110233, 110239, 110242)
-$heads = [regex]::Matches($monolith, '(?m)^OBJECT\s+(\w+)\s+(\d+)\s')
+# 110243 держит замок от имени названного пользователя и живёт одними прогонами - в этом
+# списке он потому же, почему и остальные: мерный объект не делает функцию живой.
+$benchCodeunits = @(110231, 110233, 110239, 110242, 110243)
+$heads = [regex]::Matches($monolith, '(?m)^OBJECT\s+(\w+)\s+(\d+)\s+(.+?)\s*$')
 if ($heads.Count -ne $files.Count) {
     Fail "заголовков объектов в пакете $($heads.Count) при $($files.Count) файлах - разбор пакета не полон"
 }
@@ -251,6 +253,7 @@ for ($i = 0; $i -lt $heads.Count; $i++) {
     $to = if ($i + 1 -lt $heads.Count) { $heads[$i + 1].Index } else { $monolith.Length }
     $parts += [pscustomobject]@{
         Kind = $heads[$i].Groups[1].Value; No = [int]$heads[$i].Groups[2].Value
+        Name = $heads[$i].Groups[3].Value
         Body = $monolith.Substring($heads[$i].Index, $to - $heads[$i].Index)
     }
 }
@@ -324,6 +327,120 @@ foreach ($pureNo in $pureCodeunits) {
 }
 if ($pinProblems) {
     Fail ("мерка меряет то, чего продукт не делает:`n  " + (($pinProblems | Sort-Object) -join "`n  "))
+}
+
+# Тот же вопрос с другого конца, и он проще: а ЗОВЁТ ли эту функцию хоть кто-нибудь на
+# живой дороге? Разделы 54 и 61-65 ловили мерку, которая меряет не то; здесь ловится
+# продукт, до которого не дойти. Найдено этим 12.09.2026 сразу двое: срез тревог по сроку,
+# которого не звал ни один проход, и показ блокировок платформы, написанный ровно для того
+# мига, когда имя не назвалось, - и не выведенный ни на одну страницу.
+#
+# Считается достижимостью от корней, а корня три:
+#   - тело объекта вне функций: триггеры страницы, полей и OnRun зовёт платформа;
+#   - функция с атрибутом [EventSubscriber]: её зовёт платформа же, по событию;
+#   - имя, названное в INSTALL.md кодом - в обратных кавычках или после -MethodName:
+#     такую функцию зовёт человек командой, и других внешних входов у инструмента нет.
+# Мерные объекты корнями не считаются вовсе: в том и беда, что мерка держит функцию живой
+# на вид. Зато считается своя же ссылка внутри объекта - функция, работающая на соседнюю,
+# доходит до боя через неё.
+$mould = Join-Path $root 'scripts\New-ContextAdapter.ps1'
+if (-not (Test-Path $mould)) { Fail 'сборщика переходника нет на месте - правило о нём протухло' }
+# Переходник в objects/ - ОБРАЗЕЦ: живой его вид собирает подстановкой этот скрипт, и
+# обкатку он подменяет целиком. Значит и вызовы его функций надо искать там же.
+$mouldText = [IO.File]::ReadAllText($mould)
+$installDoc = [IO.File]::ReadAllText((Join-Path $root 'docs\INSTALL.md'))
+$docNames = @()
+foreach ($m in [regex]::Matches($installDoc, '`([A-Za-z][A-Za-z0-9_]*)`')) { $docNames += $m.Groups[1].Value }
+foreach ($m in [regex]::Matches($installDoc, 'MethodName\s+([A-Za-z0-9_]+)')) { $docNames += $m.Groups[1].Value }
+$docNames = @($docNames | Sort-Object -Unique)
+
+$objOf = @{}
+foreach ($p in $parts) { $objOf["$($p.Kind)|$($p.Name)"] = $p }
+$regionsOf = @{}; $varsOf = @{}; $funcsOf = @{}
+foreach ($p in $parts) {
+    $key = "$($p.Kind)|$($p.No)"
+    $ms = [regex]::Matches($p.Body, '(?m)^\s*(?:LOCAL\s+)?PROCEDURE\s+([A-Za-z0-9_]+)@\d+')
+    $regions = @()
+    $firstAt = if ($ms.Count -gt 0) { $ms[0].Index } else { $p.Body.Length }
+    $regions += [pscustomobject]@{ Func = '(тело)'; Text = $p.Body.Substring(0, $firstAt) }
+    for ($i = 0; $i -lt $ms.Count; $i++) {
+        $to = if ($i + 1 -lt $ms.Count) { $ms[$i + 1].Index } else { $p.Body.Length }
+        $regions += [pscustomobject]@{ Func = $ms[$i].Groups[1].Value; Text = $p.Body.Substring($ms[$i].Index, $to - $ms[$i].Index) }
+    }
+    $regionsOf[$key] = $regions
+    $funcsOf[$key] = @($regions | Where-Object { $_.Func -ne '(тело)' } | ForEach-Object { $_.Func })
+    $map = @{}
+    # Record в объявлении - это Table в заголовке объекта. Без перевода ни одна табличная
+    # функция не находит хозяина, и все таблицы выглядят мёртвыми целиком.
+    foreach ($m in [regex]::Matches($p.Body, '(?m)([A-Za-z0-9_]+)@\d+\s*:\s*(?:VAR\s+)?(?:TEMPORARY\s+)?(Codeunit|Record|Page|Report|Query|XMLport)\s+(\d+)')) {
+        $kind = $m.Groups[2].Value
+        if ($kind -eq 'Record') { $kind = 'Table' }
+        $map[$m.Groups[1].Value] = "$kind|$([int]$m.Groups[3].Value)"
+    }
+    $varsOf[$key] = $map
+}
+# Вызов ищется по ИМЕНИ функции, а не по скобке: в C/AL функция без доводов зовётся без
+# скобок вовсе - "RunPass;", а не "RunPass()". Разбор по "имя(" теряет почти все вызовы и
+# объявляет мёртвым весь инструмент.
+$edges = @{}
+foreach ($p in $parts) {
+    $key = "$($p.Kind)|$($p.No)"
+    foreach ($r in $regionsOf[$key]) {
+        $from = "$key|$($r.Func)"
+        if (-not $edges.ContainsKey($from)) { $edges[$from] = @{} }
+        # Имя действия - не вызов. Кнопка зовётся Name=PurgeShown, и эта строка держала функцию
+        # живой даже тогда, когда из OnAction вызов вынут вовсе: первая же поломка это и показала.
+        # Свойства, чьё значение - голое имя, а не код, из разбора выкидываются целиком.
+        $text = $r.Text -replace '(?m)^[ ]*(?:Name|Image|PromotedCategory|ApplicationArea|ActionContainerType|GroupType|ContainerType|PageType)[ ]*=.*', ''
+        if (($p.Kind -eq 'Codeunit') -and ($p.No -eq $AdapterCodeunitId) -and ($r.Func -eq '(тело)')) { $text += $mouldText }
+        foreach ($v in $varsOf[$key].Keys) {
+            $target = $varsOf[$key][$v]
+            if (-not $funcsOf.ContainsKey($target)) { continue }
+            foreach ($fn in $funcsOf[$target]) {
+                if ([regex]::IsMatch($text, "(?<![A-Za-z0-9_])$v\.$fn(?![A-Za-z0-9_@])")) { $edges[$from]["$target|$fn"] = $true }
+            }
+        }
+        foreach ($fn in $funcsOf[$key]) {
+            if ($fn -eq $r.Func) { continue }
+            if ([regex]::IsMatch($text, "(?<![.A-Za-z0-9_])$fn(?![A-Za-z0-9_@])")) { $edges[$from]["$key|$fn"] = $true }
+        }
+        foreach ($m in [regex]::Matches($text, '(CODEUNIT|PAGE|REPORT)::"([^"]+)"')) {
+            $kind = switch ($m.Groups[1].Value) { 'CODEUNIT' { 'Codeunit' } 'PAGE' { 'Page' } 'REPORT' { 'Report' } }
+            $other = $objOf["$kind|$($m.Groups[2].Value)"]
+            if ($other) { $edges[$from]["$($other.Kind)|$($other.No)|(тело)"] = $true }
+        }
+    }
+}
+$roots = @()
+foreach ($p in $parts) {
+    $key = "$($p.Kind)|$($p.No)"
+    if (($p.Kind -eq 'Codeunit') -and ($benchCodeunits -contains $p.No)) { continue }
+    $roots += "$key|(тело)"
+    foreach ($m in [regex]::Matches($p.Body, '(?m)^\s*\[EventSubscriber\([^\r\n]*\)\]\s*\r?\n\s*(?:LOCAL\s+)?PROCEDURE\s+([A-Za-z0-9_]+)@')) {
+        $roots += "$key|$($m.Groups[1].Value)"
+    }
+    foreach ($fn in $funcsOf[$key]) {
+        if ($docNames -contains $fn) { $roots += "$key|$fn" }
+    }
+}
+$reached = @{}; $stack = [Collections.Stack]::new()
+foreach ($r in $roots) { $stack.Push($r) }
+while ($stack.Count -gt 0) {
+    $node = $stack.Pop()
+    if ($reached.ContainsKey($node)) { continue }
+    $reached[$node] = $true
+    if ($edges.ContainsKey($node)) { foreach ($t in $edges[$node].Keys) { $stack.Push($t) } }
+}
+$unreachable = @()
+foreach ($p in $parts) {
+    $key = "$($p.Kind)|$($p.No)"
+    if (($p.Kind -eq 'Codeunit') -and ($benchCodeunits -contains $p.No)) { continue }
+    foreach ($fn in $funcsOf[$key]) {
+        if (-not $reached.ContainsKey("$key|$fn")) { $unreachable += "$($p.Kind) $($p.No) $($p.Name) :: $fn" }
+    }
+}
+if ($unreachable) {
+    Fail ("до боевой функции не доходит живая дорога:`n  " + (($unreachable | Sort-Object) -join "`n  "))
 }
 
 $packUtf = Join-Path $outDir 'LockWatch.txt'

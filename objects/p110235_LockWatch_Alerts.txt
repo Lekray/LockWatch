@@ -66,6 +66,19 @@ OBJECT Page 110235 LockWatch Alerts
                                  PAGE.RUN(PAGE::"LockWatch Setup");
                                END;
                                 }
+      { 24      ;1   ;Action    ;
+                      Name=PurgeShown;
+                      CaptionML=[ENU=Delete What Is Shown;
+                                 RUS=Удалить показанное];
+                      ToolTipML=[ENU=Delete exactly the alerts this list is showing right now. The background pass never clears alerts: an alert is the record that a message went out, and erasing it would sign off on someone else's talk with monitoring. So a person presses this, and the count is named before the question.;
+                                 RUS=Удалить ровно те тревоги, которые список показывает сейчас. Фоном тревоги не чистятся никогда: тревога - запись о том, что наружу ушло сообщение, и стереть её значит расписаться за чужой разговор с мониторингом. Поэтому жмёт это человек, и число называется до вопроса.];
+                      ApplicationArea=#All;
+                      Image=Delete;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 PurgeShown;
+                               END;
+                                }
     }
   }
   CONTROLS
@@ -176,6 +189,10 @@ OBJECT Page 110235 LockWatch Alerts
   }
   CODE
   {
+    VAR
+      NothingShownTxt@1000000000 : TextConst 'ENU=The list is showing nothing, so there is nothing to delete.;RUS=Список сейчас ничего не показывает, значит и удалять нечего.';
+      ConfirmPurgeTxt@1000000001 : TextConst 'ENU=Delete %1 alerts? This is exactly what the list is showing right now, and the messages that already went out stay out.;RUS=Удалить %1 тревог? Это ровно то, что список показывает сейчас, а ушедшие наружу сообщения останутся ушедшими.';
+      PurgedTxt@1000000002 : TextConst 'ENU=Deleted alerts: %1.;RUS=Удалено тревог: %1.';
 
     LOCAL PROCEDURE ShowEpisode@1();
     VAR
@@ -198,6 +215,31 @@ OBJECT Page 110235 LockWatch Alerts
       Episode.SETCURRENTKEY("Head SPID",Open);
       Episode.SETRANGE("Head SPID",Spid);
       PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
+    END;
+
+    LOCAL PROCEDURE PurgeShown@3();
+    VAR
+      Doomed@1000000000 : Record 110236;
+      Rows@1000000001 : Integer;
+    BEGIN
+      // Единственное место, где тревоги удаляются, и нажать его должен человек: фоном они
+      // не чистятся нарочно, довод записан в самом проходе. Тревога - запись о том, что
+      // наружу ушло сообщение, и стирать её за мониторинг инструмент не станет.
+      //
+      // Отбор берётся С ЭКРАНА, как в истории: что человек видит, то и уйдёт. Число
+      // называется ДО вопроса - "удалить показанное" без счёта это предложение
+      // согласиться неизвестно на что.
+      Doomed.COPYFILTERS(Rec);
+      Rows := Doomed.COUNT;
+      IF Rows = 0 THEN BEGIN
+        MESSAGE(NothingShownTxt);
+        EXIT;
+      END;
+      IF NOT CONFIRM(ConfirmPurgeTxt,FALSE,Rows) THEN
+        EXIT;
+      Doomed.DELETEALL;
+      CurrPage.UPDATE(FALSE);
+      MESSAGE(PurgedTxt,Rows);
     END;
 
     BEGIN
