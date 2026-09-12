@@ -22,6 +22,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       Journal@1000000002 : Codeunit 110232;
       Coverage@1000000036 : Codeunit 110238;
       AlertMgt@1000000040 : Codeunit 110240;
+      Mark@1000000043 : Record 110233;
       NamesFailedTxt@1000000003 : TextConst 'ENU=Episodes are logged, but table and key names are missing: %1;RUS=Эпизоды записаны, но имена таблиц и ключей не получены: %1';
       OtherDbTxt@1000000004 : TextConst 'ENU=Skipped %1 waits belonging to another database on the same server.;RUS=Пропущено %1 ожиданий, относящихся к другой базе на том же сервере.';
       QuietTxt@1000000005 : TextConst 'ENU=Pass went through, the queue is empty.;RUS=Проход прошёл, очередь пуста.';
@@ -34,6 +35,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       DeadlockFailedTxt@1000000032 : TextConst 'ENU=Deadlocks are not read: %1;RUS=Взаимоблокировки не прочитаны: %1';
       DeadlocksTxt@1000000033 : TextConst 'ENU=Deadlocks added %1.;RUS=Взаимоблокировок добавлено %1.';
       MovedTxt@1000000042 : TextConst 'ENU=Moved to history %1.;RUS=Уехало в историю %1.';
+      SweptTxt@1000000044 : TextConst 'ENU=Swept marks of dead sessions %1.;RUS=Убрано отметок мёртвых сеансов %1.';
       DeadlockLostTxt@1000000034 : TextConst 'ENU=The ring buffer evicted events newer than the mark, some deadlocks are lost.;RUS=Буфер вытеснил события новее отметки, часть взаимоблокировок потеряна.';
       NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
       CoverageFailedTxt@1000000037 : TextConst 'ENU=Coverage counters are not read: %1;RUS=Счётчики охвата не прочитаны: %1';
@@ -68,6 +70,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       State@1000000030 : Record 110237;
       PassMs@1000000031 : Integer;
       Overrun@1000000032 : Text;
+      Swept@1000000033 : Integer;
     BEGIN
       // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
       // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
@@ -81,6 +84,13 @@ OBJECT Codeunit 110235 LockWatch Pass
       // тревоги наружу. В сессии с окном язык не трогается вовсе - разбирается это внутри.
       Parse.UseJournalLanguage(Setup."Journal Language ID");
       StartedAt := CURRENTDATETIME;
+
+      // Отметки контекста не убирает никто, а ключ у них - экземпляр службы плюс номер
+      // сеанса: и то, и другое меняется при каждом запуске службы. Убирает их проход, и
+      // делает это ПЕРВЫМ шагом, до единой своей записи: уборке нужно чтение мимо кэша
+      // службы, а внутри начатой транзакции такого чтения не бывает. Сказано об убранном
+      // будет в конце, вместе с остальными словами прохода.
+      Swept := Mark.SweepDead(MarkSweepPerPass);
 
       IF NOT Sql.ReadQueue(Setup."Max Rows per Pass",Setup."Collect Statement Values",
                            Observed,Waiter,Blocker,BlockerIsNav,
@@ -146,6 +156,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       Note := Note + MovedNote(Journal.MoveOldEntries(Setup."Retention (Days)",
                                                       Setup."Journal Rows Ceiling",
                                                       TrimRowsPerPass(Setup."Max Rows per Pass")));
+
+      Note := Note + SweptNote(Swept);
 
       Truncated := (Setup."Max Rows per Pass" > 0) AND (RowCount >= Setup."Max Rows per Pass");
       Elapsed := CURRENTDATETIME - StartedAt;
@@ -440,6 +452,27 @@ OBJECT Codeunit 110235 LockWatch Pass
       // мешают. Ниже него уборка не опускается, даже если потолок наблюдения занижен до
       // единиц: тогда завал не разобрался бы вовсе.
       EXIT(200);
+    END;
+
+    LOCAL PROCEDURE SweptNote@15(Swept@1000000000 : Integer) : Text;
+    BEGIN
+      // Ноль не пишется по той же причине, что и у переезда: строку сторожа читают каждым
+      // проходом, и постоянное "убрано 0" заслонило бы в ней то, ради чего её читают.
+      IF Swept = 0 THEN
+        EXIT('');
+      EXIT(' ' + STRSUBSTNO(SweptTxt,Swept));
+    END;
+
+    LOCAL PROCEDURE MarkSweepPerPass@16() : Integer;
+    BEGIN
+      // Тысяча отметок за проход, и потолок этот НЕ общий с уборкой журнала. Граница у него
+      // чужая: свыше пяти тысяч строк в одном операторе сервер переводит замки на ВСЮ
+      // таблицу, а таблица отметок - единственная, куда пишут сессии заказчика. Уборка,
+      // запирающая её целиком, стоила бы ровно того, что инструмент и ловит.
+      //
+      // Тысячи хватает с запасом: на стенде за двенадцать дней набралось 82 057 разных пар
+      // "экземпляр плюс сеанс", а тысяча за проход разбирает такой завал за минуты.
+      EXIT(1000);
     END;
 
     LOCAL PROCEDURE MovedNote@14(Moved@1000000000 : Integer) : Text;

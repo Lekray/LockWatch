@@ -228,6 +228,22 @@ $ps51 = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 # Предел эскалации у SQL Server - пять тысяч замков на ОДИН оператор; шесть тысяч проходят
 # его с запасом и остаются дешёвыми: вставка и откат такой пачки не стоят и секунды.
 function BulkRows { 6000 }
+function SweepCeiling {
+    # Столько отметок инструмент обещает убирать за проход. Число это не из настройки, а из
+    # кода прохода: у него там свой довод - выше пяти тысяч сервер запирает таблицу целиком.
+    1000
+}
+function SweepPlanted {
+    # На двести больше потолка: остаток и есть доказательство, что потолок соблюдён. Ровно
+    # потолок доказывал бы только то, что уборка дошла до конца пачки.
+    1200
+}
+function SweepKept { 5 }
+function SweepAgeDays {
+    # Три дня. Уборка берёт отметки старше суток, и трёхдневная старше этого с запасом на
+    # любые часы стенда.
+    3
+}
 
 function Invoke-Pass([string]$why) {
     $log = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runFile 2>&1 | Out-String
@@ -947,6 +963,56 @@ FROM $episode WHERE [Victim SPID] = $bulkWait ORDER BY [Entry No_] DESC;
     $bulkAdvice = Scalar "SELECT TOP 1 LEFT([Advice],90) FROM $episode WHERE [Victim SPID] = $bulkWait ORDER BY [Entry No_] DESC;"
     Stop-Sqlcmd $bulkWaiter
     Stop-Sqlcmd $bulkProc
+    # Уборка мёртвых отметок. До 12.09.2026 отметки не убирал никто, а ключ у них - экземпляр
+    # службы плюс номер сеанса, и оба меняются при каждом запуске службы: за двенадцать дней
+    # на стенде набралось 82 057 разных пар (FINDINGS, раздел 67). Сцена кладёт три пачки и
+    # смотрит, чтобы ушла ровно одна и ровно потолком.
+    Write-Host 'Уборка отметок: мёртвый экземпляр, живой экземпляр и свежая отметка'
+    Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] BETWEEN -9 AND -7;" | Out-Null
+    # Строка в таблице активных сеансов кладётся НАРОЧНО: без неё половина «живое не трогаем»
+    # не проверялась бы вовсе - у живого экземпляра своих отметок на стенде нет. Это ровно то
+    # правило, по которому уборка отличает живой экземпляр от мёртвого, и проверять его надо
+    # тем же, чем она спрашивает.
+    Invoke-Sql @"
+DELETE FROM dbo.[Active Session] WHERE [Server Instance ID] = -9;
+INSERT INTO dbo.[Active Session] ([Server Instance ID],[Session ID],[User SID],[Server Instance Name],
+       [Server Computer Name],[User ID],[Client Type],[Client Computer Name],[Login Datetime],
+       [Database Name],[Session Unique ID])
+VALUES (-9,1,NEWID(),N'LW Probe',N'LW Probe',N'LW PROBE',0,N'LW Probe',GETDATE(),N'$Database',NEWID());
+"@ | Out-Null
+    Invoke-Sql @"
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+SELECT TOP $(SweepPlanted) -7, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'STAND', N'$Company', 0, N'SWEEP-OLD',
+       DATEADD(day,-$(SweepAgeDays),GETUTCDATE())
+FROM sys.all_columns;
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+SELECT TOP $(SweepKept) -8, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'STAND', N'$Company', 0, N'SWEEP-FRESH',
+       GETUTCDATE()
+FROM sys.all_columns;
+INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
+SELECT TOP $(SweepKept) -9, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), N'STAND', N'$Company', 0, N'SWEEP-ALIVE',
+       DATEADD(day,-$(SweepAgeDays),GETUTCDATE())
+FROM sys.all_columns;
+"@ | Out-Null
+    Invoke-Pass 'проход с уборкой отметок'
+    $leftOld = [int](Scalar "SELECT COUNT(*) FROM $mark WHERE [Server Instance Id] = -7;")
+    $leftFresh = [int](Scalar "SELECT COUNT(*) FROM $mark WHERE [Server Instance Id] = -8;")
+    $leftAlive = [int](Scalar "SELECT COUNT(*) FROM $mark WHERE [Server Instance Id] = -9;")
+    $sweepNote = Scalar "SELECT TOP 1 [Watchdog Message] FROM $state;"
+    Invoke-Sql "DELETE FROM dbo.[Active Session] WHERE [Server Instance ID] = -9;" | Out-Null
+    # Три пачки разом, и порознь они ничего не доказывают: уборка, сносящая всё, зелена по
+    # первой; уборка, не сносящая ничего, зелена по второй и третьей.
+    Check 'убраны отметки мёртвого экземпляра, а живого и свежие - оставлены' `
+        (($leftOld -eq ($(SweepPlanted) - $(SweepCeiling))) -and ($leftFresh -eq $(SweepKept)) -and
+         ($leftAlive -eq $(SweepKept))) `
+        ("мёртвых осталось $leftOld при ожидаемых $($(SweepPlanted) - $(SweepCeiling)), свежих $leftFresh " +
+         "при ожидаемых $(SweepKept), у живого экземпляра $leftAlive при ожидаемых $(SweepKept)")
+    # Число говорится ВСЛУХ: уборка, о которой сторож молчит, отличается от несостоявшейся
+    # только тем, что о ней знает один код.
+    Check 'сторож назвал, сколько отметок убрано за проход' `
+        ($sweepNote -match "(Swept marks of dead sessions|Убрано отметок мёртвых сеансов) $(SweepCeiling)") `
+        "строка сторожа: $sweepNote"
+
     # Спрашивается и класс, и СОВЕТ: класс без совета - это число в колонке, которое никто не
     # читает. На прежнем коде класс тут 0, а совет - про долгое ожидание, и в нём прямо
     # сказано "признаков эскалации нет".
@@ -971,6 +1037,9 @@ finally {
     # Отметки сметаются диапазоном, а не по одному номеру: сцен, кладущих свои отметки,
     # теперь три, и забытая отметка переживёт прогон и запутает следующий.
     $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] BETWEEN -29 AND -1; DELETE FROM $context WHERE [Table No_] = 110233;"
+    # Подложный сеанс убирается и здесь: выход из сцены по ошибке оставил бы его в таблице
+    # платформы, и следующая уборка обходила бы мёртвый экземпляр вечно.
+    $cleanup += " DELETE FROM dbo.[Active Session] WHERE [Server Instance ID] = -9;"
     $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = 1, [Collect Statement Values] = 0;"
     $cleanup += " DELETE FROM $coverage; UPDATE $state SET [Coverage Since] = $blankDate;"
     # Настройка тревоги возвращается в исходное: порог и канал - то, чем инструмент
