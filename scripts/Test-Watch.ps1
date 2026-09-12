@@ -258,6 +258,30 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
     if ($LASTEXITCODE -ne 0) { Fail "$method не отработал:`n$log" }
 }
 
+function Try-Method([string]$method) {
+    # Тот же вызов, но отказ здесь - не беда прогона, а ОТВЕТ: сцена спрашивает, падает ли
+    # завод после чужой правки, и падение обязано стать числом в проверке, а не концом
+    # прогона.
+    $file = Join-Path $outDir "try-$method.ps1"
+    Write-Ps51 $file @"
+`$ErrorActionPreference = 'Stop'
+$navImport
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TaskCodeunitId -MethodName $method -ErrorAction Stop
+"@
+    $log = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $file 2>&1 | Out-String
+    $line = ($log -split "`r?`n" | Where-Object { $_ -match 'Invoke-NAVCodeunit|Sorry|ERROR|Ошибка' } | Select-Object -First 1)
+    # Кавычки вокруг $line обязательны: строки ошибки на успешном вызове нет вовсе, а
+    # $null -replace отдаёт ПУСТОЙ МАССИВ, а не пустую строку, и .Trim() на нём падает.
+    # Ловится это только на зелёном пути - там, где отказа и не ждали.
+    return [pscustomobject]@{ Ok = ($LASTEXITCODE -eq 0); Log = (("$line" -replace '\s+', ' ')).Trim() }
+}
+
+function ProbeThresholdMs {
+    # Число заведомо не заводское: порог по умолчанию 5000, и совпадение с ним скрыло бы
+    # подмену - проверка прошла бы и на затёртой правке.
+    7777
+}
+
 # Тот же вызов, но с ОТВЕТОМ: слово инструмента приходит через MESSAGE, а командлет отдаёт
 # его предупреждением в свой вывод. Отдельная функция нужна затем, что обычный вызов ответа
 # не возвращает - иначе каждый StartWatch печатал бы приветствие модуля прямо в отчёт.
@@ -316,9 +340,10 @@ try {
         Fail 'проходы прошлого прогона не прекратились'
     }
     # Настройку через SQL НЕ обнуляем. Строка настройки одна на базу, и служба держит её
-    # в кэше: UPDATE мимо NAV до сессии не доходит, а первое же обращение к настройке
-    # запишет кэшированную строку обратно - вместе со старой отметкой последнего прохода.
-    # Прогон тогда видит "проход был" ещё до первого прохода. Поэтому отметка не обнуляется,
+    # в кэше: UPDATE мимо NAV до сессии не доходит. Здесь раньше стояло предположение, будто
+    # первое же обращение запишет кэшированную строку обратно; замер 13.09.2026 говорит
+    # другое - запись из NAV в правленную мимо строку не проходит ВОВСЕ и отказывает словами
+    # про страницу (FINDINGS, раздел 69). Вывод от этого не меняется: отметка не обнуляется,
     # а ЗАПОМИНАЕТСЯ, и проверка ждёт её ИЗМЕНЕНИЯ.
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
@@ -377,6 +402,26 @@ FROM $state;
     $stateMoved = (StateStamp) -ne $stateStamp
     Check 'проход пишет своё состояние и не трогает строку настройки' ($setupHeld -and $stateMoved) `
         "версия настройки $(if ($setupHeld) { 'не менялась' } else { 'СДВИНУЛАСЬ' }), версия состояния $(if ($stateMoved) { 'сдвинулась' } else { 'НЕ МЕНЯЛАСЬ' })"
+
+    # Настройка, правленная МИМО NAV. На запертой установке это первый же порыв: поменять
+    # порог прямо в SQL. Служба такой правки не видит - строка лежит в её кэше, - и это
+    # полбеды; беда в том, что первая же запись из NAV в ту же строку падает совсем, а
+    # говорит при этом про страницу, которой нет (FINDINGS, раздел 69). Завод сторожа - как
+    # раз такая запись.
+    #
+    # Кэш прогревается НАРОЧНО: сцена спрашивает слово сторожа перед правкой. Без этого она
+    # зависела бы от того, читал ли кто-то настройку в этой жизни службы.
+    Ask-Method 'SayHealth' | Out-Null
+    $thresholdWas = Scalar "SELECT [Alert Threshold (ms)] FROM $setup;"
+    Invoke-Sql "UPDATE $setup SET [Alert Threshold (ms)] = $(ProbeThresholdMs);" | Out-Null
+    $armAgain = Try-Method 'StartWatch'
+    $thresholdNow = Scalar "SELECT [Alert Threshold (ms)] FROM $setup;"
+    Invoke-Sql "UPDATE $setup SET [Alert Threshold (ms)] = $thresholdWas;" | Out-Null
+    # Половины две, и порознь они пусты: завод, читающий кэш, падает - и первая краснеет; а
+    # завод, прочитавший кэш и всё же записавший, вернул бы прежний порог - краснеет вторая.
+    Check 'настройка, правленная мимо NAV, не ломает завод сторожа' `
+        ($armAgain.Ok -and ($thresholdNow -eq "$(ProbeThresholdMs)")) `
+        "завод $(if ($armAgain.Ok) { 'отработал' } else { "ОТКАЗАЛ: $($armAgain.Log)" }), порог после завода $thresholdNow при ожидаемом $(ProbeThresholdMs)"
 
     # Завод ПОВЕРХ идущего прохода. Строка исполняющейся задачи в таблице есть, но снятие
     # её не останавливает: она доходит до конца и на прежнем коде перевзводила себя уже
