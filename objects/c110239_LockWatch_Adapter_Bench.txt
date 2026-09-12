@@ -22,6 +22,7 @@ OBJECT Codeunit 110239 LockWatch Adapter Bench
       // указывая на строку константы, а не на причину.
       ResultTxt@1000000000 : TextConst 'ENU=ADAPTERBENCH ms %1 rows %2 us %3 marked %4;RUS=ADAPTERBENCH ms %1 rows %2 us %3 marked %4';
       DirtyErr@1000000001 : TextConst 'ENU=The bench document %1 already has %2 lines. A previous run did not clean up after itself, and measuring on top of them would measure the wrong thing.;RUS=У мерного документа %1 уже есть %2 строк. Прошлый прогон за собой не убрал, и мерить поверх них значило бы мерить не то.';
+      NoRowErr@1000000002 : TextConst 'ENU=There is no context table row for table %1, so there is no switch to flip. The bench expects the row to be there already.;RUS=Строки таблицы контекста для таблицы %1 нет, а значит и переключать нечего. Мерный объект ждёт её заведённой.';
 
     [External]
     PROCEDURE Bench@1();
@@ -84,6 +85,33 @@ OBJECT Codeunit 110239 LockWatch Adapter Bench
       EXIT(2000);
     END;
 
+    [External]
+    PROCEDURE ContextOff@4();
+    BEGIN
+      SetContext(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ContextOn@5();
+    BEGIN
+      SetContext(TRUE);
+    END;
+
+    LOCAL PROCEDURE SetContext@6(On@1000000000 : Boolean);
+    VAR
+      ContextTable@1000000001 : Record 110232;
+    BEGIN
+      // Галку щёлкает ЧЕЛОВЕК на странице, то есть записью из сессии NAV. Прогон, правящий
+      // её через SQL, меряет не галку, а кэш службы: правка мимо NAV до сессий не доходит
+      // вовсе (FINDINGS, раздел 67), и потому вокруг такой правки стоит перезапуск. Здесь
+      // галка переключается так же, как её переключает человек, и перезапуска не будет -
+      // затем эти два метода и заведены.
+      IF NOT ContextTable.GET(DATABASE::"Sales Line") THEN
+        ERROR(NoRowErr,DATABASE::"Sales Line");
+      ContextTable.Enabled := On;
+      ContextTable.MODIFY;
+    END;
+
     LOCAL PROCEDURE BenchDocumentNo@3() : Code[20];
     BEGIN
       // Номер заведомо не встречающийся: прогон пишет в ЖИВУЮ таблицу, и столкнуться с
@@ -107,6 +135,11 @@ OBJECT Codeunit 110239 LockWatch Adapter Bench
       Второй вариант отвечает на вопрос, который задают первым: "а если выключить?".
       Третий - на вопрос "а если оставить?". Первый нужен, чтобы было с чем сравнивать:
       два числа без базового - это не замер.
+
+      Есть и четвёртый, и он не про цену, а про обещание: галка, щёлкнутая из сессии NAV,
+      обязана действовать в ДРУГИХ сессиях сразу, без перезапуска службы. Переключают её
+      для этого ContextOff и ContextOn - записью, как человек на странице, а не правкой
+      через SQL: правка мимо NAV до сессий не доходит вовсе.
 
       Улика того, что варианты РАЗНЫЕ, - поле marked в ответе. Без него прогон, в котором
       подписка молча не сработала, дал бы три одинаковых числа и был бы объявлен успехом.

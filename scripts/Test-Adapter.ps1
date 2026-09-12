@@ -164,6 +164,16 @@ function MeasureRepeats {
     return 3
 }
 
+function Read-Bench([string]$why) {
+    # Одного прогона довольно: здесь спрашивается не цена, а ОТМЕТКА - ставится она или
+    # нет. Разогрев и лучшее из трёх нужны числу в микросекундах, а не единице с нулём.
+    $log = Invoke-Codeunit $BenchCodeunitId 'Bench' $why
+    if ($log -notmatch 'ADAPTERBENCH ms (\d+) rows (\d+) us (\d+) marked (\d+)') {
+        Fail "мерный объект не отчитался ($why):`n$log"
+    }
+    return [pscustomobject]@{ Ms = [int]$Matches[1]; Rows = [int]$Matches[2]; Us = [int]$Matches[3]; Marked = [int]$Matches[4] }
+}
+
 function Measure-Mode([string]$why) {
     # Первый прогон после перезапуска меряет не подписку, а РАЗОГРЕВ службы: NAV собирает
     # business assemblies и наполняет кэш метаданных, и это сотни миллисекунд на ровном
@@ -241,6 +251,24 @@ VALUES ($sampleTableNo,N'Sales Line',3,N'Document No.',N'Строка прода
     Check 'нет подписчика - нет отметки; снятая галка - тоже нет; и только галка её даёт' `
         (($noAdapter.Marked -eq 0) -and ($offAdapter.Marked -eq 0) -and ($onAdapter.Marked -eq 1)) `
         "отметка: без подписчика $($noAdapter.Marked), выключен $($offAdapter.Marked), включён $($onAdapter.Marked)"
+
+    # ---------- вариант 4: галка щёлкается из сессии NAV, без перезапуска ----------
+    #
+    # Три варианта выше меняли галку через SQL и КАЖДЫЙ раз перезапускали службу. Перезапуск
+    # в обещании не назван: обещано "выключить переходник, не выкладывая объектов, - в один
+    # щелчок". Щелчок - это запись из сессии NAV, и подействовать он обязан в других сессиях
+    # сразу. Правка через SQL до них и не дошла бы вовсе (FINDINGS, раздел 67), так что
+    # проверить обещание можно только записью, а не UPDATE.
+    Write-Host 'Вариант четвёртый: галка щёлкается из сессии NAV, службу не трогаем'
+    Invoke-Codeunit $BenchCodeunitId 'ContextOff' 'снятие галки из сессии NAV' | Out-Null
+    $afterOff = Read-Bench 'отметка после снятия галки'
+    Invoke-Codeunit $BenchCodeunitId 'ContextOn' 'возврат галки из сессии NAV' | Out-Null
+    $afterOn = Read-Bench 'отметка после возврата галки'
+    # Обе половины разом: переходник, который перестал отмечать НАВСЕГДА, зелен по первой,
+    # а не заметивший снятия - по второй.
+    Check 'галка, щёлкнутая из сессии NAV, действует в других сессиях сразу' `
+        (($afterOff.Marked -eq 0) -and ($afterOn.Marked -eq 1)) `
+        "отметка: после снятия $($afterOff.Marked), после возврата $($afterOn.Marked)"
 
     # Потолок объявленный, и довод у него простой: подписчик, удваивающий цену КАЖДОЙ
     # записи на горячей таблице, не выкладывается ни при каких обещаниях пользы.

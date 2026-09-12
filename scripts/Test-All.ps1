@@ -176,7 +176,7 @@ $runs = @(
     }
     @{
         Name = 'adapter'; Script = 'Test-Adapter.ps1'; Extra = @()
-        Checks = 8; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO', 'LW_DOC_FIELD_NO')
+        Checks = 9; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO', 'LW_DOC_FIELD_NO')
         Why = 'снимает со стенда штатный переходник; всё, кому он нужен целым, уже прошло'
         What = 'цена подписки тремя вариантами, сборщик переходника от начала до конца'
     }
