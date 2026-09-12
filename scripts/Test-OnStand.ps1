@@ -144,7 +144,15 @@ function Invoke-Finsql([string]$argLine, [string]$logName) {
 }
 
 Write-Host 'Сборка пакета'
-$monolith = (($files | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join '')
+# Перевод строки в конце КАЖДОГО объекта, а не как выйдет. Шесть файлов из тридцати пяти
+# заканчивались без него, и в пакете выходило "}OBJECT Codeunit ..." одной строкой: C/SIDE
+# такое принимает, а всякий разбор по строкам - и наши же проверки пакета - теряет на
+# склейке заголовок. Пять заголовков из тридцати пяти не виделись вовсе (12.09.2026).
+$monolith = (($files | ForEach-Object {
+    $body = [IO.File]::ReadAllText($_.FullName)
+    if ($body -notmatch "(\r?\n)$") { $body += "`r`n" }
+    $body
+}) -join '')
 $monolith = ($monolith -replace "`r`n", "`n") -replace "`n", "`r`n"
 $cp866 = [System.Text.Encoding]::GetEncoding(866)
 
@@ -199,6 +207,123 @@ if ($mlProblems) { Fail ("многоязычный текст не пережи�
 $doubles = ([regex]::Matches($monolith, '\[External\]\s*\r?\n\s*\[External\]')).Count
 if ($doubles -gt 0) {
     Fail "атрибут [External] стоит дважды подряд ($doubles раз): вставка легла над чужой функцией и увела её атрибут"
+}
+
+# Пятый признак, и найден он пять раз подряд - разделы 54, 61, 62, 63, 64: мерный прогон
+# зовёт чистую функцию САМ, передаёт ей то, чего живая дорога не передаёт, и остаётся
+# зелёным. В разделе 64 это стоило целого класса эпизодов: живая дорога звала EpisodeClass
+# с нулём на месте признака, мерный прогон - с двойкой, и проверка мерила свободу, которой
+# у продукта не было ни дня.
+#
+# Ловится это точным совпадением, а не подозрением: ВСЕ боевые вызовы функции пришпилили
+# один и тот же довод к постоянной, а мерный объект подставил на то же место другое.
+# Законная постоянная так не выглядит: у неё либо есть боевой вызов с переменной (как у
+# SetDocument, где вторая дорога зовёт с именами), либо мерный объект согласен с боевым.
+function Split-CalArgs([string]$src, [int]$openAt) {
+    # Накопитель зовётся $list, а не $args: $args у PowerShell свой, встроенный, и внутри
+    # функции присваивание ему - не ошибка разбора, а тихая подмена.
+    $depth = 0; $list = @(); $cur = ''; $i = $openAt; $inStr = $false
+    while ($i -lt $src.Length) {
+        $ch = $src[$i]
+        if ($inStr) { $cur += $ch; if ($ch -eq "'") { $inStr = $false } }
+        elseif ($ch -eq "'") { $inStr = $true; $cur += $ch }
+        elseif ($ch -eq '(') { $depth++; if ($depth -gt 1) { $cur += $ch } }
+        elseif ($ch -eq ')') { $depth--; if ($depth -eq 0) { return ,($list + $cur) }; $cur += $ch }
+        elseif (($ch -eq ',') -and ($depth -eq 1)) { $list += $cur; $cur = '' }
+        else { if ($depth -ge 1) { $cur += $ch } }
+        $i++
+    }
+    # Скобка не закрылась - разбирать нечего. Молчание тут честнее догадки: сборка не
+    # обязана понимать C/AL целиком, она обязана не врать.
+    return ,@()
+}
+# Чистые кодюниты, которые меряются без базы, и мерные объекты, которые их меряют.
+# Ключ объекта - РОД И НОМЕР, а не номер: таблица 110230, кодюнит 110230 и страница 110230
+# живут рядом, и по одному номеру кодюнит разбора подменялся таблицей настройки.
+$pureCodeunits = @(110230, 110232)
+$benchCodeunits = @(110231, 110233, 110239, 110242)
+$heads = [regex]::Matches($monolith, '(?m)^OBJECT\s+(\w+)\s+(\d+)\s')
+if ($heads.Count -ne $files.Count) {
+    Fail "заголовков объектов в пакете $($heads.Count) при $($files.Count) файлах - разбор пакета не полон"
+}
+$parts = @()
+for ($i = 0; $i -lt $heads.Count; $i++) {
+    $to = if ($i + 1 -lt $heads.Count) { $heads[$i + 1].Index } else { $monolith.Length }
+    $parts += [pscustomobject]@{
+        Kind = $heads[$i].Groups[1].Value; No = [int]$heads[$i].Groups[2].Value
+        Body = $monolith.Substring($heads[$i].Index, $to - $heads[$i].Index)
+    }
+}
+$pinProblems = @()
+foreach ($pureNo in $pureCodeunits) {
+    $pure = $parts | Where-Object { ($_.Kind -eq 'Codeunit') -and ($_.No -eq $pureNo) }
+    if (-not $pure) { continue }
+    $names = @()
+    foreach ($m in [regex]::Matches($pure.Body, '(?m)^\s*PROCEDURE\s+([A-Za-z0-9_]+)@\d+')) { $names += $m.Groups[1].Value }
+    $names = @($names | Sort-Object -Unique)
+    # Доводы по местам: отдельно боевые, отдельно мерные.
+    $seen = @{}
+    foreach ($p in $parts) {
+        if (($p.Kind -eq 'Codeunit') -and ($p.No -eq $pureNo)) { continue }
+        $vars = @()
+        foreach ($m in [regex]::Matches($p.Body, "(?m)^\s*([A-Za-z0-9_]+)@\d+\s*:\s*Codeunit\s+$pureNo\s*;")) { $vars += $m.Groups[1].Value }
+        if ($vars.Count -eq 0) { continue }
+        $isBench = ($p.Kind -eq 'Codeunit') -and ($benchCodeunits -contains $p.No)
+        foreach ($v in ($vars | Sort-Object -Unique)) {
+            foreach ($name in $names) {
+                foreach ($call in [regex]::Matches($p.Body, "$v\.$name\(")) {
+                    $list = Split-CalArgs $p.Body ($call.Index + $call.Length - 1)
+                    for ($i = 0; $i -lt $list.Count; $i++) {
+                        $a = ($list[$i] -replace '\s+', ' ').Trim()
+                        $key = "$name|$($i + 1)"
+                        if (-not $seen.ContainsKey($key)) { $seen[$key] = @{ Prod = @(); Bench = @() } }
+                        if ($isBench) { $seen[$key].Bench += $a } else { $seen[$key].Prod += $a }
+                    }
+                }
+            }
+        }
+    }
+    foreach ($key in $seen.Keys) {
+        $prod = @($seen[$key].Prod); $bench = @($seen[$key].Bench)
+        if (($prod.Count -eq 0) -or ($bench.Count -eq 0)) { continue }
+        $pinned = @($prod | Sort-Object -Unique)
+        if ($pinned.Count -ne 1) { continue }
+        if ($pinned[0] -notmatch "^(-?\d+|TRUE|FALSE|''|'[^']*')$") { continue }
+        $others = @($bench | Where-Object { $_ -ne $pinned[0] })
+        if ($others.Count -eq 0) { continue }
+        # Имя $k, а не $parts: под $parts лежит список объектов пакета, и перезапись его
+        # тихо выкидывала из проверки второй чистый кодюнит целиком.
+        $k = $key -split '\|'
+        $pinProblems += ("$($k[0]), довод $($k[1]): в бою всегда [$($pinned[0])], " +
+                         "а мерный объект подставляет [$(($others | Sort-Object -Unique) -join '], [')]")
+    }
+
+    # Вторая половина того же признака: функцию зовёт ТОЛЬКО мерный объект. Разделы 54, 61,
+    # 62 и 63 - четыре раза подряд вызов пропадал из продукта или не появлялся вовсе, а
+    # мерный прогон оставался зелёным весь: он зовёт функцию сам.
+    #
+    # Своя же ссылка внутри объекта считается за участие: функция, работающая на соседнюю,
+    # доходит до боя через неё. Ищем поэтому те, кого не зовёт НИКТО, кроме мерных.
+    foreach ($name in $names) {
+        $prodCalls = 0; $benchCalls = 0
+        foreach ($p in $parts) {
+            if (($p.Kind -eq 'Codeunit') -and ($p.No -eq $pureNo)) { continue }
+            $vars = @()
+            foreach ($m in [regex]::Matches($p.Body, "(?m)^\s*([A-Za-z0-9_]+)@\d+\s*:\s*Codeunit\s+$pureNo\s*;")) { $vars += $m.Groups[1].Value }
+            foreach ($v in ($vars | Sort-Object -Unique)) {
+                $hits = ([regex]::Matches($p.Body, "$v\.$name\b")).Count
+                if ($hits -eq 0) { continue }
+                if (($p.Kind -eq 'Codeunit') -and ($benchCodeunits -contains $p.No)) { $benchCalls += $hits } else { $prodCalls += $hits }
+            }
+        }
+        if (($prodCalls -gt 0) -or ($benchCalls -eq 0)) { continue }
+        $selfCalls = ([regex]::Matches($pure.Body, "(?<![.A-Za-z0-9_])$name(?![A-Za-z0-9_@])")).Count
+        if ($selfCalls -gt 0) { continue }
+        $pinProblems += "$name : зовут только мерные объекты ($benchCalls раз), живая дорога - ни разу"
+    }
+}
+if ($pinProblems) {
+    Fail ("мерка меряет то, чего продукт не делает:`n  " + (($pinProblems | Sort-Object) -join "`n  "))
 }
 
 $packUtf = Join-Path $outDir 'LockWatch.txt'
