@@ -193,6 +193,50 @@ if ($leaks) {
           (($leaks | Sort-Object -Unique) -join "`n  "))
 }
 
+# «Кодировки - здесь ломается чаще всего» стоит в правилах проекта заголовком, и там же
+# сказано, чем ловить: счётом байтов 13 и 10 после каждой пакетной правки. Считал их
+# человек - руками и помня, что надо. Ни один прогон в файл не заглядывал ни разу, а
+# `sed -i` из git bash снимает CR со всего файла молча.
+#
+# Замер 14.09.2026, четыре клетки на одном и том же тексте с кириллицей:
+#   pwsh 7 читает и с BOM, и без - работает одинаково;
+#   Windows PowerShell 5.1 БЕЗ BOM читает файл как ANSI, и кириллица ломает РАЗБОР:
+#     «Unexpected token '»РѕРІРѕ'», скрипт не начинает исполняться вовсе;
+#   а объяви файл #requires -Version 7 - 5.1 откажет ЧЕСТНО, словами про версию, и с BOM,
+#     и без него.
+# Отсюда правило, которое можно проверить: скрипту, объявившему семёрку, BOM безразличен,
+# всякому другому - обязателен.
+#
+# Объекту BOM запрещён по своей причине, и причина эта не в пакете: .NET снимает BOM при
+# чтении (замерено там же), так что сборка его не увидит вовсе. Увидит его C/SIDE - если
+# объект понесут туда файлом, а не пакетом.
+$encProblems = @()
+foreach ($rel in (& git -C $root ls-files '*.ps1' '*.txt')) {
+    $full = Join-Path $root $rel
+    if (-not (Test-Path $full)) { continue }
+    $bytes = [IO.File]::ReadAllBytes($full)
+    $hasBom = ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
+    $bare = 0
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+        if (($bytes[$i] -eq 10) -and (($i -eq 0) -or ($bytes[$i - 1] -ne 13))) { $bare++ }
+    }
+    if ($bare -gt 0) { $encProblems += "$rel : переводов строки без CR - $bare" }
+    # Настоящий ли это UTF-8. Кириллица в cp1251 почти всегда даёт недопустимую
+    # последовательность, и подмена кодировки ловится здесь, а не в клиенте - знаками
+    # вопроса в сообщении, которые уже не скажут, где их потеряли.
+    try { [void]([Text.UTF8Encoding]::new($false, $true)).GetString($bytes) }
+    catch { $encProblems += "$rel : это не UTF-8" }
+    if ($rel -like '*.txt') {
+        if ($hasBom) { $encProblems += "$rel : объекту BOM запрещён - пакет его снимет, а C/SIDE увидит" }
+    } elseif (-not $hasBom) {
+        if ([Text.Encoding]::UTF8.GetString($bytes) -notmatch '(?m)^\s*#requires\s+-Version\s+7') {
+            $encProblems += "$rel : без #requires -Version 7 скрипту нужен BOM - 5.1 прочтёт его как ANSI"
+        }
+    }
+}
+if ($encProblems) {
+    Fail ("кодировка файлов разошлась с правилом проекта:`n  " + (($encProblems | Sort-Object) -join "`n  "))
+}
 function Invoke-Finsql([string]$argLine, [string]$logName) {
     $log = Join-Path $outDir $logName
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""
