@@ -1075,6 +1075,48 @@ FROM sys.all_columns;
          ($bulkAdvice -match 'whole table|таблицу целиком')) `
         "класс $($b[0]) при ожидаемом 1, род [$($b[1])], таблица [$($b[2])], эскалаций у таблицы $escBefore -> $escAfter; улика [$($b[3])]; совет: $bulkAdvice"
 
+    # Кнопка "начать счёт заново" ставит отметку "охват считается с" - и обязана ТЕМ ЖЕ
+    # нажатием снять точку отсчёта счётчиков. Половины охвата копятся каждая от своего
+    # начала и сами между собой не сходятся: разойдись начала на период опроса - и эпизоды
+    # промежутка навсегда остались бы в названной половине, не попав в насчитанную
+    # (FINDINGS, раздел 75).
+    #
+    # Спрашивается это ДО всякого прохода: проходы прогон гонит руками, сторож на время
+    # сметы погашен, и между нажатием и вопросом пройти некому. Пройди проход - он снял бы
+    # точку отсчёта сам, и проверка мерила бы его, а не нажатие.
+    Write-Host 'Нажатие "начать счёт заново" снимает точку отсчёта тем же мигом'
+    $covTotals = @"
+SELECT CONVERT(varchar(20),COUNT(*)) + '|' + CONVERT(varchar(20),ISNULL(SUM([Waits]),0)) + '|' +
+       CONVERT(varchar(20),ISNULL(SUM([Wait (ms)]),0)) + '|' +
+       CONVERT(varchar(20),ISNULL(SUM([Last Wait (ms)]),0)) FROM $coverage;
+"@
+    $covWas = ((Scalar $covTotals) -split '\|') | ForEach-Object { $_.Trim() }
+    $sinceWas = Scalar "SELECT CONVERT(varchar(30),[Coverage Since],126) FROM $state;"
+    $pressPlain = Join-Path $outDir 'press-plain.ps1'
+    Write-Ps51 $pressPlain @"
+`$ErrorActionPreference = 'Stop'
+$navImport
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $CoverageCodeunitId -MethodName StartOver -ErrorAction Stop
+"@
+    $pressLog = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $pressPlain 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { Fail "нажатие не отработало - опыт не удался:`n$pressLog" }
+    $covNow = ((Scalar $covTotals) -split '\|') | ForEach-Object { $_.Trim() }
+    $sinceNow = Scalar "SELECT CONVERT(varchar(30),[Coverage Since],126) FROM $state;"
+    # Половин в условии четыре, и порознь они пусты. "До больше нуля" - оттого, что счёт,
+    # которому нечего было обнулять, обнулился бы и сам собой (раздел 74). "Строк больше
+    # нуля" ловит нажатие, которое только убрало и ничего не сняло. "Насчитано ноль" ловит
+    # точку отсчёта, снятую не начисто: свежая строка обязана дать ОТМЕТКУ и никакого
+    # прироста. "В отметках больше нуля" ловит строки, снятые пустыми. И сдвинувшаяся
+    # отметка охвата связывает всё это ОДНИМ нажатием.
+    Check 'нажатие снимает точку отсчёта счётчиков тем же мигом, что и отметку' `
+        (($covWas.Count -eq 4) -and ($covNow.Count -eq 4) -and
+         ([int64]$covWas[1] -gt 0) -and ([int64]$covWas[2] -gt 0) -and
+         ([int]$covNow[0] -gt 0) -and ([int64]$covNow[1] -eq 0) -and ([int64]$covNow[2] -eq 0) -and
+         ([int64]$covNow[3] -gt 0) -and ($sinceNow -gt $sinceWas)) `
+        ("до нажатия строк $($covWas[0]), насчитано $($covWas[1]) ожиданий на $($covWas[2]) мс; " +
+         "после нажатия строк $($covNow[0]), насчитано $($covNow[1]) на $($covNow[2]) мс, " +
+         "в отметках $($covNow[3]) мс; отметка охвата $sinceWas -> $sinceNow")
+
     # Счёт охвата, начатый заново ВО ВРЕМЯ прохода. Состояние сторожа проход читает первым
     # делом, а пишет последним, и между этими мигами лежит весь его труд - туда и попадает
     # нажатие. Хозяев у отметки охвата двое: проход ставит её, когда её нет, а человек
