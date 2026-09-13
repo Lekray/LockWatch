@@ -48,6 +48,10 @@ param(
     [int]    $AdapterCodeunitId = 110237,
     [int]    $SetupTableId    = 110230,
     [int]    $SetupPageId     = 110230,
+    # Диапазон, занятый инструментом целиком. Всё, что вне его, - чужое, и о чужом надо
+    # сказать вслух: репозиторий служит материалом для согласования установки.
+    [int]    $OurFirstObject  = 110230,
+    [int]    $OurLastObject   = 110249,
     [int]    $TimeoutMinutes = 3,
     [switch] $Run,
     [switch] $StopInstance
@@ -558,6 +562,53 @@ if ($undocumented) {
     Fail ("поле настройки правится человеком, а раздел «Настройка после выкладки» " +
           "в docs/INSTALL.md о нём молчит - назвать его надо надписью со страницы настройки:`n  " +
           (($undocumented | Sort-Object) -join "`n  "))
+}
+
+# Третье: всё чужое, чего инструмент касается, обязано быть названо. Репозиторий служит
+# материалом для согласования установки службой безопасности, и вопрос у неё не "правите ли
+# вы чужие объекты" - на него легко ответить "нет", - а "во что вы смотрите". Замер
+# 13.09.2026: из одиннадцати чужих имён порядок установки называл ОДНО.
+#
+# Ищется четырьмя дорогами, потому что сослаться на чужое можно четырьмя способами: объявить
+# переменной, назвать через DATABASE::/CODEUNIT::/PAGE::, связать полем через TableRelation и
+# позвать посредника платформы. Одной дороги мало: подписка переходника ездит второй, а
+# цепочка задач - четвёртой.
+$foreignHead = '## Чего инструмент касается за своими пределами'
+$foreignFlat = Doc-Section $foreignHead
+$foreign = @{}
+function Want-Foreign([string]$key, [string]$where) {
+    if (-not $foreign.ContainsKey($key)) { $foreign[$key] = @() }
+    $foreign[$key] += $where
+}
+foreach ($p in $parts) {
+    foreach ($m in [regex]::Matches($p.Body, '(?m)([A-Za-z0-9_]+)@\d+\s*:\s*(?:VAR\s+)?(?:TEMPORARY\s+)?(Record|Codeunit|Page|Report|Query|XMLport)\s+(\d+)')) {
+        $no = [int]$m.Groups[3].Value
+        if (($no -ge $OurFirstObject) -and ($no -le $OurLastObject)) { continue }
+        $kind = if ($m.Groups[2].Value -eq 'Record') { 'Table' } else { $m.Groups[2].Value }
+        Want-Foreign "$kind $no" "$($p.Kind) $($p.No)"
+    }
+    foreach ($m in [regex]::Matches($p.Body, '(DATABASE|CODEUNIT|PAGE|REPORT)::"([^"]+)"')) {
+        if ($m.Groups[2].Value -like 'LockWatch*') { continue }
+        Want-Foreign $m.Groups[2].Value "$($p.Kind) $($p.No)"
+    }
+    foreach ($m in [regex]::Matches($p.Body, 'TableRelation="([^"]+)"')) {
+        if ($m.Groups[1].Value -like 'LockWatch*') { continue }
+        Want-Foreign $m.Groups[1].Value "$($p.Kind) $($p.No)"
+    }
+    foreach ($api in @('TASKSCHEDULER', 'STARTSESSION')) {
+        if ($p.Body -match "(?<![A-Za-z0-9_])$api(?![A-Za-z0-9_])") { Want-Foreign $api "$($p.Kind) $($p.No)" }
+    }
+}
+$hidden = @()
+foreach ($key in $foreign.Keys) {
+    if ($foreignFlat -notmatch [regex]::Escape($key)) {
+        $hidden += "$key (в $(($foreign[$key] | Sort-Object -Unique) -join ', '))"
+    }
+}
+if ($hidden) {
+    Fail ("инструмент касается чужого, а раздел «Чего инструмент касается за своими пределами» " +
+          "в docs/INSTALL.md о нём молчит - по этому списку согласуют установку:`n  " +
+          (($hidden | Sort-Object) -join "`n  "))
 }
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
