@@ -713,6 +713,134 @@ if ($hidden) {
           "в docs/INSTALL.md о нём молчит - по этому списку согласуют установку:`n  " +
           (($hidden | Sort-Object) -join "`n  "))
 }
+
+# Число в этом проекте обязано иметь того, кто его меряет. У чисел, которыми документы
+# описывают САМИ СЕБЯ - сколько проверок делает прогон, сколько прогонов в смете, - такой
+# был всегда: ведомость сметы и сами обкатки. Но списывали их оттуда РУКАМИ, и 13.09.2026
+# из шести списанных отстали четыре: мерный прогон журнала (19 вместо 22), проход (26
+# вместо 32), сторож (13 вместо 17) и дорога к имени (11 вместо 15). Отстали молча, в том
+# самом документе, по которому установку согласуют, и ни один прогон этого не видел.
+#
+# Проверяются документы ВСЕ, кроме названных здесь: список проверяемого пополнять забыли бы
+# (разделы 76-78), а список исключений заметен тем, что растёт. Записи о прошлом - замеры,
+# список дел и дневник - отставать обязаны: число в них принадлежит своему дню.
+$recordDocs = @('docs/FINDINGS.md', 'docs/NEXT.md', 'docs/JOURNAL.md')
+
+# Пишутся такие числа ЦИФРАМИ. Слово сверить нечем: падежей у него шесть, и разбирать их
+# сборке значило бы завести вторую точность рядом с первой. Поэтому число, записанное
+# словом, не разбирается, а отвергается.
+$numeralWord = '^(один|одна|одну|одного|одной|два|две|двух|двум|двумя|три|тр[ёе]х|тр[ёе]м|' +
+               'тремя|четыре|четыр[ёе]х|четырьмя|пять|пяти|пятью|шесть|шести|шестью|семь|' +
+               'семи|семью|восемь|восьми|восемью|девять|девяти|девятью|десять|десяти|' +
+               'десятью|сорок|сорока|пятьдесят|пятидесяти|девяносто|девяноста|' +
+               '(одиннад|двенад|тринад|четырнад|пятнад|шестнад|семнад|восемнад|девятнад|' +
+               'двад|трид)цат[ьию])$'
+
+# Ведомость сметы - единственное место, где записано, сколько проверок делает прогон.
+# Между строкой прогона и его числом лежат иногда заметки, и они здесь пропускаются: без
+# этого разбор потерял бы прогон молча, а молчание тут неотличимо от порядка.
+$ledgerText = [IO.File]::ReadAllText((Join-Path $root 'scripts\Test-All.ps1'))
+$runChecks = @{}
+$runCount = 0
+$runTotal = 0
+foreach ($m in [regex]::Matches($ledgerText,
+        "Name\s*=\s*'(?<n>[^']+)';\s*Script\s*=\s*'(?<s>[^']+)';\s*Extra\s*=\s*@\([^)]*\)(?:\s*#[^\r\n]*)*\s*Checks\s*=\s*(?<c>\d+)")) {
+    $script = $m.Groups['s'].Value
+    $checks = [int]$m.Groups['c'].Value
+    $runCount++
+    $runTotal += $checks
+    # Один скрипт стоит в ведомости дважды - выкладка и повторная выкладка. Числа у них
+    # обязаны совпадать; разойдись они, документу нечего было бы называть.
+    if (-not $runChecks.ContainsKey($script)) { $runChecks[$script] = $checks }
+    elseif ($runChecks[$script] -ne $checks) { $runChecks[$script] = -1 }
+}
+# Разбор обязан найти ВСЕ строки ведомости, а не сколько получится: потерянный прогон увёл
+# бы итог вниз, и документ с верным числом покраснел бы вместо разбора. Сколько их
+# объявлено, считается отдельно и проще - по имени прогона.
+$declared = ([regex]::Matches($ledgerText, "Name\s*=\s*'")).Count
+if ($runCount -ne $declared) {
+    Fail "ведомость сметы разобралась не вся: прогонов объявлено $declared, разобрано $runCount"
+}
+
+function Doc-Line([string]$text, [int]$at) {
+    return ([regex]::Matches($text.Substring(0, $at), "`n")).Count + 1
+}
+
+# Число и слово при нём стоят рядом: пустая строка между ними означала бы, что речь уже
+# о другом.
+$nearby = '(?:[ \t]+|[ \t]*\r?\n[ \t]*)'
+# Связь числа с тем, кто его меряет, рвут пустая строка и начало нового пункта списка.
+# Без пункта списка число из соседней строки перечня прицепилось бы к прогону из ПРОШЛОГО
+# пункта - и красный цвет назвал бы не ту причину, что хуже отсутствия проверки.
+$apart = '\r?\n[ \t]*\r?\n|\r?\n[ \t]*[-*] |\r?\n[ \t]*\d+\. '
+$countClaims = @()
+$docProblems = @()
+foreach ($rel in (& git -C $root ls-files '*.md')) {
+    if ($recordDocs -contains $rel) { continue }
+    $full = Join-Path $root $rel
+    if (-not (Test-Path $full)) { continue }
+    $text = [IO.File]::ReadAllText($full)
+    # Чужой кодюнит источником не бывает: за себя печатают только свои обкатки, а штатный
+    # NAV в примерах называется нарочно - `Codeunit 80 Sales-Post`. Границы свои берутся
+    # оттуда же, откуда их берёт вся сборка, а не переписываются числом рядом.
+    $sources = @([regex]::Matches($text, '(?<s>Test-[\w-]+\.ps1)|Codeunit\s+(?<cu>\d+)') |
+                 Where-Object { (-not $_.Groups['cu'].Success) -or
+                                ((([int]$_.Groups['cu'].Value) -ge $OurFirstObject) -and
+                                 (([int]$_.Groups['cu'].Value) -le $OurLastObject)) })
+    foreach ($claim in [regex]::Matches($text, "(?<num>\d+)$nearby(?<what>провер\w*|прогон\w*)")) {
+        $num = [int]$claim.Groups['num'].Value
+        $what = $claim.Groups['what'].Value
+        $line = Doc-Line $text $claim.Index
+        $src = $null
+        foreach ($s in $sources) {
+            if (($s.Index + $s.Length) -gt $claim.Index) { break }
+            $src = $s
+        }
+        if ($src) {
+            $from = $src.Index + $src.Length
+            if ($text.Substring($from, $claim.Index - $from) -match $apart) { $src = $null }
+        }
+        if (-not $src) {
+            $docProblems += "$rel : строка $line - число $num $what, а кто его меряет, не назван"
+            continue
+        }
+        if ($src.Groups['cu'].Success) {
+            # Сколько проверок делает обкатка, знает только сама обкатка. Сверка отложена
+            # до её отчёта - ниже, после прогона.
+            $countClaims += @{ Rel = $rel; Line = $line; Num = $num
+                               Codeunit = [int]$src.Groups['cu'].Value }
+            continue
+        }
+        $script = $src.Groups['s'].Value
+        if ($script -eq 'Test-All.ps1') {
+            $want = if ($what.StartsWith('прогон')) { $runCount } else { $runTotal }
+        } elseif (-not $runChecks.ContainsKey($script)) {
+            $docProblems += "$rel : строка $line - прогона $script в ведомости сметы нет вовсе"
+            continue
+        } elseif ($runChecks[$script] -lt 0) {
+            $docProblems += "$rel : строка $line - $script стоит в ведомости дважды с разными числами"
+            continue
+        } elseif ($what.StartsWith('прогон')) {
+            $docProblems += "$rel : строка $line - счёт прогонов приписан одному прогону $script"
+            continue
+        } else {
+            $want = $runChecks[$script]
+        }
+        if ($num -ne $want) {
+            $docProblems += "$rel : строка $line - сказано $num, а $script делает $want"
+        }
+    }
+    foreach ($worded in [regex]::Matches($text, "(?<w>[А-Яа-яЁё]+)$nearby(?:провер\w*|прогон\w*)")) {
+        if ($worded.Groups['w'].Value.ToLower() -match $numeralWord) {
+            $docProblems += ("$rel : строка $(Doc-Line $text $worded.Index) - число записано словом " +
+                             "«$($worded.Groups['w'].Value)»: сверить его нечем, писать цифрами")
+        }
+    }
+}
+if ($docProblems) {
+    Fail ("документ обещает не то число, что делает прогон:`n  " +
+          (($docProblems | Sort-Object -Unique) -join "`n  "))
+}
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $monolith, (New-Object System.Text.UTF8Encoding($false)))
@@ -820,4 +948,28 @@ if ($StopInstance) {
 
 # Обкатка судит сама: при провале она выходит ошибкой, а не сообщением.
 if ($testFailed -or ($report -match 'FAIL')) { Fail 'обкатка не пройдена - см. отчёт выше' }
+# Отложенные числа документов сверяются здесь: сколько проверок делает обкатка, знает
+# только её отчёт. Порядок итогов в отчёте - это порядок вызовов в $body, и берётся он из
+# самого $body, а не переписывается рядом: переписанный разошёлся бы с ним молча.
+if ($countClaims) {
+    $suiteIds = @([regex]::Matches($body, '-CodeunitId\s+(\d+)') | ForEach-Object { [int]$_.Groups[1].Value })
+    $said = @([regex]::Matches($report, 'passed\s+(\d+)\s+of\s+(\d+)'))
+    if ($said.Count -ne $suiteIds.Count) {
+        Fail "обкаток запущено $($suiteIds.Count), а итогов в отчёте $($said.Count) - числа документов сверять не с чем"
+    }
+    $measured = @{}
+    for ($i = 0; $i -lt $suiteIds.Count; $i++) { $measured[$suiteIds[$i]] = [int]$said[$i].Groups[2].Value }
+    $claimProblems = @()
+    foreach ($claim in $countClaims) {
+        if (-not $measured.ContainsKey($claim.Codeunit)) {
+            $claimProblems += "$($claim.Rel) : строка $($claim.Line) - Codeunit $($claim.Codeunit) обкатки не печатает"
+        } elseif ($claim.Num -ne $measured[$claim.Codeunit]) {
+            $claimProblems += ("$($claim.Rel) : строка $($claim.Line) - сказано $($claim.Num), " +
+                               "а Codeunit $($claim.Codeunit) сделал $($measured[$claim.Codeunit])")
+        }
+    }
+    if ($claimProblems) {
+        Fail ("документ обещает не то число, что сделала обкатка:`n  " + ($claimProblems -join "`n  "))
+    }
+}
 Write-Host 'Готово: собрано и обкатано' -ForegroundColor Green
