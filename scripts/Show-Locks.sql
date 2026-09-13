@@ -8,6 +8,11 @@
     Запускать в базе установки:  sqlcmd -S <сервер> -d <база> -E -i Show-Locks.sql
     Права: VIEW SERVER STATE на сервере. Больше ничего не нужно.
 
+    Ширину столбцов скрипт задаёт САМ, приведением к varchar нужной длины. Без этого
+    sqlcmd печатает каждый nvarchar(128) во всю объявленную ширину - строка уходит далеко
+    за экран, консоль её переносит, и значения оказываются под чужой шапкой. Выглядит это
+    как "логин держателя не пишется", хотя он на месте: просто уехал на перенос.
+
     Файл лежит в UTF-8 С BOM, и это не вкусовщина: без BOM sqlcmd читает его как OEM, и
     русская шапка приезжает в консоль мусором. Правка файла чем угодно, что BOM снимает,
     ломает ровно это - данные при том остаются верными, и беда выглядит как "кракозябры
@@ -57,10 +62,10 @@ SELECT
     wt.session_id                                   AS [ждёт spid],
     wt.blocking_session_id                          AS [держит spid],
     wt.wait_duration_ms                             AS [ждёт мс],
-    wt.wait_type                                    AS [род ожидания],
-    w.resource_type                                 AS [род ресурса],
-    o.name                                          AS [таблица SQL],
-    i.name                                          AS [индекс],
+    CONVERT(varchar(22), wt.wait_type)              AS [род ожидания],
+    CONVERT(varchar(9),  w.resource_type)           AS [род ресурса],
+    CONVERT(varchar(34), o.name)                    AS [таблица SQL],
+    CONVERT(varchar(34), i.name)                    AS [индекс],
     -- Правил разбора имени ДВА, и одним не обойтись (docs/FINDINGS.md, раздел 5).
     -- У таблицы номер ключа NAV - суффикс имени индекса после последнего доллара:
     -- кластерный зовётся <Компания>$<Таблица>$0, вторичные - $1, $5, $13. Номера не
@@ -77,15 +82,15 @@ SELECT
         ELSE NULL
     END                                             AS [ключ NAV],
     CASE WHEN o.name LIKE '%$VSIFT$%' THEN 1 ELSE 0 END AS [SIFT],
-    w.resource_description                          AS [хэш спорной строки],
+    CONVERT(varchar(22), w.resource_description)    AS [хэш спорной строки],
     -- Держатель глазами сервера. Для ЧУЖОГО соединения - утилиты, шага задания, чьего-то
     -- окна запросов - это единственный возможный ответ на "кто": отметку контекста кладёт
     -- только сессия NAV. Для самой сессии NAV логин здесь общий, учётной записи службы,
     -- и человеком он не притворяется - на то и отдельная колонка ниже.
-    bs.login_name                                   AS [логин держателя],
-    bs.host_name                                    AS [узел держателя],
-    bs.program_name                                 AS [программа держателя],
-    bs.status                                       AS [состояние держателя],
+    CONVERT(varchar(30), bs.login_name)             AS [логин держателя],
+    CONVERT(varchar(18), bs.host_name)              AS [узел держателя],
+    CONVERT(varchar(30), bs.program_name)           AS [программа держателя],
+    CONVERT(varchar(12), bs.status)                 AS [состояние],
     -- Спящая транзакция - это не медленный запрос, а забытое модальное окно: виновник не
     -- исполняет ничего, а транзакцию держит. Лечится звонком, а не правкой кода, и
     -- отличать одно от другого надо сразу.
@@ -93,9 +98,9 @@ SELECT
          ELSE DATEDIFF(second, bs.last_request_end_time, GETDATE()) END AS [молчит с, с],
     bs.open_transaction_count                       AS [открытых транзакций],
     ba.transaction_begin_time                       AS [транзакция начата],
-    vs.login_name                                   AS [логин жертвы],
-    vs.host_name                                    AS [узел жертвы],
-    vs.program_name                                 AS [программа жертвы]
+    CONVERT(varchar(30), vs.login_name)             AS [логин жертвы],
+    CONVERT(varchar(18), vs.host_name)              AS [узел жертвы],
+    CONVERT(varchar(30), vs.program_name)           AS [программа жертвы]
 FROM sys.dm_os_waiting_tasks wt
 JOIN sys.dm_exec_sessions vs ON vs.session_id = wt.session_id
 LEFT JOIN sys.dm_exec_sessions bs ON bs.session_id = wt.blocking_session_id
@@ -161,8 +166,8 @@ END;
 -- грязным - вставать в очередь за тем, кого разбираем, было бы смешно.
 -- Просмотр этот дёшев ровно потому, что таблица отметок мала: 0,005 мс на пустой и
 -- 0,026 мс на 82 тысячах строк (docs/FINDINGS.md, раздел 67).
-DECLARE @found TABLE (spid int, [Учётная запись NAV] nvarchar(132),
-                      [Компания] nvarchar(60), [Документ] nvarchar(60), [Отмечено] datetime);
+DECLARE @found TABLE (spid int, [Учётная запись NAV] varchar(30),
+                      [Компания] varchar(20), [Документ] varchar(24), [Отмечено] datetime);
 DECLARE @spid int, @idx sysname, @lockres varchar(100), @sql nvarchar(max);
 
 DECLARE marks CURSOR LOCAL FAST_FORWARD FOR SELECT spid, idx, lockres FROM @held;
