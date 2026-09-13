@@ -57,7 +57,7 @@ OBJECT Table 110230 LockWatch Setup
     { 24  ;   ;Platform Names Enabled;Boolean     ;CaptionML=[ENU=Platform Names Enabled;
                                                               RUS=Имена от платформы] }
     { 25  ;   ;Platform Road Status;Text250       ;CaptionML=[ENU=Platform Road Status;
-                                                              RUS=Что со дорогой от платформы];
+                                                              RUS=Что с дорогой от платформы];
                                                    Editable=No }
     { 26  ;   ;Journal Language ID ;Integer       ;TableRelation="Windows Language"."Language ID";
                                                    CaptionML=[ENU=Journal Language;
