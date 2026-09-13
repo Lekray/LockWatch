@@ -209,6 +209,39 @@ if ($doubles -gt 0) {
     Fail "атрибут [External] стоит дважды подряд ($doubles раз): вставка легла над чужой функцией и увела её атрибут"
 }
 
+# Номер локальной переменной у C/SIDE ОБЩИЙ на блок: параметры и раздел VAR вместе. Два
+# имени с одним номером компилятор не принимает - "The local variable ID 1000000069 is used
+# by both local variable CovEpBefore and local variable BenchDropped" - и говорит он это
+# импортом, то есть через двенадцать минут сборки, и откатывает всю пачку. Стоило одного
+# прогона 13.09.2026, когда новая переменная мерного объекта взяла занятый номер.
+#
+# Блок кончается на BEGIN, а начинается либо заголовком функции, либо разделом CODE:
+# объектные переменные живут в своём пространстве, и совпадение в нём так же смертельно.
+$idProblems = @()
+$idBlock = ''; $idSeen = @{}
+foreach ($line in ($monolith -split "`r`n")) {
+    if ($line -match '^\s*(?:LOCAL\s+)?(?:PROCEDURE|EVENT)\s+([A-Za-z0-9_"]+)@') { $idBlock = $Matches[1]; $idSeen = @{} }
+    elseif ($line -match '^\s*CODE\s*$') { $idBlock = 'объектные переменные'; $idSeen = @{} }
+    elseif ($line -match '^\s*([A-Za-z0-9_]+)=VAR\s*$') { $idBlock = $Matches[1]; $idSeen = @{} }
+    if ($idBlock -eq '') { continue }
+    if (($line -match '^\s*BEGIN\s*$') -or ($line -match '=BEGIN\s*$')) { $idBlock = ''; continue }
+    foreach ($hit in [regex]::Matches($line, '([A-Za-z0-9_"]+)@(\d{6,})')) {
+        # Имя самой функции несёт номер из ДРУГОГО пространства, и сравнивать его с
+        # переменными нельзя. Ловится оно по совпадению с именем блока.
+        $name = $hit.Groups[1].Value
+        $id = $hit.Groups[2].Value
+        if ($name -eq $idBlock) { continue }
+        if ($idSeen.ContainsKey($id) -and ($idSeen[$id] -ne $name)) {
+            $idProblems += "$idBlock - номер $id у '$($idSeen[$id])' и у '$name'"
+        }
+        $idSeen[$id] = $name
+    }
+}
+if ($idProblems) {
+    Fail ("номер локальной переменной занят дважды - импорт откажет и откатит пакет:`n" +
+          (($idProblems | Select-Object -Unique | Select-Object -First 5) -join "`n"))
+}
+
 # Пятый признак, и найден он пять раз подряд - разделы 54, 61, 62, 63, 64: мерный прогон
 # зовёт чистую функцию САМ, передаёт ей то, чего живая дорога не передаёт, и остаётся
 # зелёным. В разделе 64 это стоило целого класса эпизодов: живая дорога звала EpisodeClass
