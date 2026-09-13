@@ -172,7 +172,7 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE SetDocument@13(EntryNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20];UserName@1000000002 : Code[50];Source@1000000003 : Integer;Reason@1000000004 : Text;VictimUserName@1000000005 : Code[50]);
+    PROCEDURE SetDocument@13(EntryNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20];UserName@1000000002 : Code[50];Source@1000000003 : Integer;Reason@1000000004 : Text;VictimUserName@1000000005 : Code[50];CulpritDocumentNo@1000000006 : Code[20]);
     BEGIN
       Journal.RESET;
       IF NOT Journal.GET(EntryNo) THEN
@@ -191,6 +191,12 @@ OBJECT Codeunit 110232 LockWatch Journal
         // не объяснением, а противоречием соседней колонке.
         IF Journal."Document Source" = Journal."Document Source"::None THEN
           Journal."No Document Reason" := COPYSTR(Reason,1,MAXSTRLEN(Journal."No Document Reason"));
+      // Документ виновника прикладывается по тому же правилу и в СВОЮ колонку. Соседняя
+      // отвечает на "за что спор", эта - на "чем занят виновник", и вопросы это разные:
+      // виновник за одну транзакцию трогает много строк, а спор идёт за одну. Совпали -
+      // тем лучше; разошлись - это и есть тот случай, ради которого колонка заведена.
+      IF CulpritDocumentNo <> '' THEN
+        Journal."Culprit Document No." := CulpritDocumentNo;
       IF UserName <> '' THEN BEGIN
         // Имя приходит из отметки контекста, то есть от самой транзакции виновника, а не
         // от платформы. Это НЕ то имя, которое обещано в разделе про EnableDeadlockMonitoring:
@@ -406,10 +412,18 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE MoveOldEntries@5(RetentionDays@1000000000 : Integer;RowCeiling@1000000013 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    PROCEDURE MoveOldEntries@5(RetentionDays@1000000000 : Integer;RowCeiling@1000000013 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000005 : Integer;VAR Dropped@1000000006 : Integer) : Integer;
     VAR
       Moved@1000000004 : Integer;
     BEGIN
+      // Уходит из журнала по-прежнему то, что старше срока или лишнее по потолку, - а вот
+      // КУДА уходит, решает порог. Эпизод, ждавший дольше порога, ПЕРЕЕЗЖАЕТ в историю;
+      // остальные удаляются. Иначе история набивается эпизодами по полсекунды и перестаёт
+      // быть тем, за чем в неё возвращаются.
+      //
+      // Порог живёт в настройке, потому что это про СРЕДУ: сколько ждать не жалко, знает
+      // установка. Ноль означает "порога нет" - уезжает всё, как было до его появления.
+      Dropped := 0;
       // Строка не уничтожается, а ПЕРЕЕЗЖАЕТ в историю. Из журнала она уходит затем, что
       // журнал горячий: в него пишет каждый проход и в нём же ищутся открытые эпизоды.
       // Из истории её не удаляет ничто - ни проход, ни задача, ни срок; инструмент, тихо
@@ -429,16 +443,19 @@ OBJECT Codeunit 110232 LockWatch Journal
       // объявленного ровно в тот день, когда сработали оба.
       IF MaxRows <= 0 THEN
         EXIT(0);
-      Moved := MoveOlderThan(RetentionDays,MaxRows);
-      Moved := Moved + MoveOverCeiling(RowCeiling,MaxRows - Moved);
+      // Потолок считает ОБА исхода: удаление стоит той же записи, что и переезд, и проход,
+      // удаливший тысячу строк, не дешевле прохода, увёзшего тысячу.
+      Moved := MoveOlderThan(RetentionDays,MaxRows,HistoryMs,Dropped);
+      Moved := Moved + MoveOverCeiling(RowCeiling,MaxRows - Moved - Dropped,HistoryMs,Dropped);
       EXIT(Moved);
     END;
 
-    LOCAL PROCEDURE MoveOlderThan@25(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    LOCAL PROCEDURE MoveOlderThan@25(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000005 : Integer;VAR Dropped@1000000006 : Integer) : Integer;
     VAR
       Threshold@1000000002 : DateTime;
       Age@1000000003 : Duration;
       Moved@1000000004 : Integer;
+      Done@1000000007 : Integer;
     BEGIN
       IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
         EXIT(0);
@@ -451,16 +468,20 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.SETFILTER("Started At",'<%1',Threshold);
       IF Journal.FINDSET(TRUE) THEN
         REPEAT
-          MoveCurrent;
-          Moved := Moved + 1;
-        UNTIL (Moved >= MaxRows) OR (Journal.NEXT = 0);
+          IF MoveCurrent(HistoryMs) THEN
+            Moved := Moved + 1
+          ELSE
+            Dropped := Dropped + 1;
+          Done := Done + 1;
+        UNTIL (Done >= MaxRows) OR (Journal.NEXT = 0);
       EXIT(Moved);
     END;
 
-    LOCAL PROCEDURE MoveOverCeiling@26(RowCeiling@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    LOCAL PROCEDURE MoveOverCeiling@26(RowCeiling@1000000000 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000004 : Integer;VAR Dropped@1000000005 : Integer) : Integer;
     VAR
       Surplus@1000000002 : Integer;
       Moved@1000000003 : Integer;
+      Done@1000000006 : Integer;
     BEGIN
       // Потолок считается по ВСЕМУ журналу, а уезжают только закрытые. Открытый эпизод
       // ведёт текущий проход: увезти его значило бы разорвать одну строку на две таблицы,
@@ -486,14 +507,29 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.SETRANGE(Open,FALSE);
       IF Journal.FINDSET(TRUE) THEN
         REPEAT
-          MoveCurrent;
-          Moved := Moved + 1;
-        UNTIL (Moved >= Surplus) OR (Journal.NEXT = 0);
+          IF MoveCurrent(HistoryMs) THEN
+            Moved := Moved + 1
+          ELSE
+            Dropped := Dropped + 1;
+          Done := Done + 1;
+        UNTIL (Done >= Surplus) OR (Journal.NEXT = 0);
       EXIT(Moved);
     END;
 
-    LOCAL PROCEDURE MoveCurrent@27();
+    LOCAL PROCEDURE MoveCurrent@27(HistoryMs@1000000000 : Integer) : Boolean;
     BEGIN
+      // Строка уходит из журнала в любом случае - она старше срока или лишняя по потолку.
+      // Вопрос только в том, КУДА: за порогом её ждёт история, до порога - удаление.
+      //
+      // Мерка - САМОЕ ДОЛГОЕ ожидание эпизода, а не последнее и не среднее: эпизод тем и
+      // важен, насколько он кого-то задержал, и хвост его наблюдения тут ни при чём.
+      // Сравнение нестрогое: порог в минуту означает "минута и дольше", а не "дольше
+      // минуты", - человек читает его именно так.
+      IF (HistoryMs > 0) AND (Journal."Max Wait (ms)" < HistoryMs) THEN BEGIN
+        Journal.DELETE;
+        EXIT(FALSE);
+      END;
+
       // Одна строка едет в историю. Кусок общий у обоих пределов нарочно: разойдясь, они
       // перевозили бы эпизод по-разному, и какой из двух потерял поле, выяснялось бы через
       // месяц - по тому, которого не хватает.
@@ -511,6 +547,7 @@ OBJECT Codeunit 110232 LockWatch Journal
         // это тот же самый эпизод; переписываем его свежим и идём дальше.
         History.MODIFY;
       Journal.DELETE;
+      EXIT(TRUE);
     END;
 
     LOCAL PROCEDURE FoldJournal@22(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;
@@ -635,6 +672,9 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.Outcome := Keep.Outcome;
       Journal."Document No." := Keep."Document No.";
       Journal."Document Source" := Keep."Document Source";
+      // Документ виновника - из того же списка. Съём о нём не знает и приносит пустоту, а
+      // пустота, положенная поверх названного, стирала бы ответ каждые три секунды.
+      Journal."Culprit Document No." := Keep."Culprit Document No.";
       Journal."No Document Reason" := Keep."No Document Reason";
       Journal."User Name" := Keep."User Name";
       Journal."User Source" := Keep."User Source";

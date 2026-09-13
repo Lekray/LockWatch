@@ -418,6 +418,16 @@ OBJECT Codeunit 110234 LockWatch Sql
       IF UserId <> '' THEN
         Buffer."User Name" := COPYSTR(UserId,1,MAXSTRLEN(Buffer."User Name"));
 
+      // Документ ОТМЕТКИ - это то, чем занят виновник: последняя строка таблицы документа,
+      // которую он тронул в ЭТОЙ транзакции. Спорная строка бывает другой, и потому у него
+      // своя колонка: смешать два разных ответа в одном месте - худшее, что можно сделать с
+      // журналом. Кладётся он ВСЕГДА, даже когда спорный документ уже назван первой дорогой;
+      // прежде в этом случае он прочитывался и выбрасывался, а наружу шло только слово
+      // "ответы разошлись" - без самого ответа.
+      IF DocumentNo <> '' THEN
+        Buffer."Culprit Document No." :=
+          COPYSTR(DocumentNo,1,MAXSTRLEN(Buffer."Culprit Document No."));
+
       IF DocumentNo <> '' THEN BEGIN
         IF NOT DocumentKnown THEN BEGIN
           Buffer."Document No." := COPYSTR(DocumentNo,1,MAXSTRLEN(Buffer."Document No."));

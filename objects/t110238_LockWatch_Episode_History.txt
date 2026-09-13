@@ -102,6 +102,9 @@ OBJECT Table 110238 LockWatch Episode History
                                                    OptionString=None,FromHash,FromMark,Disagree }
     { 52  ;   ;No Document Reason  ;Text100       ;CaptionML=[ENU=No Document Reason;
                                                               RUS=Почему документа нет] }
+    { 53  ;   ;Culprit Document No.;Code20        ;CaptionML=[ENU=Culprit Document;
+                                                              RUS=Документ виновника];
+                                                   Editable=No }
     { 60  ;   ;User Name           ;Code50        ;CaptionML=[ENU=User Name;
                                                               RUS=Пользователь] }
     { 61  ;   ;User Source         ;Option        ;CaptionML=[ENU=User Source;

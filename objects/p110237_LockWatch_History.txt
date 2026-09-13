@@ -162,6 +162,13 @@ OBJECT Page 110237 LockWatch Episode History
                 ApplicationArea=#All;
                 SourceExpr="Document No." }
 
+    { 50  ;2   ;Field     ;
+                Name=CulpritDocumentNo;
+                ToolTipML=[ENU=Specifies what the culprit was busy with: the last document its own transaction touched, from the context mark. The fight is over one row, a culprit touches many, and the two answers are kept apart on purpose.;
+                           RUS=Определяет, чем был занят виновник: последний документ, который тронула его собственная транзакция, - из отметки контекста. Спор идёт за одну строку, а виновник трогает много, и два ответа нарочно держатся порознь.];
+                ApplicationArea=#All;
+                SourceExpr="Culprit Document No." }
+
     { 11  ;2   ;Field     ;
                 Name=NoDocumentReason;
                 ToolTipML=[ENU=Specifies why the document could not be named.;

@@ -108,6 +108,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       StillOpen@1000000014 : Integer;
       Backdated@1000000015 : Integer;
       Removed@1000000016 : Integer;
+      BenchDropped@1000000075 : Integer;
       InHistoryBefore@1000000047 : Integer;
       HeldNo@1000000065 : Integer;
       OldestClosed@1000000066 : Integer;
@@ -277,7 +278,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // удалении, то есть на потере, ради недопущения которой всё и затевалось.
       Backdated := Backdate(BackdateRows,BackdateDays);
       InHistoryBefore := MovedRowCount;
-      Removed := Journal.MoveOldEntries(RetentionUnderTest,0,Waiters);
+      Removed := Journal.MoveOldEntries(RetentionUnderTest,0,Waiters,NoHistoryThreshold,BenchDropped);
       Check(Passed,Total,Report,ChkTrimTxt,
             (Removed = Backdated) AND (Backdated = BackdateRows) AND
             (BenchRowCount = Waiters - BackdateRows) AND
@@ -303,7 +304,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // уехавший, увиден был. Мерка сильна именно равенством: доля, посчитанная по одному
       // журналу, падала бы здесь сама собой и выглядела бы как испортившееся наблюдение.
       Coverage.JournalTotal(0DT,CovEpBefore,CovMsBefore);
-      MovedByCeiling := Journal.MoveOldEntries(0,RowsBefore - CeilingSurplus,Waiters);
+      MovedByCeiling := Journal.MoveOldEntries(0,RowsBefore - CeilingSurplus,Waiters,NoHistoryThreshold,BenchDropped);
       Check(Passed,Total,Report,ChkCeilingTxt,
             (MovedByCeiling = CeilingSurplus) AND
             (JournalRowCount = RowsBefore - CeilingSurplus) AND
@@ -360,8 +361,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // есть то, что забирает вызывающий; число рядом с ним - только его опись.
       NamePickedFirst := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
       NameBufferFirst := NamePending.COUNT;
-      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'');
-      Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'');
+      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'','');
+      Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'','');
       NamePickedAgain := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
       NameBufferAgain := NamePending.COUNT;
       Check(Passed,Total,Report,ChkNameAgainTxt,
@@ -374,7 +375,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       NamePass(NameIndexA,NameIndexB);
       Episode.GET(NameA);
       NameAttemptsA := Episode."Name Attempts";
-      Journal.SetDocument(NameA,NameDocument,NameCulprit,Parse.DocSourceFromMark,'',NameVictim);
+      Journal.SetDocument(NameA,NameDocument,NameCulprit,Parse.DocSourceFromMark,'',NameVictim,NameDocument);
       Episode.GET(NameA);
       Check(Passed,Total,Report,ChkNameLateTxt,
             (NameAttemptsA = 1) AND (Episode."User Name" = NameCulprit) AND
@@ -382,7 +383,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             STRSUBSTNO(NameLateTxt,NameAttemptsA,Episode."User Name",
                        Episode."Victim User Name",Episode."Document No."));
 
-      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'');
+      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'','');
       Episode.GET(NameA);
       Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
       NamePickedNamed := 0;
@@ -398,7 +399,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // вопрос повторялся бы столько же, сколько живёт эпизод, а живёт он и по часу.
       Episode.GET(NameB);
       WHILE Episode."Name Attempts" < Parse.MaxNameAttempts DO BEGIN
-        Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'');
+        Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'','');
         Episode.GET(NameB);
       END;
       NameAttemptsB := Episode."Name Attempts";
@@ -490,6 +491,15 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // компилируется вовсе. Единственный способ внести его в код - через EVALUATE.
       EVALUATE(Value,'72057594261667840');
       EXIT(Value);
+    END;
+
+    LOCAL PROCEDURE NoHistoryThreshold@70() : Integer;
+    BEGIN
+      // Ноль: порога нет, уезжает всё. Мерный объект меряет ПЕРЕЕЗД - сколько ушло из
+      // журнала и сколько доехало до истории, - и порог здесь увёл бы часть строк в
+      // удаление, то есть подменил бы измеряемое. Сам порог проверяется на стенде, где
+      // эпизоды настоящие и длительность у них не выдуманная.
+      EXIT(0);
     END;
 
     LOCAL PROCEDURE Backdate@5(Rows@1000000000 : Integer;Days@1000000001 : Integer) : Integer;

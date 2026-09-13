@@ -309,6 +309,23 @@ function SilenceWaitSeconds {
     if ($ms -lt 60000) { $ms = 60000 }
     return [int][math]::Ceiling($ms / 1000)
 }
+function HistoryProbeMs {
+    # Две секунды. Опыт держит настоящую блокировку около пяти, и эпизод обязан этот порог
+    # ПЕРЕВАЛИТЬ - иначе он уехал бы не в историю, а в удаление, и проверка переезда
+    # покраснела бы не по делу. Заводские шестьдесят тысяч здесь не годятся вовсе.
+    2000
+}
+function GrowWaitSeconds {
+    # Вдвое с лишним больше порога в две секунды, считая в секундах: ожидание растёт не
+    # само по себе, а ОТМЕТКАМИ прохода - раз в период опроса, - и на занятой машине
+    # заход может опоздать. Минута перекрывает десяток таких опозданий.
+    60
+}
+function ShortEpisodeMs {
+    # Столько "ждал" подставной короткий эпизод. Единица, а не ноль: ноль читается как
+    # "длительность неизвестна", а спор идёт за строку, которая ЖДАЛА, но мало.
+    1
+}
 # Запас поверх порога: часы у отметки прохода - SQL, а спрашивает время NAV, и на стенде они
 # расходятся на секунды. Пять секунд перекрывают эту разницу, не пряча самой границы.
 function SilenceSlackSeconds { 5 }
@@ -321,7 +338,14 @@ try {
     # прогона, хоть от чужой работы на той же базе. Строка в журнале получилась бы законной,
     # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
     # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0;" | Out-Null
+    # Порог переезда в историю ставится ЗДЕСЬ, до перезапуска: настройку служба держит в
+    # кэше, и правка при работающей службе до прохода не дойдёт (FINDINGS, раздел 67).
+    # Заводское значение - минута, а опыт держит блокировку считанные секунды: по нему
+    # уехало бы в историю ничто, и проверка переезда мерила бы пустоту.
+    Invoke-Sql @"
+UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0,
+       [History Threshold (ms)] = $(HistoryProbeMs);
+"@ | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
     Restart-Service $service -Force
@@ -477,6 +501,16 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     Check 'сторож поймал настоящую блокировку сам' $caught `
         "эпизод $caughtNo на [$markName]; последняя строка журнала: $seen"
 
+    # Блокировка держится, пока ожидание не ПЕРЕВАЛИТ порог переезда. Отпустить её сразу
+    # значило бы отдать длительность эпизода на волю случая: на первом же заходе вышло
+    # 1397 мс, и проверка переезда мерила бы не порог, а то, в какой миг прохода пришла
+    # очередь. Держателя хватает: он взят на пять минут.
+    $grew = Wait-For { ([int](Scalar "SELECT ISNULL([Max Wait (ms)],0) FROM $episode WHERE [Entry No_] = $caughtNo;")) -ge (HistoryProbeMs) } (GrowWaitSeconds)
+    if (-not $grew) {
+        $grewMs = Scalar "SELECT CONVERT(varchar(11),[Max Wait (ms)]) FROM $episode WHERE [Entry No_] = $caughtNo;"
+        Fail "эпизод $caughtNo за $(GrowWaitSeconds) с дорос лишь до $grewMs мс при пороге $(HistoryProbeMs) - опыт не удался"
+    }
+
     Write-Host 'Отпускаю блокировку и жду, пока эпизод закроется САМ'
     Stop-Sqlcmd $blocker
     Stop-Sqlcmd $waiter
@@ -523,6 +557,33 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     Invoke-Sql "UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
     $historyBefore = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $movedNo;")
     Invoke-Sql "UPDATE $episode SET [Started At] = DATEADD(day,-$($retention + 1),[Started At]) WHERE [Entry No_] = $movedNo;" | Out-Null
+    # Рядом кладётся ВТОРОЙ эпизод, точная копия первого, но ждавший всего ничего. Обоим
+    # пора уходить из журнала по сроку, и разойтись они обязаны: долгий - в историю,
+    # короткий - в удаление. Копия, а не выдуманная строка: у эпизода четыре десятка полей,
+    # и подставная строка проверяла бы не переезд, а умение прогона заполнять таблицу.
+    #
+    # Номер берётся MAX+1 одним оператором: сторож в этот миг работает, и вычисленный
+    # заранее номер мог бы достаться настоящему эпизоду.
+    $shortNo = [int](Scalar @"
+DECLARE @cols nvarchar(max) = N'', @sel nvarchar(max) = N'', @s nvarchar(max);
+SELECT @cols = @cols + CASE WHEN @cols = N'' THEN N'' ELSE N',' END + QUOTENAME(c.name),
+       @sel = @sel + CASE WHEN @sel = N'' THEN N'' ELSE N',' END +
+         CASE c.name WHEN N'Entry No_' THEN N'@new'
+                     WHEN N'Max Wait (ms)' THEN N'$(ShortEpisodeMs)'
+                     WHEN N'Started At' THEN N'DATEADD(day,-$($retention + 1),[Started At])'
+                     ELSE QUOTENAME(c.name) END
+FROM sys.columns c JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+WHERE c.object_id = OBJECT_ID(N'$episode') AND c.is_computed = 0 AND ty.name <> N'timestamp';
+DECLARE @new int = (SELECT MAX([Entry No_]) + 1 FROM $episode);
+SET @s = N'INSERT INTO $episode (' + @cols + N') SELECT ' + @sel + N' FROM $episode WHERE [Entry No_] = $caughtNo;';
+EXEC sp_executesql @s, N'@new int', @new = @new;
+SELECT CONVERT(varchar(11),@new);
+"@)
+    if ($shortNo -le 0) { Fail 'подставной короткий эпизод не лёг - опыт не удался' }
+    $longMs = [int](Scalar "SELECT [Max Wait (ms)] FROM $episode WHERE [Entry No_] = $movedNo;")
+    if ($longMs -lt $(HistoryProbeMs)) {
+        Fail "пойманный эпизод ждал $longMs мс при пороге $(HistoryProbeMs) - мерить переезд не на чем, опыт не удался"
+    }
 
     # Слово сторожа снимается В ТОТ ЖЕ МИГ, что и уход строки, а не после ожидания: строку
     # эту переписывает КАЖДЫЙ проход, и следующий - через три секунды - затрёт "уехало"
@@ -535,6 +596,16 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     } (MoveWaitSeconds)
     if (-not $leftJournal) { $movedSaid = Scalar "SELECT [Watchdog Message] FROM $state;" }
     $inHistory = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $movedNo;")
+    # Половины две, и порознь они пусты: переезд, увозящий ВСЁ, зелен по первой; переезд,
+    # удаляющий всё, зелен по второй. Слово сторожа спрашивается третьим: строка, пропавшая
+    # из журнала и не доехавшая до истории, без объяснения читается как потеря.
+    $shortLeft = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $shortNo;")
+    $shortInHistory = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $shortNo;")
+    Check 'в историю уезжает долгое, а короткое удаляется, и сказано об обоих' `
+        (($shortLeft -eq 0) -and ($shortInHistory -eq 0) -and ($inHistory -eq 1) -and
+         ($movedSaid -match 'deleted 1|удалено 1')) `
+        ("короткий эпизод $shortNo (ждал $(ShortEpisodeMs) мс при пороге $(HistoryProbeMs)): в журнале $shortLeft, " +
+         "в истории $shortInHistory; долгий $movedNo ждал $longMs мс, в истории $inHistory; сторож: $movedSaid")
     # Спрашивается не "стало ли в журнале меньше", а судьба ИМЕННО ЭТОЙ строки: ушла из
     # журнала и пришла в историю под своим номером. Счёт строк прошёл бы и на удалении - а
     # удаление и переезд отличаются ровно тем, ради чего инструмент ставят.

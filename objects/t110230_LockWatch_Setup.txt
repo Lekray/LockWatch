@@ -39,6 +39,9 @@ OBJECT Table 110230 LockWatch Setup
     { 16  ;   ;Journal Rows Ceiling;Integer       ;CaptionML=[ENU=Journal rows before the oldest move to history;
                                                               RUS=Сколько строк в журнале, прежде чем старые уедут в историю];
                                                    MinValue=0 }
+    { 17  ;   ;History Threshold (ms);Integer     ;CaptionML=[ENU=Wait worth keeping in history (ms);
+                                                              RUS=Какое ожидание стоит хранить в истории, мс];
+                                                   MinValue=0 }
     { 20  ;   ;Collect Statement Values;Boolean   ;CaptionML=[ENU=Collect Statement Values;
                                                               RUS=Собирать значения в операторах] }
     { 21  ;   ;Alert Threshold (ms);Integer       ;CaptionML=[ENU=Alert Threshold (ms);
@@ -148,6 +151,7 @@ OBJECT Table 110230 LockWatch Setup
       "Max Pass (ms)" := DefaultMaxPassMs;
       "Retention (Days)" := DefaultRetentionDays;
       "Journal Rows Ceiling" := DefaultJournalRows;
+      "History Threshold (ms)" := DefaultHistoryMs;
       "Alert Threshold (ms)" := DefaultAlertMs;
       "Collect Statement Values" := FALSE;
       "Deadlocks Enabled" := TRUE;
@@ -176,6 +180,23 @@ OBJECT Table 110230 LockWatch Setup
       // сломанной системе. Это не настройка среды, это смысловая граница - в коде.
       IF "Poll Period (ms)" >= Parse.NavLockTimeoutMs THEN
         ERROR(PeriodTooLongErr,Parse.NavLockTimeoutMs);
+    END;
+
+    LOCAL PROCEDURE DefaultHistoryMs@30() : Integer;
+    BEGIN
+      // Минута. Это НЕ смысловая граница, а умолчание для среды, и потому лежит в
+      // настройке: сколько ждать не жалко, решает установка, а не разработчик.
+      //
+      // Минута взята за то, что она заведомо больше предела ожидания NAV в 10 000 мс:
+      // эпизод, переваливший её, кончился не отказом по пределу, а настоящим длинным
+      // удержанием - за таким и возвращаются через месяц. Всё, что короче, из журнала
+      // УДАЛЯЕТСЯ, а не уезжает: история, набитая эпизодами по полсекунды, перестаёт
+      // быть историей и становится вторым журналом.
+      //
+      // Ноль означает "порога нет": уезжает всё, как было до появления этого поля. Так
+      // установка, обновившая инструмент, не теряет ни строки молча - решение "что не
+      // хранить" принимает человек, а не обновление.
+      EXIT(60000);
     END;
 
     LOCAL PROCEDURE DefaultPollPeriodMs@3() : Integer;

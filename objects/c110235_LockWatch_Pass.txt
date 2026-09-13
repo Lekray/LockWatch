@@ -34,7 +34,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       ReadFailedTxt@1000000008 : TextConst 'ENU=The queue could not be read: %1;RUS=Очередь прочитать не удалось: %1';
       DeadlockFailedTxt@1000000032 : TextConst 'ENU=Deadlocks are not read: %1;RUS=Взаимоблокировки не прочитаны: %1';
       DeadlocksTxt@1000000033 : TextConst 'ENU=Deadlocks added %1.;RUS=Взаимоблокировок добавлено %1.';
-      MovedTxt@1000000042 : TextConst 'ENU=Moved to history %1.;RUS=Уехало в историю %1.';
+      MovedTxt@1000000042 : TextConst 'ENU=Moved to history %1, deleted %2.;RUS=Уехало в историю %1, удалено %2.';
       SweptTxt@1000000044 : TextConst 'ENU=Swept marks of dead sessions %1.;RUS=Убрано отметок мёртвых сеансов %1.';
       DeadlockLostTxt@1000000034 : TextConst 'ENU=The ring buffer evicted events newer than the mark, some deadlocks are lost.;RUS=Буфер вытеснил события новее отметки, часть взаимоблокировок потеряна.';
       NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
@@ -71,6 +71,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       PassMs@1000000031 : Integer;
       Overrun@1000000032 : Text;
       Swept@1000000033 : Integer;
+      Moved@1000000034 : Integer;
+      Dropped@1000000035 : Integer;
     BEGIN
       // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
       // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
@@ -153,9 +155,11 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Пределов два, и второй нужен ровно там, где первый бессилен: в шторм всё, что
       // лежит в журнале, моложе срока. Сколько уехало - в строке сторожа: ненайденный
       // вчерашний эпизод без объяснения стоит часа поисков.
-      Note := Note + MovedNote(Journal.MoveOldEntries(Setup."Retention (Days)",
-                                                      Setup."Journal Rows Ceiling",
-                                                      TrimRowsPerPass(Setup."Max Rows per Pass")));
+      Moved := Journal.MoveOldEntries(Setup."Retention (Days)",
+                                      Setup."Journal Rows Ceiling",
+                                      TrimRowsPerPass(Setup."Max Rows per Pass"),
+                                      Setup."History Threshold (ms)",Dropped);
+      Note := Note + MovedNote(Moved,Dropped);
 
       Note := Note + SweptNote(Swept);
 
@@ -195,12 +199,13 @@ OBJECT Codeunit 110235 LockWatch Pass
         REPEAT
           IF Pending."Document No." <> '' THEN
             Journal.SetDocument(Pending."Entry No.",Pending."Document No.",Pending."User Name",
-                                Pending."Document Source",'',Pending."Victim User Name")
+                                Pending."Document Source",'',Pending."Victim User Name",
+                                Pending."Culprit Document No.")
           ELSE
             // Пустая колонка с ПРИЧИНОЙ честнее пустой колонки без неё: без причины она
             // читается как "блокировок по документам не было".
             Journal.SetDocument(Pending."Entry No.",'','',Parse.DocSourceNone,NoMarkTxt,
-                                Pending."Victim User Name");
+                                Pending."Victim User Name",'');
         UNTIL Pending.NEXT = 0;
       EXIT('');
     END;
@@ -486,13 +491,17 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(1000);
     END;
 
-    LOCAL PROCEDURE MovedNote@14(Moved@1000000000 : Integer) : Text;
+    LOCAL PROCEDURE MovedNote@14(Moved@1000000000 : Integer;Dropped@1000000001 : Integer) : Text;
     BEGIN
       // Ноль не пишется. Строку сторожа читают каждым проходом, и постоянное "уехало 0"
       // заслонило бы в ней то, ради чего её читают.
-      IF Moved = 0 THEN
+      //
+      // Удалённые называются ВСЛУХ и рядом с уехавшими. Строка, пропавшая из журнала и не
+      // доехавшая до истории, - это молчание в том самом месте, где человек ищет вчерашний
+      // эпизод; сказать "столько-то не стоило хранить" стоит одного числа.
+      IF (Moved = 0) AND (Dropped = 0) THEN
         EXIT('');
-      EXIT(' ' + STRSUBSTNO(MovedTxt,Moved));
+      EXIT(' ' + STRSUBSTNO(MovedTxt,Moved,Dropped));
     END;
 
     BEGIN

@@ -384,17 +384,27 @@ SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
   CONVERT(varchar(11),ISNULL(DATALENGTH([Blocker Statement Text]),0)) + '|' +
   CONVERT(varchar(11),ISNULL(DATALENGTH([Victim Statement]),0)) + '|' +
   CONVERT(varchar(11),[Entry No_]) + '|' +
-  CASE WHEN [Victim User Name] = '' THEN '-' ELSE [Victim User Name] END
+  CASE WHEN [Victim User Name] = '' THEN '-' ELSE [Victim User Name] END + '|' +
+  CASE WHEN [Culprit Document No_] = '' THEN '-' ELSE [Culprit Document No_] END
 FROM $episode WHERE [Class] <> 3 ORDER BY [Open] DESC, [Entry No_] DESC;
 "@
 }
 
 function Tell-Episode($f) {
-    if ($f.Count -lt 22) { Warn 'в журнале пусто'; return }
+    if ($f.Count -lt 23) { Warn 'в журнале пусто'; return }
     Say "журнал: таблица [$($f[0])], ключ NAV $($f[1]), режим $($f[2]), ожидание $($f[3])"
     Say "        эпизод $($f[4]), исход - $($f[5]), ждали $($f[6]) мс"
     if ($f[7] -ne '-') { Say "        документ $($f[7]) ($($f[8]))" } else { Say "        документ не назван: $($f[17])" }
     if ($f[9] -ne '-') { Say "        учётная запись виновника $($f[9]) ($($f[10]))" }
+    # Чем занят виновник - ответ ОТДЕЛЬНЫЙ от "за что спор". Отметку кладёт его же
+    # транзакция, и в ней последний документ, который он тронул; спор идёт за одну строку,
+    # а тронул он за транзакцию много. Совпало - сказать об этом стоит одной строки;
+    # разошлось - это и есть тот случай, ради которого колонка заведена: человек держит
+    # одну сделку, а встали на другой.
+    if ($f[22] -ne '-') {
+        if ($f[22] -eq $f[7]) { Say "        занят он той же сделкой $($f[22])" }
+        else { Say "        а занят виновник сделкой $($f[22]) - спор идёт не за неё" }
+    }
     # Второе имя - ответ на "кого задержали". Без него "кто кого" остаётся половиной
     # ответа: виновник назван, а пострадавший - номером сеанса.
     if ($f[21] -ne '-') { Say "        учётная запись жертвы   $($f[21])" }

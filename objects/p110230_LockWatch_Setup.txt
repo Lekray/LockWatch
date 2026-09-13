@@ -249,6 +249,15 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Journal Rows Ceiling" }
 
+    { 60  ;2   ;Field     ;
+                Name=HistoryThreshold;
+                CaptionML=[ENU=Wait worth keeping in history (ms);
+                           RUS=Какое ожидание стоит хранить в истории, мс];
+                ToolTipML=[ENU=Specifies how long an episode had to wait to be worth keeping. What is older than the term leaves the journal: episodes at or above this length MOVE to history, shorter ones are DELETED. History full of half-second episodes stops being history and becomes a second journal. Zero means no threshold - everything moves, as it did before this field existed.;
+                           RUS=Определяет, сколько эпизод должен был ждать, чтобы его стоило хранить. Из журнала уезжает то, что старше срока: эпизоды не короче этого ожидания ПЕРЕЕЗЖАЮТ в историю, остальные УДАЛЯЮТСЯ. История, набитая эпизодами по полсекунды, перестаёт быть историей и становится вторым журналом. Ноль означает, что порога нет: уезжает всё, как было до появления этого поля.];
+                ApplicationArea=#All;
+                SourceExpr="History Threshold (ms)" }
+
     { 10  ;2   ;Field     ;
                 Name=AlertThreshold;
                 CaptionML=[ENU=Alert Threshold (ms);

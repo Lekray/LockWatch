@@ -125,13 +125,13 @@ $runs = @(
     }
     @{
         Name = 'pass'; Script = 'Test-Pass.ps1'; Extra = @()
-        Checks = 30; WithInstance = $true
+        Checks = 31; WithInstance = $true
         Why = 'кратчайшая дорога до живого эпизода: сломан проход - дальше всё шум'
         What = 'проход на блокировке, документ, неразобранное имя, обе стороны по именам, очередь в два колена'
     }
     @{
         Name = 'pass-context'; Script = 'Test-Pass.ps1'; Extra = @('-ContextRoad')
-        Checks = 30; WithInstance = $true
+        Checks = 31; WithInstance = $true
         Why = 'та же блокировка, но документ берётся отметкой переходника, а не очередью'
         What = 'вторая дорога к документу'
     }
@@ -158,7 +158,7 @@ $runs = @(
     }
     @{
         Name = 'watch'; Script = 'Test-Watch.ps1'; Extra = @()
-        Checks = 15; WithInstance = $true
+        Checks = 16; WithInstance = $true
         Why = 'сторожу нужен спокойный журнал: он судит по тому, что появилось САМО'
         What = 'фоновая задача заводится, идёт сама, не двоится, увозит журнал в историю и умирает по кнопке'
     }

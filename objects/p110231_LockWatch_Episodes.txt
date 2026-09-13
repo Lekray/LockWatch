@@ -294,10 +294,17 @@ OBJECT Page 110231 LockWatch Episodes
 
     { 11  ;2   ;Field     ;
                 Name=DocumentNo;
-                ToolTipML=[ENU=Specifies the document the victim was working with, when it can be told at all.;
-                           RUS=Определяет документ, с которым работала жертва, если его вообще удаётся назвать.];
+                ToolTipML=[ENU=Specifies the document the fight is over: the contended row read back by the lock hash, or - when that road stays silent - the one from the culprit's context mark. The next column says which road answered.;
+                           RUS=Определяет документ, ЗА КОТОРЫЙ идёт спор: спорная строка, поднятая обратным поиском по хэшу блокировки, а если та дорога промолчала - документ из отметки виновника. Какая дорога ответила, сказано соседней колонкой.];
                 ApplicationArea=#All;
                 SourceExpr="Document No." }
+
+    { 63  ;2   ;Field     ;
+                Name=CulpritDocumentNo;
+                ToolTipML=[ENU=Specifies what the CULPRIT is busy with: the last document its own transaction touched, taken from the context mark. It is a different question from the one beside it - the fight is over one row, and a culprit touches many - and when the two disagree, this is the column that tells you what the person is actually doing.;
+                           RUS=Определяет, ЧЕМ ЗАНЯТ ВИНОВНИК: последний документ, который тронула его собственная транзакция, - из отметки контекста. Вопрос это другой, чем у соседней колонки: спор идёт за одну строку, а виновник трогает много, - и когда ответы расходятся, именно здесь видно, над чем человек работает на самом деле.];
+                ApplicationArea=#All;
+                SourceExpr="Culprit Document No." }
 
     { 12  ;2   ;Field     ;
                 Name=UserName;
