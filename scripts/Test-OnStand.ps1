@@ -714,6 +714,98 @@ if ($hidden) {
           (($hidden | Sort-Object) -join "`n  "))
 }
 
+# «Что встаёт в базу» - первый раздел, который читают перед установкой, и весь он состоит из
+# чисел, посчитанных руками: сколько объектов, каких родов, в каких номерах, сколько строк
+# выйдет в dbo.[Object] и какие кодюниты мерные. Пересчитывать их было некому: добавленный
+# объект молча оставлял список прежним, и служба безопасности согласовывала бы не то, что
+# приедет. Считает теперь сборка, и считает по ТОМУ САМОМУ пакету, который и повезёт
+# объекты, - не по папке и не по списку рядом.
+$kindCount = @{}; $kindFrom = @{}; $kindTo = @{}
+foreach ($p in $parts) {
+    if (-not $kindCount.ContainsKey($p.Kind)) {
+        $kindCount[$p.Kind] = 0; $kindFrom[$p.Kind] = $p.No; $kindTo[$p.Kind] = $p.No
+    }
+    $kindCount[$p.Kind]++
+    if ($p.No -lt $kindFrom[$p.Kind]) { $kindFrom[$p.Kind] = $p.No }
+    if ($p.No -gt $kindTo[$p.Kind]) { $kindTo[$p.Kind] = $p.No }
+}
+$listProblems = @()
+$namedKinds = @()
+foreach ($m in [regex]::Matches($installDoc,
+        '(?m)^\|\s*(?<kind>[A-Za-z]+)\s*\|\s*(?<from>\d+)\s*[-\u2013]\s*(?<to>\d+)\s*\|\s*(?<count>\d+)\s*\|')) {
+    $kind = $m.Groups['kind'].Value
+    if (-not $kindCount.ContainsKey($kind)) {
+        $listProblems += "в пакете нет ни одного объекта рода $kind, а раздел «Что встаёт в базу» его называет"
+        continue
+    }
+    $namedKinds += $kind
+    $said = "$($m.Groups['from'].Value)-$($m.Groups['to'].Value), $($m.Groups['count'].Value) шт"
+    $real = "$($kindFrom[$kind])-$($kindTo[$kind]), $($kindCount[$kind]) шт"
+    if ($said -ne $real) { $listProblems += "$kind в docs/INSTALL.md обещан как $said, а в пакете $real" }
+}
+foreach ($kind in $kindCount.Keys) {
+    if ($namedKinds -notcontains $kind) {
+        $listProblems += "пакет везёт $($kindCount[$kind]) объектов рода $kind, а раздел «Что встаёт в базу» о них молчит"
+    }
+}
+
+# Всего объектов и диапазон, который инструмент занимает целиком. Границы диапазона - те же
+# параметры, по которым сборка судит о своём и чужом, а не число, переписанное в документ.
+$whole = [regex]::Match($installDoc, '(?<n>\d+)\s+объект\w*\s+в диапазоне\s+\*\*(?<from>\d+)\s*[-\u2013]\s*(?<to>\d+)\*\*')
+if (-not $whole.Success) {
+    $listProblems += 'в docs/INSTALL.md нет строки «N объектов в диапазоне A-B» - правило о ней протухло'
+} else {
+    if ([int]$whole.Groups['n'].Value -ne $parts.Count) {
+        $listProblems += "объектов обещано $($whole.Groups['n'].Value), а в пакете $($parts.Count)"
+    }
+    if (([int]$whole.Groups['from'].Value -ne $OurFirstObject) -or ([int]$whole.Groups['to'].Value -ne $OurLastObject)) {
+        $listProblems += ("диапазон обещан $($whole.Groups['from'].Value)-$($whole.Groups['to'].Value), " +
+                          "а сборка считает своими $OurFirstObject-$OurLastObject")
+    }
+}
+
+# Строк в dbo.[Object] БОЛЬШЕ, чем объектов: у каждой таблицы там ещё одна, на её данные.
+# Число это тоже написано в документе, и выводится оно отсюда же, а не запоминается.
+$objRows = [regex]::Match($installDoc, 'В таблице `dbo\.\[Object\]` это \*\*(?<n>\d+) строк\*\*, а не (?<objs>\d+)')
+if (-not $objRows.Success) {
+    $listProblems += 'в docs/INSTALL.md нет строки о числе строк в dbo.[Object] - правило о ней протухло'
+} else {
+    $wantRows = $parts.Count + $(if ($kindCount.ContainsKey('Table')) { $kindCount['Table'] } else { 0 })
+    if ([int]$objRows.Groups['n'].Value -ne $wantRows) {
+        $listProblems += "строк в dbo.[Object] обещано $($objRows.Groups['n'].Value), а выйдет $wantRows"
+    }
+    # Число объектов названо в той же строке второй раз, и разойтись эти два могут порознь.
+    if ([int]$objRows.Groups['objs'].Value -ne $parts.Count) {
+        $listProblems += "там же объектов названо $($objRows.Groups['objs'].Value), а в пакете $($parts.Count)"
+    }
+}
+
+# Списков в разделе два, и у обоих есть в сборке настоящий двойник: мерные кодюниты она
+# знает поимённо, объекты показа зовутся словом Demo. Сверяются они целиком - разойтись
+# список может в обе стороны, и забытым именем, и лишним, - а номер берётся только из
+# обратных кавычек: число из пояснения рядом списком не является.
+$toldLists = @(
+    @{ Head = '**Мерные кодюниты**'; Want = @($benchCodeunits) }
+    @{ Head = '**Кодюниты показа и таблица к ним**'
+       Want = @($parts | Where-Object { $_.Name -match 'Demo' } | ForEach-Object { $_.No }) }
+)
+foreach ($told in $toldLists) {
+    $saidBody = [regex]::Match($installDoc, '(?s)' + [regex]::Escape($told.Head) + '(.*?)\r?\n\r?\n').Groups[1].Value
+    if (-not $saidBody) {
+        $listProblems += "в docs/INSTALL.md нет абзаца $($told.Head) - правило о нём протухло"
+        continue
+    }
+    $said = @([regex]::Matches($saidBody, '`(?:Table\s+)?(?<no>\d+)`') |
+              ForEach-Object { [int]$_.Groups['no'].Value } | Sort-Object -Unique)
+    $want = @($told.Want | Sort-Object -Unique)
+    if (($said -join ',') -ne ($want -join ',')) {
+        $listProblems += "$($told.Head): в документе $($said -join ', '), а на деле $($want -join ', ')"
+    }
+}
+if ($listProblems) {
+    Fail ("раздел «Что встаёт в базу» разошёлся с пакетом - по нему согласуют установку:`n  " +
+          (($listProblems | Sort-Object) -join "`n  "))
+}
 # Число в этом проекте обязано иметь того, кто его меряет. У чисел, которыми документы
 # описывают САМИ СЕБЯ - сколько проверок делает прогон, сколько прогонов в смете, - такой
 # был всегда: ведомость сметы и сами обкатки. Но списывали их оттуда РУКАМИ, и 13.09.2026
