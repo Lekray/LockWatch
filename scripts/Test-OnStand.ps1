@@ -46,6 +46,7 @@ param(
     [int]    $TestCodeunitId = 110231,
     [int]    $BenchCodeunitId = 110233,
     [int]    $AdapterCodeunitId = 110237,
+    [int]    $SetupTableId    = 110230,
     [int]    $TimeoutMinutes = 3,
     [switch] $Run,
     [switch] $StopInstance
@@ -474,6 +475,49 @@ foreach ($p in $parts) {
 }
 if ($unreachable) {
     Fail ("до боевой функции не доходит живая дорога:`n  " + (($unreachable | Sort-Object) -join "`n  "))
+}
+
+# Заводское значение поля настройки срабатывает РОВНО ОДИН раз - когда строка настройки
+# заводится. Выкладка поверх работающей установки её не заводит: столбец добавляет SQL, а
+# умолчания живут в коде, и поле, появившееся позже прежней сборки, ложится в существующую
+# строку нулём. Для половины полей ноль означает ровно прежнее поведение, а для другой
+# половины - молча выключенную возможность: тревогу, охват, взаимоблокировки.
+#
+# Сказать об этом обязан порядок установки, и список этот вёлся руками - то есть отставал.
+# Замер 13.09.2026: из двенадцати полей с ненулевым заводским значением названо было ОДНО,
+# а два, которые раздел считал названными, звались в нём именами, которых на экране нет.
+#
+# Имя требуется ТО, что видит человек: русская надпись поля. Английское имя из кода читатель
+# на странице настройки не найдёт, и раздел, написанный на нём, отправляет искать не туда.
+$setupPart = $parts | Where-Object { ($_.Kind -eq 'Table') -and ($_.No -eq $SetupTableId) }
+if (-not $setupPart) { Fail "в пакете нет таблицы настройки $SetupTableId - правило об обновлении протухло" }
+$initBlock = [regex]::Match($setupPart.Body, '(?s)INIT;(.*?)INSERT;').Groups[1].Value
+if (-not $initBlock) { Fail "в таблице настройки $SetupTableId нет блока заведения строки - проверять нечего" }
+$setupCaptions = @{}
+foreach ($m in [regex]::Matches($setupPart.Body,
+        '(?s)(?m)^\s*\{\s*\d+\s*;\s*;([^;]+?)\s*;\s*[\w\[\]]+\s*;(.*?)(?=(?:\r?\n\s*\{\s*\d+\s*;)|(?:\r?\n\s*\}))')) {
+    $rus = [regex]::Match($m.Groups[2].Value, '(?s)RUS=(.*?)\]')
+    if ($rus.Success) { $setupCaptions[$m.Groups[1].Value.Trim()] = ($rus.Groups[1].Value -replace '\s+', ' ').Trim() }
+}
+$upgradeHead = '## Обновление поверх прежней выкладки'
+$upgradeText = [regex]::Match($installDoc, '(?s)' + [regex]::Escape($upgradeHead) + '(.*?)(?:\r?\n## |\z)').Groups[1].Value
+if (-not $upgradeText) { Fail "в порядке установки нет раздела «$($upgradeHead.Trim('# '))» - правило о нём протухло" }
+$upgradeFlat = ($upgradeText -replace '\s+', ' ')
+$unsaid = @()
+foreach ($m in [regex]::Matches($initBlock, '(?m)^\s*("[^"]+"|[A-Za-z][A-Za-z0-9_]*)\s*:=\s*(.+?);')) {
+    $field = $m.Groups[1].Value.Trim('"')
+    $value = $m.Groups[2].Value.Trim()
+    # Ноль, пустая строка и снятая галка - это и есть то, чем поле придёт на обновлении.
+    # Говорить о них нечего: заведение строки кладёт туда то же самое.
+    if (($value -eq 'FALSE') -or ($value -eq '0') -or ($value -eq "''")) { continue }
+    $caption = $setupCaptions[$field]
+    if (-not $caption) { Fail "у поля настройки [$field] нет русской надписи - назвать его в порядке установки нечем" }
+    if ($upgradeFlat -notmatch [regex]::Escape($caption)) { $unsaid += "«$caption» (поле $field)" }
+}
+if ($unsaid) {
+    Fail ("на обновлении поле придёт нулём, а раздел «Обновление поверх прежней выкладки» " +
+          "в docs/INSTALL.md о нём молчит - назвать его надо надписью с экрана:`n  " +
+          (($unsaid | Sort-Object) -join "`n  "))
 }
 
 $packUtf = Join-Path $outDir 'LockWatch.txt'
