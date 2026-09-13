@@ -412,7 +412,7 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE MoveOldEntries@5(RetentionDays@1000000000 : Integer;RowCeiling@1000000013 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000005 : Integer;VAR Dropped@1000000006 : Integer) : Integer;
+    PROCEDURE MoveOldEntries@5(RetentionDays@1000000000 : Integer;RowCeiling@1000000013 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000005 : Integer;CoverageSince@1000000008 : DateTime;VAR Dropped@1000000006 : Integer;VAR InCoverage@1000000009 : Integer;VAR InCoverageMs@1000000010 : BigInteger) : Integer;
     VAR
       Moved@1000000004 : Integer;
     BEGIN
@@ -424,6 +424,11 @@ OBJECT Codeunit 110232 LockWatch Journal
       // Порог живёт в настройке, потому что это про СРЕДУ: сколько ждать не жалко, знает
       // установка. Ноль означает "порога нет" - уезжает всё, как было до его появления.
       Dropped := 0;
+      // Выброшенное считает ОХВАТ, и считает отдельно от "сколько удалено". Числа эти
+      // расходятся на строках старше отметки охвата: удалить их надо, а в долю названного
+      // они и не входили. Слово сторожа говорит про весь проход, охват - про свой срок.
+      InCoverage := 0;
+      InCoverageMs := 0;
       // Строка не уничтожается, а ПЕРЕЕЗЖАЕТ в историю. Из журнала она уходит затем, что
       // журнал горячий: в него пишет каждый проход и в нём же ищутся открытые эпизоды.
       // Из истории её не удаляет ничто - ни проход, ни задача, ни срок; инструмент, тихо
@@ -445,12 +450,13 @@ OBJECT Codeunit 110232 LockWatch Journal
         EXIT(0);
       // Потолок считает ОБА исхода: удаление стоит той же записи, что и переезд, и проход,
       // удаливший тысячу строк, не дешевле прохода, увёзшего тысячу.
-      Moved := MoveOlderThan(RetentionDays,MaxRows,HistoryMs,Dropped);
-      Moved := Moved + MoveOverCeiling(RowCeiling,MaxRows - Moved - Dropped,HistoryMs,Dropped);
+      Moved := MoveOlderThan(RetentionDays,MaxRows,HistoryMs,CoverageSince,Dropped,InCoverage,InCoverageMs);
+      Moved := Moved + MoveOverCeiling(RowCeiling,MaxRows - Moved - Dropped,HistoryMs,CoverageSince,
+                                       Dropped,InCoverage,InCoverageMs);
       EXIT(Moved);
     END;
 
-    LOCAL PROCEDURE MoveOlderThan@25(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000005 : Integer;VAR Dropped@1000000006 : Integer) : Integer;
+    LOCAL PROCEDURE MoveOlderThan@25(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000005 : Integer;CoverageSince@1000000008 : DateTime;VAR Dropped@1000000006 : Integer;VAR InCoverage@1000000009 : Integer;VAR InCoverageMs@1000000010 : BigInteger) : Integer;
     VAR
       Threshold@1000000002 : DateTime;
       Age@1000000003 : Duration;
@@ -468,7 +474,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.SETFILTER("Started At",'<%1',Threshold);
       IF Journal.FINDSET(TRUE) THEN
         REPEAT
-          IF MoveCurrent(HistoryMs) THEN
+          IF MoveCurrent(HistoryMs,CoverageSince,InCoverage,InCoverageMs) THEN
             Moved := Moved + 1
           ELSE
             Dropped := Dropped + 1;
@@ -477,7 +483,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       EXIT(Moved);
     END;
 
-    LOCAL PROCEDURE MoveOverCeiling@26(RowCeiling@1000000000 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000004 : Integer;VAR Dropped@1000000005 : Integer) : Integer;
+    LOCAL PROCEDURE MoveOverCeiling@26(RowCeiling@1000000000 : Integer;MaxRows@1000000001 : Integer;HistoryMs@1000000004 : Integer;CoverageSince@1000000007 : DateTime;VAR Dropped@1000000005 : Integer;VAR InCoverage@1000000008 : Integer;VAR InCoverageMs@1000000009 : BigInteger) : Integer;
     VAR
       Surplus@1000000002 : Integer;
       Moved@1000000003 : Integer;
@@ -507,7 +513,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal.SETRANGE(Open,FALSE);
       IF Journal.FINDSET(TRUE) THEN
         REPEAT
-          IF MoveCurrent(HistoryMs) THEN
+          IF MoveCurrent(HistoryMs,CoverageSince,InCoverage,InCoverageMs) THEN
             Moved := Moved + 1
           ELSE
             Dropped := Dropped + 1;
@@ -516,7 +522,7 @@ OBJECT Codeunit 110232 LockWatch Journal
       EXIT(Moved);
     END;
 
-    LOCAL PROCEDURE MoveCurrent@27(HistoryMs@1000000000 : Integer) : Boolean;
+    LOCAL PROCEDURE MoveCurrent@27(HistoryMs@1000000000 : Integer;CoverageSince@1000000001 : DateTime;VAR InCoverage@1000000002 : Integer;VAR InCoverageMs@1000000003 : BigInteger) : Boolean;
     BEGIN
       // Строка уходит из журнала в любом случае - она старше срока или лишняя по потолку.
       // Вопрос только в том, КУДА: за порогом её ждёт история, до порога - удаление.
@@ -526,6 +532,18 @@ OBJECT Codeunit 110232 LockWatch Journal
       // Сравнение нестрогое: порог в минуту означает "минута и дольше", а не "дольше
       // минуты", - человек читает его именно так.
       IF (HistoryMs > 0) AND (Journal."Max Wait (ms)" < HistoryMs) THEN BEGIN
+        // Кто выбросил, тот и посчитал. Эпизод, увиденный и потом выброшенный нарочно,
+        // увиден БЫЛ, и охват обязан знать о нём: иначе доля названного падала бы сама
+        // собой по сроку и по потолку, а падение читалось бы как испортившееся наблюдение
+        // (раздел 39). Строки после DELETE не будет, и сосчитать её можно только здесь.
+        //
+        // Считается лишь то, что попадает в срок охвата: строка старше отметки в долю и
+        // не входила, и прибавить её значило бы увести долю за сотню процентов - ровно ту
+        // беду, ради которой отметку и завели.
+        IF (CoverageSince = 0DT) OR (Journal."Started At" >= CoverageSince) THEN BEGIN
+          InCoverage := InCoverage + 1;
+          InCoverageMs := InCoverageMs + Journal."Max Wait (ms)";
+        END;
         Journal.DELETE;
         EXIT(FALSE);
       END;

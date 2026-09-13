@@ -45,6 +45,12 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CeilingTxt@1000000063 : TextConst 'ENU=moved %1 of the %2 over the ceiling, journal %3 against the ceiling %4, the open %5 stayed;RUS=переехало %1 из %2 сверх потолка, в журнале %3 при потолке %4, идущий %5 остался';
       ChkCovMoveTxt@1000000064 : TextConst 'ENU=moving an episode to history does not change the coverage;RUS=переезд эпизода в историю не меняет охвата';
       CovMoveTxt@1000000065 : TextConst 'ENU=episodes %1 before and %2 after, ms %3 and %4, moved %5;RUS=эпизодов %1 до и %2 после, мс %3 и %4, переехало %5';
+      ChkCovDropTxt@1000000066 : TextConst 'ENU=an episode dropped as too short is still counted by the coverage;RUS=эпизод, выброшенный как короткий, охват всё равно считает';
+      CovDropTxt@1000000067 : TextConst 'ENU=dropped %1 of them in the stretch %2 for %3 ms, moved %4 of the expected 0 - episodes %5 before and %6 after, ms %7 and %8;RUS=выброшено %1, из них в сроке %2 на %3 мс, переехало %4 при ожидаемом 0 - эпизодов %5 до и %6 после, мс %7 и %8';
+      ChkCovOutsideTxt@1000000068 : TextConst 'ENU=an episode older than the coverage mark is dropped without moving the share;RUS=эпизод старше отметки охвата выбрасывается, не двигая доли';
+      CovOutsideTxt@1000000069 : TextConst 'ENU=dropped %1, of them in the stretch %2 of the expected 0 - episodes %3 before and %4 after, ms %5 and %6;RUS=выброшено %1, из них в сроке %2 при ожидаемом 0 - эпизодов %3 до и %4 после, мс %5 и %6';
+      ChkCovReadsTxt@1000000070 : TextConst 'ENU=the coverage reads the dropped tally instead of keeping its own;RUS=охват читает накопитель выброшенного, а не ведёт свой';
+      CovReadsTxt@1000000071 : TextConst 'ENU=the tally grew by %1 episodes and %2 ms, the coverage by %3 and %4;RUS=накопитель вырос на %1 эпизодов и %2 мс, охват - на %3 и %4';
       ChkTrimTxt@1000000014 : TextConst 'ENU=what is older than the term leaves the journal for history, and nothing is lost on the way;RUS=что старше срока, уезжает из журнала в историю, и по дороге ничего не теряется';
       TrimTxt@1000000015 : TextConst 'ENU=moved %1 of the %2 backdated, left %3 of %4, landed in history %5;RUS=переехало %1 из %2 состаренных, осталось %3 из %4, доехало до истории %5';
       ChkCostTxt@1000000016 : TextConst 'ENU=the NAV half of a pass fits into the declared ceiling;RUS=NAV-половина прохода укладывается в объявленный потолок';
@@ -109,6 +115,9 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Backdated@1000000015 : Integer;
       Removed@1000000016 : Integer;
       BenchDropped@1000000075 : Integer;
+      BenchInCoverage@1000000076 : Integer;
+      BenchInCoverageMs@1000000077 : BigInteger;
+      MovedByDrop@1000000078 : Integer;
       InHistoryBefore@1000000047 : Integer;
       HeldNo@1000000065 : Integer;
       OldestClosed@1000000066 : Integer;
@@ -278,7 +287,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // удалении, то есть на потере, ради недопущения которой всё и затевалось.
       Backdated := Backdate(BackdateRows,BackdateDays);
       InHistoryBefore := MovedRowCount;
-      Removed := Journal.MoveOldEntries(RetentionUnderTest,0,Waiters,NoHistoryThreshold,BenchDropped);
+      Removed := Journal.MoveOldEntries(RetentionUnderTest,0,Waiters,NoHistoryThreshold,0DT,
+                                        BenchDropped,BenchInCoverage,BenchInCoverageMs);
       Check(Passed,Total,Report,ChkTrimTxt,
             (Removed = Backdated) AND (Backdated = BackdateRows) AND
             (BenchRowCount = Waiters - BackdateRows) AND
@@ -304,7 +314,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // уехавший, увиден был. Мерка сильна именно равенством: доля, посчитанная по одному
       // журналу, падала бы здесь сама собой и выглядела бы как испортившееся наблюдение.
       Coverage.JournalTotal(0DT,CovEpBefore,CovMsBefore);
-      MovedByCeiling := Journal.MoveOldEntries(0,RowsBefore - CeilingSurplus,Waiters,NoHistoryThreshold,BenchDropped);
+      MovedByCeiling := Journal.MoveOldEntries(0,RowsBefore - CeilingSurplus,Waiters,NoHistoryThreshold,0DT,
+                                               BenchDropped,BenchInCoverage,BenchInCoverageMs);
       Check(Passed,Total,Report,ChkCeilingTxt,
             (MovedByCeiling = CeilingSurplus) AND
             (JournalRowCount = RowsBefore - CeilingSurplus) AND
@@ -315,9 +326,64 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
 
       // Переезд состоялся - без него равенство ниже прошло бы и на охвате по одному журналу.
       Coverage.JournalTotal(0DT,CovEpAfter,CovMsAfter);
+      // Непустоту равенства сторожит "до" БОЛЬШЕ НУЛЯ. Две величины, обнулившиеся разом,
+      // равны друг другу, и проверка на этом проходит вхолостую: так и случилось, когда
+      // охват на миг стал присваивать себе накопитель выброшенного вместо сложения - здесь
+      // сошлось 0 с 0, а сказала об этом только соседняя сцена.
       Check(Passed,Total,Report,ChkCovMoveTxt,
-            (CovEpAfter = CovEpBefore) AND (CovMsAfter = CovMsBefore) AND (MovedByCeiling > 0),
+            (CovEpAfter = CovEpBefore) AND (CovMsAfter = CovMsBefore) AND (MovedByCeiling > 0) AND
+            (CovEpBefore > 0) AND (CovMsBefore > 0),
             STRSUBSTNO(CovMoveTxt,CovEpBefore,CovEpAfter,CovMsBefore,CovMsAfter,MovedByCeiling));
+
+      // Порог переезда УДАЛЯЕТ короткое вместо переезда, и охват обязан знать об удалённом:
+      // эпизод, увиденный и выброшенный нарочно, увиден БЫЛ. Иначе доля названного падала
+      // бы сама собой по сроку и по потолку - ровно та беда, ради которой охват считается
+      // по журналу ВМЕСТЕ с историей.
+      //
+      // Порог берётся заведомо больше любого ожидания мерного прогона: уехать не должно
+      // НИЧЕГО, всё обязано уйти в удаление. Смесь переезда с удалением меряла бы обе
+      // дороги разом, и покрасневшая проверка не сказала бы, которая из них сломана.
+      Coverage.JournalTotal(0DT,CovEpBefore,CovMsBefore);
+      MovedByDrop := Journal.MoveOldEntries(0,JournalRowCount - DropSurplus,Waiters,DropThresholdMs,0DT,
+                                            BenchDropped,BenchInCoverage,BenchInCoverageMs);
+      Coverage.JournalTotal(0DT,CovEpAfter,CovMsAfter);
+      // Равенство здесь со слагаемым, а не голое: строки в журнале уже нет, и охват держит
+      // её ТОЛЬКО счётом. Проверка без слагаемого прошла бы и на охвате, потерявшем её.
+      Check(Passed,Total,Report,ChkCovDropTxt,
+            (BenchDropped = DropSurplus) AND (BenchInCoverage = DropSurplus) AND
+            (MovedByDrop = 0) AND (BenchInCoverageMs > 0) AND
+            (CovEpAfter + BenchInCoverage = CovEpBefore) AND
+            (CovMsAfter + BenchInCoverageMs = CovMsBefore),
+            STRSUBSTNO(CovDropTxt,BenchDropped,BenchInCoverage,BenchInCoverageMs,MovedByDrop,
+                       CovEpBefore,CovEpAfter,CovMsBefore,CovMsAfter));
+
+      // Отметка охвата в будущем: ни одна строка журнала в срок не попадает. Выбросить их
+      // надо, а доле названного дрогнуть не с чего - их в ней и не было. Без этого отбора
+      // нажатие "начать счёт заново" уводило бы долю за сотню процентов: журнальная
+      // половина считалась бы с этого мига плюс всё выброшенное за прошлую жизнь.
+      PlantDropped(DropPlantEpisodes,DropPlantMs);
+      Coverage.JournalTotal(FutureMark,CovEpBefore,CovMsBefore);
+      MovedByDrop := Journal.MoveOldEntries(0,JournalRowCount - DropSurplus,Waiters,DropThresholdMs,FutureMark,
+                                            BenchDropped,BenchInCoverage,BenchInCoverageMs);
+      Coverage.JournalTotal(FutureMark,CovEpAfter,CovMsAfter);
+      Check(Passed,Total,Report,ChkCovOutsideTxt,
+            (BenchDropped = DropSurplus) AND (BenchInCoverage = 0) AND (BenchInCoverageMs = 0) AND
+            (CovEpBefore > 0) AND (CovEpAfter = CovEpBefore) AND (CovMsAfter = CovMsBefore),
+            STRSUBSTNO(CovOutsideTxt,BenchDropped,BenchInCoverage,
+                       CovEpBefore,CovEpAfter,CovMsBefore,CovMsAfter));
+
+      // И третье: что охват накопитель ЧИТАЕТ. Две проверки выше прошли бы и на охвате,
+      // который его не знает вовсе, - там накопитель не менялся и сокращался в равенстве.
+      // Здесь меняется только он, а журнал не трогается совсем.
+      Coverage.JournalTotal(0DT,CovEpBefore,CovMsBefore);
+      PlantDropped(DropPlantEpisodes * 2,DropPlantMs * 2);
+      Coverage.JournalTotal(0DT,CovEpAfter,CovMsAfter);
+      Check(Passed,Total,Report,ChkCovReadsTxt,
+            (CovEpAfter - CovEpBefore = DropPlantEpisodes) AND
+            (CovMsAfter - CovMsBefore = DropPlantMs),
+            STRSUBSTNO(CovReadsTxt,DropPlantEpisodes,DropPlantMs,
+                       CovEpAfter - CovEpBefore,CovMsAfter - CovMsBefore));
+      PlantDropped(0,0);
 
       // Зеркало сверяется КАЖДЫМ прогоном, а не глазами при правке. Список полей истории
       // списан с журнала, и разойтись он может только молча: добавленное поле просто не
@@ -644,6 +710,55 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Семь строк сверх потолка. Не десять: состаренных ровно десять, и совпади числа -
       // подмена одного предела другим прошла бы проверку незамеченной.
       EXIT(7);
+    END;
+
+    LOCAL PROCEDURE DropThresholdMs@58() : Integer;
+    BEGIN
+      // Час. Заведомо больше любого ожидания, какое кладёт мерный прогон, - значит из
+      // журнала не уедет НИЧЕГО, всё уйдёт в удаление. Смесь переезда с удалением мерила
+      // бы обе дороги разом, и покрасневшая проверка не сказала бы, которая сломана.
+      EXIT(3600000);
+    END;
+
+    LOCAL PROCEDURE DropSurplus@59() : Integer;
+    BEGIN
+      // Пять строк сверх потолка. Не семь: столько уезжает в сцене потолка, и совпади
+      // числа - проверка прошла бы на чужом остатке.
+      EXIT(5);
+    END;
+
+    LOCAL PROCEDURE FutureMark@60() : DateTime;
+    BEGIN
+      // Отметка охвата в завтрашнем дне: ни одна строка журнала в срок не попадает.
+      // Сутки, а не секунда: часы у базы и у сессии расходятся, и отметка "сейчас плюс
+      // чуть-чуть" оказалась бы позади половины строк на чужой машине.
+      EXIT(CURRENTDATETIME + 86400000);
+    END;
+
+    LOCAL PROCEDURE DropPlantEpisodes@61() : Integer;
+    BEGIN
+      // Три эпизода. Не один: единица прошла бы и там, где охват прибавляет не накопитель,
+      // а признак "он непуст".
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE DropPlantMs@62() : Integer;
+    BEGIN
+      // Сто одиннадцать миллисекунд. Число нарочно не круглое и не кратное числу эпизодов:
+      // подмена одного накопителя другим или счёт "по эпизоду" выдали бы себя сразу.
+      EXIT(111);
+    END;
+
+    LOCAL PROCEDURE PlantDropped@63(Episodes@1000000000 : Integer;WaitMs@1000000001 : Integer);
+    VAR
+      State@1000000002 : Record 110237;
+    BEGIN
+      // Накопитель выброшенного кладётся руками: сцена меряет, что охват его ЧИТАЕТ, и
+      // настоящее удаление тут только мешало бы - оно меняет и журнал.
+      State.FetchToWrite;
+      State."Dropped Episodes" := Episodes;
+      State."Dropped Wait (ms)" := WaitMs;
+      State.MODIFY;
     END;
 
     LOCAL PROCEDURE MirrorGap@43() : Text;

@@ -73,6 +73,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       Swept@1000000033 : Integer;
       Moved@1000000034 : Integer;
       Dropped@1000000035 : Integer;
+      DroppedSeen@1000000036 : Integer;
+      DroppedSeenMs@1000000037 : BigInteger;
     BEGIN
       // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
       // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
@@ -100,7 +102,9 @@ OBJECT Codeunit 110235 LockWatch Pass
       THEN BEGIN
         // Отказ съёма журнал НЕ трогает. Закрыть эпизоды моментом, которого мы не знаем,
         // значило бы объявить их законченными, ничего об этом не выяснив.
-        SaveWatchdog(State,STRSUBSTNO(ReadFailedTxt,Sql.LastErrorText),StartedAt,NoTime,0,FALSE);
+        // Нули на месте выброшенного - не заглушка: до переезда проход здесь не доходит
+        // вовсе, и прибавлять ему нечего.
+        SaveWatchdog(State,STRSUBSTNO(ReadFailedTxt,Sql.LastErrorText),StartedAt,NoTime,0,FALSE,0,0);
         EXIT(FALSE);
       END;
 
@@ -158,7 +162,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       Moved := Journal.MoveOldEntries(Setup."Retention (Days)",
                                       Setup."Journal Rows Ceiling",
                                       TrimRowsPerPass(Setup."Max Rows per Pass"),
-                                      Setup."History Threshold (ms)",Dropped);
+                                      Setup."History Threshold (ms)",State."Coverage Since",
+                                      Dropped,DroppedSeen,DroppedSeenMs);
       Note := Note + MovedNote(Moved,Dropped);
 
       Note := Note + SweptNote(Swept);
@@ -174,7 +179,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF Overrun <> '' THEN
         Overrun := Overrun + ' ';
       SaveWatchdog(State,Overrun + PassNote(RowCount,OtherDatabase,Truncated,Setup."Max Rows per Pass",Note),
-             ObservedAt,Elapsed,RowCount,Truncated);
+             ObservedAt,Elapsed,RowCount,Truncated,DroppedSeen,DroppedSeenMs);
       EXIT(TRUE);
     END;
 
@@ -367,7 +372,7 @@ OBJECT Codeunit 110235 LockWatch Pass
         UNTIL ContextTable.NEXT = 0;
     END;
 
-    LOCAL PROCEDURE SaveWatchdog@2(VAR State@1000000000 : Record 110237;Msg@1000000001 : Text;At@1000000002 : DateTime;Elapsed@1000000003 : Duration;Rows@1000000006 : Integer;Truncated@1000000004 : Boolean);
+    LOCAL PROCEDURE SaveWatchdog@2(VAR State@1000000000 : Record 110237;Msg@1000000001 : Text;At@1000000002 : DateTime;Elapsed@1000000003 : Duration;Rows@1000000006 : Integer;Truncated@1000000004 : Boolean;DroppedSeen@1000000008 : Integer;DroppedSeenMs@1000000009 : BigInteger);
     VAR
       Fresh@1000000007 : Record 110237;
       Milliseconds@1000000005 : Integer;
@@ -398,6 +403,18 @@ OBJECT Codeunit 110235 LockWatch Pass
       // отметка - его дело, непустая - уже чьё-то.
       IF Fresh."Coverage Since" = 0DT THEN
         Fresh."Coverage Since" := State."Coverage Since";
+      // Выброшенное ПРИБАВЛЯЕТСЯ к тому, что уже лежит в свежей строке, а не переносится
+      // из прочитанного в начале прохода: это накопитель, и переписать его своим числом
+      // значило бы стереть всё, что насчитали проходы до нас.
+      //
+      // Прибавляется только тогда, когда отметку охвата под нами не тронули. Нажатие
+      // "начать счёт заново" обнуляет пару вместе с отметкой, и наш прирост относится к
+      // сроку, который в этот миг кончился: прибавить его к новому счёту значило бы увести
+      // долю за сотню процентов - ровно та беда, ради которой отметка и заведена.
+      IF Fresh."Coverage Since" = State."Coverage Since" THEN BEGIN
+        Fresh."Dropped Episodes" := Fresh."Dropped Episodes" + DroppedSeen;
+        Fresh."Dropped Wait (ms)" := Fresh."Dropped Wait (ms)" + DroppedSeenMs;
+      END;
       Fresh."Last Pass At" := At;
       Fresh."Last Pass (ms)" := Milliseconds;
       Fresh."Last Pass Rows" := Rows;

@@ -157,6 +157,24 @@ OBJECT Page 110234 LockWatch Coverage
                 ApplicationArea=#All;
                 SourceExpr=JournalEpisodes }
 
+    { 60  ;2   ;Field     ;
+                Name=DroppedEpisodes;
+                CaptionML=[ENU=Of them dropped as too short;
+                           RUS=Из них выброшено как короткое];
+                ToolTipML=[ENU=Specifies how many of the named episodes are no longer anywhere: they left the journal and were deleted instead of moving to history, because they waited less than the threshold in the setup. They are counted in anyway - an episode seen and then deliberately dropped was still seen, and leaving it out would call the tool own cleanup a miss.;
+                           RUS=Определяет, скольких из названных эпизодов уже нет нигде: они ушли из журнала и были удалены вместо переезда в историю, потому что ждали меньше порога из настройки. Считаются они всё равно - эпизод, увиденный и потом выброшенный нарочно, увиден БЫЛ, и не считать его значило бы объявить пропуском собственную уборку.];
+                ApplicationArea=#All;
+                SourceExpr=DroppedEpisodes }
+
+    { 61  ;2   ;Field     ;
+                Name=DroppedMs;
+                CaptionML=[ENU=Dropped wait (ms);
+                           RUS=Ожидание выброшенного, мс];
+                ToolTipML=[ENU=Specifies how many milliseconds of waiting the dropped episodes add up to. This number is part of the named milliseconds above, and it is shown apart so that a share which stopped growing can be explained instead of guessed at.;
+                           RUS=Определяет, на сколько миллисекунд ожидания набирают выброшенные эпизоды. Число это входит в названные миллисекунды выше, а стоит отдельно затем, чтобы долю, переставшую расти, можно было объяснить, а не гадать о ней.];
+                ApplicationArea=#All;
+                SourceExpr=DroppedMs }
+
     { 8   ;2   ;Field     ;
                 Name=CounterWaits;
                 CaptionML=[ENU=Server Counted (waits);
@@ -252,6 +270,8 @@ OBJECT Page 110234 LockWatch Coverage
       CounterEscalations@1000000004 : BigInteger;
       JournalEpisodes@1000000005 : Integer;
       JournalMs@1000000006 : BigInteger;
+      DroppedEpisodes@1000000010 : Integer;
+      DroppedMs@1000000011 : BigInteger;
       SharePct@1000000007 : Decimal;
       ShareStyle@1000000008 : Text[30];
       StartOverQst@1000000009 : TextConst 'ENU=Drop the coverage counted so far and start over from now?;RUS=Сбросить насчитанный охват и начать счёт заново с этого мига?';
@@ -263,6 +283,7 @@ OBJECT Page 110234 LockWatch Coverage
       CoverageSince := State.CoverageSince;
       Coverage.CounterTotal(CounterWaits,CounterMs,CounterEscalations);
       Coverage.JournalTotal(CoverageSince,JournalEpisodes,JournalMs);
+      State.Dropped(DroppedEpisodes,DroppedMs);
       SharePct := Coverage.Share(CounterMs,JournalMs);
       SetShareStyle;
     END;

@@ -321,6 +321,16 @@ function GrowWaitSeconds {
     # заход может опоздать. Минута перекрывает десяток таких опозданий.
     60
 }
+function CeilingProbeRows {
+    # Потолок журнала на время опыта - одна строка. Нужен он затем, чтобы короткий эпизод
+    # ушёл по ПОТОЛКУ, а не по сроку: уехавший по сроку заведомо старше отметки охвата,
+    # поставленной этим же прогоном, и в срок охвата не попадает никогда. Свежий уходит по
+    # потолку и попадает.
+    #
+    # Единица, а не ноль: ноль означает "потолка нет". И ставится он до перезапуска -
+    # настройку служба держит в кэше (FINDINGS, раздел 67).
+    1
+}
 function ShortEpisodeMs {
     # Столько "ждал" подставной короткий эпизод. Единица, а не ноль: ноль читается как
     # "длительность неизвестна", а спор идёт за строку, которая ЖДАЛА, но мало.
@@ -342,9 +352,16 @@ try {
     # кэше, и правка при работающей службе до прохода не дойдёт (FINDINGS, раздел 67).
     # Заводское значение - минута, а опыт держит блокировку считанные секунды: по нему
     # уехало бы в историю ничто, и проверка переезда мерила бы пустоту.
+    # Что правим - то и запоминаем. Опыт ставит потолок журнала в одну строку, и потолок
+    # этот пережил бы прогон: следующие сцены сметы остались бы без своих эпизодов, а
+    # покраснели бы три прогона, ни один из которых сторожа не касается. Ловилось это
+    # 13.09.2026 и стоило целой сметы.
+    $ceilingWas = Scalar "SELECT CONVERT(varchar(11),[Journal Rows Ceiling]) FROM $setup;"
+    $thresholdWas = Scalar "SELECT CONVERT(varchar(11),[History Threshold (ms)]) FROM $setup;"
     Invoke-Sql @"
 UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0,
-       [History Threshold (ms)] = $(HistoryProbeMs);
+       [History Threshold (ms)] = $(HistoryProbeMs),
+       [Journal Rows Ceiling] = $(CeilingProbeRows);
 "@ | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
@@ -616,6 +633,68 @@ SELECT CONVERT(varchar(11),@new);
          ($movedSaid -match 'Moved to history|Уехало в историю')) `
         "эпизод $movedNo из журнала $(if ($leftJournal) { 'ушёл' } else { 'НЕ ушёл' }), в истории его $inHistory при ожидаемой 1 (было $historyBefore); сторож пишет: $movedSaid"
 
+    # Выброшенный эпизод исчезает насовсем, и охват держит его ТОЛЬКО счётом. Без этого
+    # доля названного падала бы сама собой по сроку и по потолку, а падение читалось бы как
+    # испортившееся наблюдение - ровно та беда, ради которой охват считается по журналу
+    # вместе с историей (раздел 74).
+    #
+    # Мерный прогон журнала зовёт переезд САМ и проверяет только его ответ. Сложить ответ в
+    # строку сторожа - дело ПРОХОДА, и сломать это можно, не тронув ни одной мерки.
+    #
+    # Уходит короткий по ПОТОЛКУ, а не по сроку, и это не выбор удобства. Выброшенное
+    # считается только в сроке охвата, а отметку этого срока ставит первый проход прогона;
+    # эпизод, состаренный на срок хранения, заведомо старше её. Отодвинуть отметку назад
+    # нельзя: строку сторожа служба держит в кэше, и правку мимо NAV проход не видит -
+    # замерено 13.09.2026, проход вернул поверх неё старое значение (FINDINGS, раздел 67).
+    Write-Host 'Кладу свежие короткие эпизоды и жду, пока лишний выбросит ПОТОЛОК'
+    $ceiling = [int](Scalar "SELECT [Journal Rows Ceiling] FROM $setup;")
+    if ($ceiling -ne (CeilingProbeRows)) {
+        Fail "потолок журнала $ceiling при ожидаемом $(CeilingProbeRows) - настройка до службы не дошла, опыт не удался"
+    }
+    # Строки берутся из ИСТОРИИ: зеркало повторяет журнал поле в поле, а в самом журнале к
+    # этому мигу пусто. Кладутся две - потолок в одну строку выбросит ровно лишнюю.
+    $ceilNo = [int](Scalar @"
+DECLARE @cols nvarchar(max) = N'', @sel nvarchar(max) = N'', @s nvarchar(max);
+SELECT @cols = @cols + CASE WHEN @cols = N'' THEN N'' ELSE N',' END + QUOTENAME(c.name),
+       @sel = @sel + CASE WHEN @sel = N'' THEN N'' ELSE N',' END +
+         CASE c.name WHEN N'Entry No_' THEN N'@new + @step'
+                     WHEN N'Max Wait (ms)' THEN N'$(ShortEpisodeMs)'
+                     WHEN N'Open' THEN N'0'
+                     WHEN N'Started At' THEN N'DATEADD(second,@step,GETUTCDATE())'
+                     ELSE QUOTENAME(c.name) END
+FROM sys.columns c JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+WHERE c.object_id = OBJECT_ID(N'$episode') AND c.is_computed = 0 AND ty.name <> N'timestamp';
+-- Конец ищется по ОБЕИМ таблицам, как его ищет и сам инструмент: журнал к этому мигу пуст,
+-- и счёт, начатый с единицы, столкнулся бы с номером, уже занятым в истории.
+DECLARE @new int = (SELECT ISNULL(MAX(n),0) + 1 FROM
+    (SELECT [Entry No_] AS n FROM $episode UNION ALL SELECT [Entry No_] FROM $history) x), @step int = 0;
+SET @s = N'INSERT INTO $episode (' + @cols + N') SELECT TOP 1 ' + @sel + N' FROM $history WHERE [Entry No_] = $movedNo;';
+EXEC sp_executesql @s, N'@new int,@step int', @new = @new, @step = @step;
+SET @step = 1;
+EXEC sp_executesql @s, N'@new int,@step int', @new = @new, @step = @step;
+SELECT CONVERT(varchar(11),@new);
+"@)
+    if ($ceilNo -le 0) { Fail 'свежие короткие эпизоды не легли - опыт не удался' }
+    $coverFrom = Scalar "SELECT CONVERT(varchar(30),[Coverage Since],121) FROM $state;"
+    $freshAt = Scalar "SELECT CONVERT(varchar(30),[Started At],121) FROM $episode WHERE [Entry No_] = $ceilNo;"
+    if ($freshAt -le $coverFrom) {
+        Fail "свежий эпизод начат $freshAt, а охват считается с $coverFrom - в срок он не попадает, мерить нечего"
+    }
+    $dropBefore = [int](Scalar "SELECT [Dropped Episodes] FROM $state;")
+    $dropMsBefore = [int](Scalar "SELECT [Dropped Wait (ms)] FROM $state;")
+    # Лишнюю выбросит потолок сам, ближайшим проходом. Ждём УХОДА строки, а не времени:
+    # проход ходит раз в период опроса, и спать наугад значило бы то краснеть, то нет.
+    $ceilGone = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $ceilNo;")) -eq 0 } (MoveWaitSeconds)
+    $ceilInHistory = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $ceilNo;")
+    $dropAfter = [int](Scalar "SELECT [Dropped Episodes] FROM $state;")
+    $dropMsAfter = [int](Scalar "SELECT [Dropped Wait (ms)] FROM $state;")
+    Check 'выброшенный эпизод остаётся в охвате числом' `
+        ($ceilGone -and ($ceilInHistory -eq 0) -and
+         (($dropAfter - $dropBefore) -eq 1) -and (($dropMsAfter - $dropMsBefore) -eq (ShortEpisodeMs))) `
+        ("эпизод $ceilNo из журнала $(if ($ceilGone) { 'ушёл' } else { 'НЕ ушёл' }), в истории его $ceilInHistory при ожидаемых 0; " +
+         "выброшено эпизодов $dropBefore -> $dropAfter при ожидаемом приросте 1, мс $dropMsBefore -> $dropMsAfter " +
+         "при ожидаемом приросте $(ShortEpisodeMs); эпизод начат $freshAt, охват считается с $coverFrom")
+
     Write-Host 'Останавливаю сторожа'
     Invoke-Method 'StopWatch'
     $enabled = Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"
@@ -776,6 +855,10 @@ finally {
     $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode;"
     $cleanup += " DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId;"
     $cleanup += " UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1;"
+    # Потолок и порог возвращаются теми же, какими были: подставлять сюда заводские числа
+    # значило бы стереть настройку установки под видом уборки за собой.
+    if ($ceilingWas) { $cleanup += " UPDATE $setup SET [Journal Rows Ceiling] = $ceilingWas;" }
+    if ($thresholdWas) { $cleanup += " UPDATE $setup SET [History Threshold (ms)] = $thresholdWas;" }
     # Своя строка из истории уносится по НОМЕРУ, а не очисткой таблицы: история стенда -
     # это чужие настоящие эпизоды, и смести их заодно со своим было бы дороже, чем
     # оставить свой.

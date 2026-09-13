@@ -144,6 +144,7 @@ OBJECT Codeunit 110238 LockWatch Coverage
       WaitMs := 0;
       AddJournal(SinceAt,Episodes,WaitMs);
       AddHistory(SinceAt,Episodes,WaitMs);
+      AddDropped(Episodes,WaitMs);
     END;
 
     LOCAL PROCEDURE AddJournal@7(SinceAt@1000000000 : DateTime;VAR Episodes@1000000001 : Integer;VAR WaitMs@1000000002 : BigInteger);
@@ -174,6 +175,26 @@ OBJECT Codeunit 110238 LockWatch Coverage
         REPEAT
           AddOne(Episodes,WaitMs,Moved."Max Wait (ms)");
         UNTIL Moved.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddDropped@11(VAR Episodes@1000000000 : Integer;VAR WaitMs@1000000001 : BigInteger);
+    VAR
+      State@1000000002 : Record 110237;
+      DroppedEpisodes@1000000003 : Integer;
+      DroppedMs@1000000004 : BigInteger;
+    BEGIN
+      // Слагаемое третье, и без него охват врёт на себя. Эпизод, который сторож увидел и
+      // САМ выбросил как слишком короткий, увиден БЫЛ: не считать его - значит объявить
+      // пропуском собственную уборку. Довод тот же, по которому считается история, только
+      // дверь другая: там строка переехала, здесь её нет вовсе, и остался от неё счёт.
+      //
+      // Отбора по сроку тут нет и быть не может. Счёт этот ведётся ОТ нажатия "начать счёт
+      // заново" - то есть ровно от той отметки, с которой сравнивают, - а строк, чтобы
+      // отобрать их по дате, уже не существует. Поэтому обнулять его обязано то же
+      // нажатие, что ставит отметку, и делается это в одном месте (StartOver).
+      State.Dropped(DroppedEpisodes,DroppedMs);
+      Episodes := Episodes + DroppedEpisodes;
+      WaitMs := WaitMs + DroppedMs;
     END;
 
     LOCAL PROCEDURE AddOne@9(VAR Episodes@1000000000 : Integer;VAR WaitMs@1000000001 : BigInteger;Ms@1000000002 : Integer);
@@ -219,6 +240,11 @@ OBJECT Codeunit 110238 LockWatch Coverage
       // разойтись версиями им нельзя (FINDINGS, раздел 69).
       State.FetchToWrite;
       State."Coverage Since" := CURRENTDATETIME;
+      // Выброшенное обнуляется ВМЕСТЕ с отметкой, иначе доля уйдёт за сотню процентов:
+      // журнальная половина считалась бы с этого мига плюс всё выброшенное за прошлую
+      // жизнь. Это та же пара, что отметка и приросты, - и обнуляется она там же.
+      State."Dropped Episodes" := 0;
+      State."Dropped Wait (ms)" := 0;
       State.MODIFY;
       COMMIT;
     END;

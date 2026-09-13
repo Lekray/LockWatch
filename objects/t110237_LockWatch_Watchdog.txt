@@ -27,6 +27,12 @@ OBJECT Table 110237 LockWatch Watchdog
     { 34  ;   ;Coverage Since      ;DateTime      ;CaptionML=[ENU=Coverage Since;
                                                               RUS=Охват считается с];
                                                    Editable=No }
+    { 35  ;   ;Dropped Episodes    ;Integer       ;CaptionML=[ENU=Dropped as Too Short;
+                                                              RUS=Выброшено как короткое];
+                                                   Editable=No }
+    { 36  ;   ;Dropped Wait (ms)   ;BigInteger    ;CaptionML=[ENU=Dropped Wait (ms);
+                                                              RUS=Ожидание выброшенного, мс];
+                                                   Editable=No }
     { 40  ;   ;Last Pass At        ;DateTime      ;CaptionML=[ENU=Last Pass At;
                                                               RUS=Последний проход];
                                                    Editable=No }
@@ -128,6 +134,16 @@ OBJECT Table 110237 LockWatch Watchdog
     END;
 
     [External]
+    PROCEDURE Dropped@8(VAR Episodes@1000000000 : Integer;VAR WaitMs@1000000001 : BigInteger);
+    BEGIN
+      // Счёт выброшенного отдаётся ПАРОЙ и одним заходом в базу: число эпизодов и их
+      // ожидание - две половины одного ответа, и спрошенные порознь они разошлись бы на
+      // строке, изменившейся между двумя чтениями.
+      FetchOnce;
+      Episodes := "Dropped Episodes";
+      WaitMs := "Dropped Wait (ms)";
+    END;
+
     PROCEDURE CoverageSince@5() : DateTime;
     BEGIN
       // Экран охвата спрашивает отметку, но заводить строку состояния он не должен: она
