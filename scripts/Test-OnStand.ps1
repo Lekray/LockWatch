@@ -977,6 +977,51 @@ if ($docProblems) {
     Fail ("документ обещает не то число, что делает прогон:`n  " +
           (($docProblems | Sort-Object -Unique) -join "`n  "))
 }
+# Документы указывают человеку на кнопки, поля и страницы ПО ИМЕНИ: «действие „Проверить
+# дорогу от платформы“», «галка „Кнопка показа доступна“». Имя на экране - такая же
+# величина, как число, и сверял его тот же, кто и числа: никто. 14.09.2026 нашлось
+# расхождение - страница зовётся «История эпизодов блокировок», а порядок установки
+# посылал на страницу «История эпизодов»: человек искал бы то, чего на экране нет.
+#
+# Указанием считается имя с БОЛЬШОЙ буквы после указывающего слова - так надписи пишут и
+# сами объекты. Со строчной буквы в кавычках стоит описание («отметка „сеанс работает с
+# документом“»), и требовать от него надписи нельзя. Правило это не придумано, а выбрано
+# по замеру: из двадцати имён с большой буквы восемнадцать нашлись точь-в-точь, а два
+# разошедшихся оказались одной и той же бедой.
+#
+# Надписи берутся из ПАКЕТА, а регистр не сличается: документ вправе начать фразу с той же
+# кнопки, не меняя ей имени.
+$shownNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($m in [regex]::Matches($monolith, '(?s)CaptionML=\[ENU=.*?;\s*RUS=(.*?)\]')) {
+    [void]$shownNames.Add((($m.Groups[1].Value -replace '\s+', ' ').Trim()))
+}
+foreach ($m in [regex]::Matches($monolith, '(?s)OptionCaptionML=\[ENU=.*?;\s*RUS=(.*?)\]')) {
+    foreach ($part in (($m.Groups[1].Value -replace '\s+', ' ') -split ',')) {
+        if ($part.Trim()) { [void]$shownNames.Add($part.Trim()) }
+    }
+}
+$pointer = 'кнопк\w*|действи\w*|галк\w*|страниц\w*|колонк\w*|пол[еяю]\w*|отметк\w*|вкладк\w*'
+$nameProblems = @()
+$nameChecked = 0
+foreach ($rel in (& git -C $root ls-files '*.md')) {
+    if ($recordDocs -contains $rel) { continue }
+    $full = Join-Path $root $rel
+    if (-not (Test-Path $full)) { continue }
+    $text = [IO.File]::ReadAllText($full)
+    foreach ($m in [regex]::Matches($text, "(?<word>$pointer)\s+«(?<name>[^»]{2,70})»")) {
+        $name = ($m.Groups['name'].Value -replace '\s+', ' ').Trim()
+        if ($name -cnotmatch '^[А-ЯЁA-Z]') { continue }
+        $nameChecked++
+        if (-not $shownNames.Contains($name)) {
+            $nameProblems += ("$rel : строка $(Doc-Line $text $m.Index) - $($m.Groups['word'].Value) " +
+                              "«$name», а надписи с таким именем в объектах нет")
+        }
+    }
+}
+if ($nameProblems) {
+    Fail ("документ указывает на то, чего человек на экране не найдёт:`n  " +
+          (($nameProblems | Sort-Object) -join "`n  "))
+}
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $monolith, (New-Object System.Text.UTF8Encoding($false)))
