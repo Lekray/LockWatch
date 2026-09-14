@@ -245,6 +245,76 @@ foreach ($rel in (& git -C $root ls-files '*.ps1' '*.txt' '*.sql')) {
 if ($encProblems) {
     Fail ("кодировка файлов разошлась с правилом проекта:`n  " + (($encProblems | Sort-Object) -join "`n  "))
 }
+
+# Кириллица в файле .sql держится не на кодировке файла, а на ПАРАМЕТРАХ СОРТИРОВКИ той
+# базы, где его запускают: литерал без N разбирается как varchar по сортировке базы, и на
+# латинской от него остаются вопросительные знаки. Замер 14.09.2026 на своей базе с
+# Latin1_General_CI_AS:
+#     PRINT 'без N: отметки контекста нет'   ->  ??? N: ??????? ????????? ???
+#     PRINT N'с N:  отметки контекста нет'   ->  с N:  отметки контекста нет
+#     CONVERT(varchar(30),  'текст')         ->  (??????? ????????? ???)
+#     CONVERT(nvarchar(30), N'текст')        ->  (отметки контекста нет)
+# Стенд идёт с Cyrillic_General_100_CS_AS, и на нём не видно ровно ничего. А скрипт ручного
+# разбора уезжает на ЧУЖУЮ базу, сортировку которой мы не выбираем, и там от объяснений
+# остались бы знаки вопроса - то есть хуже, чем молчание: молчание хоть не врёт про порчу.
+#
+# Отсюда два правила, и оба проверяемы: кириллица в литерале - только с N, текст - только
+# nvarchar (имя таблицы NAV и имя компании в чужой базе бывают кириллическими). Разбор
+# посимвольный, а не образцом: «--» внутри литерала комментарием не является, кавычка
+# внутри комментария литерала не открывает, и образец ошибся бы на этом молча.
+function Read-SqlText([string]$text) {
+    $code = [Text.StringBuilder]::new()
+    $literals = @()
+    $i = 0; $n = $text.Length
+    while ($i -lt $n) {
+        $c = $text[$i]
+        if (($c -eq '-') -and ($i + 1 -lt $n) -and ($text[$i + 1] -eq '-')) {
+            while (($i -lt $n) -and ($text[$i] -ne "`n")) { $i++ }
+        } elseif (($c -eq '/') -and ($i + 1 -lt $n) -and ($text[$i + 1] -eq '*')) {
+            $i += 2
+            while (($i + 1 -lt $n) -and -not (($text[$i] -eq '*') -and ($text[$i + 1] -eq '/'))) { $i++ }
+            $i += 2
+        } elseif ($c -eq "'") {
+            $start = $i
+            $i++
+            while ($i -lt $n) {
+                if ($text[$i] -eq "'") {
+                    if (($i + 1 -lt $n) -and ($text[$i + 1] -eq "'")) { $i += 2; continue }
+                    break
+                }
+                $i++
+            }
+            $body = $text.Substring($start + 1, [Math]::Max(0, $i - $start - 1))
+            $before = if ($start -gt 0) { "$($text[$start - 1])" } else { '' }
+            $literals += [pscustomobject]@{ Text = $body; Prefixed = ($before -match '^[Nn]$') }
+            $i++
+        } else {
+            [void]$code.Append($c)
+            $i++
+        }
+    }
+    return [pscustomobject]@{ Code = $code.ToString(); Literals = $literals }
+}
+
+$sqlProblems = @()
+foreach ($rel in (& git -C $root ls-files '*.sql')) {
+    $full = Join-Path $root $rel
+    if (-not (Test-Path $full)) { continue }
+    $parsed = Read-SqlText ([IO.File]::ReadAllText($full))
+    foreach ($lit in $parsed.Literals) {
+        if (($lit.Text -match '[А-Яа-яЁё]') -and (-not $lit.Prefixed)) {
+            $shown = if ($lit.Text.Length -gt 40) { $lit.Text.Substring(0, 40) + '...' } else { $lit.Text }
+            $sqlProblems += "$rel : кириллица в литерале без N - «$shown»"
+        }
+    }
+    $bare = [regex]::Matches($parsed.Code, '(?<![n\w])varchar\s*\(')
+    if ($bare.Count -gt 0) {
+        $sqlProblems += "$rel : varchar встречается $($bare.Count) раз - на базе с латинской сортировкой кириллица в нём станет знаками вопроса"
+    }
+}
+if ($sqlProblems) {
+    Fail ("текст .sql зависит от сортировки чужой базы:`n  " + (($sqlProblems | Sort-Object) -join "`n  "))
+}
 function Invoke-Finsql([string]$argLine, [string]$logName) {
     $log = Join-Path $outDir $logName
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""

@@ -181,6 +181,16 @@ Set-Content -Path '$logFile' -Value `$out -Encoding UTF8
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runFile)
 }
 
+# Сессия sqlcmd, а не NAV: отметку контекста кладёт только сессия NAV, и чтобы измерить
+# ПУСТУЮ клетку учётной записи, спорящие стороны обязаны быть посторонними.
+function Start-SqlSession([string]$tag, [string]$body) {
+    $file = Join-Path $outDir "names-sql-$tag.sql"
+    [IO.File]::WriteAllText($file, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"),
+                            (New-Object Text.UTF8Encoding($true)))
+    return Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden `
+        -ArgumentList @('-S', $Server, '-d', $Database, '-E', '-b', '-l', '30', '-i', $file)
+}
+
 # Значения собираются ПО ТИПАМ: умолчаний NAV в SQL не создаёт и объявляет столбцы NOT NULL.
 $zeroByType = @'
 CASE WHEN t.name IN (N'nvarchar',N'varchar',N'char',N'nchar',N'text',N'ntext',N'xml') THEN N'SPACE(0)'
@@ -216,6 +226,7 @@ EXEC sp_executesql @sql, N'@doc nvarchar(20)', @doc = @doc;
 Write-Host "Дорога к имени целиком: таблица $TableNo, поле $FieldNo, переходник $AdapterObjectNo"
 
 $sqlTableName = ''; $docColumn = ''; $adapterUp = $false; $holdProc = $null; $waitProc = $null
+$muteHold = $null; $muteWait = $null
 $hadContext = [int](Scalar "SELECT COUNT(*) FROM $context WHERE [Table No_] = $TableNo;")
 
 try {
@@ -286,6 +297,76 @@ UPDATE $state SET [Watchdog Message] = N'';
         ($selfTest -match 'passed 3 of 3|пройдено 3 из 3') `
         (($selfTest -split "`n" | Where-Object { $_ -match 'passed|пройдено|ERROR|Ошибка' } | Select-Object -First 1) -replace '\s+', ' ')
 
+    # ---------- 4а. пустая клетка обязана объяснить СЕБЯ ----------
+    # На бою 14.09.2026 съёмка отработала: очередь показала, длительности и логины назвала,
+    # а учётная запись NAV осталась пуста - инструмента на той базе нет, и отметок не клал
+    # никто. Причину скрипт называл, но называл PRINT'ом, а SSMS прячет его на отдельную
+    # вкладку: читатель смотрит в сетку и видит пустоту без объяснения, то есть молчание.
+    # Теперь причина стоит В САМОЙ КЛЕТКЕ, и мерить это надо на блокировке БЕЗ отметок -
+    # значит сторонами спора быть не сессиям NAV.
+    #
+    # Спорят две сессии sqlcmd за ту же подложенную строку: отметок у них нет и быть не
+    # может, а таблица настоящая - и «очередь при этом верна» перестаёт быть словом, потому
+    # что имя её съёмка обязана разобрать. Эпизод, который на этом заведёт сторож, снесёт
+    # DELETE в начале раздела 4 - он и так чистит журнал перед опытом.
+    $showLocks = Join-Path $PSScriptRoot 'Show-Locks.sql'
+    $muteHold = Start-SqlSession 'mute-hold' @"
+BEGIN TRAN;
+SELECT TOP 1 1 FROM [$sqlTableName] WITH (XLOCK, ROWLOCK) WHERE [$docColumn] = N'$holdDoc';
+WAITFOR DELAY '00:00:30';
+ROLLBACK;
+"@
+    # Ждём не времени, а СОСТОЯНИЯ: пока держатель не взял блокировку, ждущему не за чем
+    # вставать в очередь, и съёмка увидела бы пустую очередь на ровном месте.
+    $deadline = (Get-Date).AddSeconds(30)
+    while (((Get-Date) -lt $deadline) -and ([int](Scalar @"
+SELECT COUNT(*) FROM sys.dm_tran_locks WHERE resource_type = 'KEY' AND request_status = 'GRANT'
+  AND request_mode = 'X' AND resource_database_id = DB_ID() AND request_session_id <> @@SPID;
+"@) -eq 0)) { Start-Sleep -Milliseconds 200 }
+
+    $muteWait = Start-SqlSession 'mute-wait' @"
+SELECT TOP 1 1 FROM [$sqlTableName] WITH (XLOCK, ROWLOCK) WHERE [$docColumn] = N'$holdDoc';
+"@
+    $deadline = (Get-Date).AddSeconds(30)
+    while (((Get-Date) -lt $deadline) -and
+           ([int](Scalar "SELECT COUNT(*) FROM sys.dm_os_waiting_tasks WHERE wait_type LIKE 'LCK[_]%';") -eq 0)) {
+        Start-Sleep -Milliseconds 200
+    }
+
+    $muteOut = & sqlcmd -S $Server -d $Database -E -b -l 30 -w 4000 -W -s '|' -h -1 -i $showLocks 2>&1
+    $muteRow = ''
+    foreach ($line in $muteOut) {
+        $c = @(($line -split '\|') | ForEach-Object { $_.Trim() })
+        if (($c.Count -ge 23) -and ($c[3] -eq $sqlTableName)) { $muteRow = $line }
+    }
+    $m = @(($muteRow -split '\|') | ForEach-Object { $_.Trim() })
+    while ($m.Count -lt 23) { $m += '' }
+
+    Check 'пустую клетку учётной записи съёмка объясняет В НЕЙ, а не молчанием' `
+        (($m[6] -eq '(отметки контекста нет)') -and ($m[14] -eq $m[6])) `
+        "держатель [$($m[6])], жертва [$($m[14])]"
+    # «Очередь и длительности выше верны» - обещание, и вот его замер: имени учётной записи
+    # нет, а имя ТАБЛИЦЫ и номер ключа на месте. Разберись оно наоборот, читать съёмку на
+    # неустановленной базе было бы незачем.
+    Check 'и очередь при этом верна: таблица разобрана, ключ назван' `
+        (($m[3] -eq $sqlTableName) -and ($m[4] -match '^\d+$')) `
+        "таблица [$($m[3])] при ожидаемой [$sqlTableName], ключ NAV [$($m[4])]"
+    Check 'то же объяснение есть и в сообщениях - для тех, кто гоняет скриптом' `
+        ([bool]($muteOut | Where-Object { $_ -match 'Отметку кладёт только сессия NAV' })) `
+        "строк в ответе $(@($muteOut).Count)"
+
+    foreach ($p in @($muteWait, $muteHold)) {
+        if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+    $muteHold = $null; $muteWait = $null
+    # Ждём не «убил», а что спор РАССОСАЛСЯ: держатель раздела 4 пойдёт в ту же строку, и
+    # остаток чужой блокировки читался бы как его собственная беда.
+    $deadline = (Get-Date).AddSeconds(20)
+    while (((Get-Date) -lt $deadline) -and
+           ([int](Scalar "SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE program_name LIKE N'SQLCMD%' AND session_id <> @@SPID;") -gt 0)) {
+        Start-Sleep -Milliseconds 200
+    }
+
     # ---------- 4. держатель и ждущий - обе сессии NAV ----------
     Invoke-Sql "DELETE FROM $episode WHERE [NAV Table Name] = N'$navTable'; DELETE FROM $mark;" | Out-Null
 
@@ -338,7 +419,6 @@ UPDATE $state SET [Watchdog Message] = N'';
     #
     # Ширина строки задана 4000 нарочно: sqlcmd по умолчанию рвёт вывод на 80 знаках, и
     # столбцы уехали бы под чужую шапку - ровно та беда, о которой скрипт пишет сам.
-    $showLocks = Join-Path $PSScriptRoot 'Show-Locks.sql'
     $shownRow = ''
     $shownCode = -1
     $deadline = (Get-Date).AddSeconds(6)
@@ -347,9 +427,13 @@ UPDATE $state SET [Watchdog Message] = N'';
         $shownCode = $LASTEXITCODE
         foreach ($line in $out) {
             $c = @(($line -split '\|') | ForEach-Object { $_.Trim() })
-            if (($c.Count -ge 23) -and ($c[6] -ne '')) { $shownRow = $line; break }
+            # Строка НАША по имени таблицы. Отбор шёл по «клетка учётной записи непуста», а
+            # теперь пустой клетке скрипт сам пишет причину - и непустой она стала всегда.
+            if (($c.Count -ge 23) -and ($c[3] -eq $sqlTableName)) { $shownRow = $line }
         }
-        if (($shownRow -ne '') -or ((Get-Date) -ge $deadline)) { break }
+        $s6 = ''
+        if ($shownRow -ne '') { $s6 = (@(($shownRow -split '\|') | ForEach-Object { $_.Trim() }))[6] }
+        if ((($s6 -ne '') -and (-not $s6.StartsWith('('))) -or ((Get-Date) -ge $deadline)) { break }
         Start-Sleep -Milliseconds 700
     }
     $s = @(($shownRow -split '\|') | ForEach-Object { $_.Trim() })
@@ -449,6 +533,9 @@ FROM $episode WHERE [NAV Table Name] = N'$navTable' ORDER BY [Entry No_] DESC;
 finally {
     Write-Host ''
     Write-Host 'Убираю за собой'
+    foreach ($p in @($muteWait, $muteHold)) {
+        if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
     if ($holdProc -and -not $holdProc.HasExited) { $holdProc.WaitForExit(120000) | Out-Null }
     if ($waitProc -and -not $waitProc.HasExited) { $waitProc.WaitForExit(60000) | Out-Null }
     if ($adapterUp) {

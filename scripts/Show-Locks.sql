@@ -2,8 +2,15 @@
     Кто кого блокирует прямо сейчас - и кто держит.
 
     Ручной разбор ОДНОГО случая: та же дорога, какой ходит сам инструмент, но одной
-    съёмкой и без установки. Пригождается до установки (показать службе безопасности,
-    что именно спрашивается у сервера) и после - когда нужно посмотреть глазами.
+    съёмкой. Пригождается до установки (показать службе безопасности, что именно
+    спрашивается у сервера) и после - когда нужно посмотреть глазами.
+
+    БЕЗ УСТАНОВКИ ОТВЕЧАЮТСЯ ДВА ВОПРОСА ИЗ ТРЁХ: кто кого ждёт и что о держателе знает сам
+    сервер. Третий - учётная запись NAV - без установки не отвечается никогда: берётся она
+    из отметки контекста, а отметку кладёт подписчик, которого до установки нет. Пустая
+    клетка учётной записи на неустановленной базе - не поломка, а единственный возможный
+    ответ, и скрипт пишет причину прямо в ней. Раньше «и без установки» стояло тут ко всему
+    разом, и читалось это обещанием всех трёх столбцов (docs/FINDINGS.md, раздел 87).
 
     Запускать в базе установки:  sqlcmd -S <сервер> -d <база> -E -i Show-Locks.sql
     Права: VIEW SERVER STATE на сервере - И ВИДИМОСТЬ КАТАЛОГА в базе, то есть
@@ -24,7 +31,7 @@
     подсказка индекса известны только во время работы. Теперь очередь сперва складывается в
     переменную, отметки ищутся по ней, и печатается всё вместе.
 
-    Ширину столбцов скрипт задаёт САМ, приведением к varchar нужной длины. Без этого
+    Ширину столбцов скрипт задаёт САМ, приведением к nvarchar нужной длины. Без этого
     sqlcmd печатает каждый nvarchar(128) во всю объявленную ширину - строка уходит далеко
     за экран, консоль её переносит, и значения оказываются под чужой шапкой. Выглядит это
     как "логин держателя не пишется", хотя он на месте: просто уехал на перенос.
@@ -33,6 +40,12 @@
     русская шапка приезжает в консоль мусором. Правка файла чем угодно, что BOM снимает,
     ломает ровно это - данные при том остаются верными, и беда выглядит как "кракозябры
     в SSMS", а не как испорченный файл.
+
+    И по той же причине кириллица здесь ходит ТОЛЬКО через nvarchar и литералы с N. Литерал
+    без N разбирается по параметрам сортировки БАЗЫ, а не по кодировке файла: на базе с
+    латинской сортировкой "Имя таблицы не разобралось" печатается как "??? ??????? ?? ???????????".
+    Сортировку чужой базы мы не выбираем, а ширину столбцов nvarchar держит ровно так же
+    (docs/FINDINGS.md, раздел 88).
 
     ЧЕГО ЗДЕСЬ НЕТ НАРОЧНО. Это СЪЁМКА, а не сторож: цикла по этому тексту быть не
     должно. sys.dm_tran_locks стоит 45,6 мс при шестидесяти тысячах блокировок, и отбор
@@ -77,12 +90,12 @@ DECLARE @markTable sysname =
 -- две половины ответа разъехались бы молча.
 DECLARE @queue TABLE (
     victim_spid int, blocker_spid int, wait_ms bigint,
-    wait_type varchar(22), resource_kind varchar(9),
-    object_name varchar(34), index_name varchar(34), nav_key int, on_sift bit,
-    lockres varchar(22),
-    blocker_login varchar(30), blocker_host varchar(18), blocker_program varchar(30),
-    blocker_status varchar(12), idle_s int, open_trans int, tran_began datetime,
-    victim_login varchar(30), victim_host varchar(18), victim_program varchar(30));
+    wait_type nvarchar(22), resource_kind nvarchar(9),
+    object_name nvarchar(34), index_name nvarchar(34), nav_key int, on_sift bit,
+    lockres nvarchar(22),
+    blocker_login nvarchar(30), blocker_host nvarchar(18), blocker_program nvarchar(30),
+    blocker_status nvarchar(12), idle_s int, open_trans int, tran_began datetime,
+    victim_login nvarchar(30), victim_host nvarchar(18), victim_program nvarchar(30));
 
 -- Ресурс НЕ разбирается из строки wait_type/resource_description: невыполненная просьба
 -- жертвы лежит в dm_tran_locks сама, и в ней уже есть и hobt, и хэш спорной строки.
@@ -96,10 +109,10 @@ SELECT
     wt.session_id,
     wt.blocking_session_id,
     wt.wait_duration_ms,
-    CONVERT(varchar(22), wt.wait_type),
-    CONVERT(varchar(9),  w.resource_type),
-    CONVERT(varchar(34), o.name),
-    CONVERT(varchar(34), i.name),
+    CONVERT(nvarchar(22), wt.wait_type),
+    CONVERT(nvarchar(9),  w.resource_type),
+    CONVERT(nvarchar(34), o.name),
+    CONVERT(nvarchar(34), i.name),
     -- Правил разбора имени ДВА, и одним не обойтись (docs/FINDINGS.md, раздел 5).
     -- У таблицы номер ключа NAV - суффикс имени индекса после последнего доллара:
     -- кластерный зовётся <Компания>$<Таблица>$0, вторичные - $1, $5, $13. Номера не
@@ -116,15 +129,15 @@ SELECT
         ELSE NULL
     END,
     CASE WHEN o.name LIKE '%$VSIFT$%' THEN 1 ELSE 0 END,
-    CONVERT(varchar(22), w.resource_description),
+    CONVERT(nvarchar(22), w.resource_description),
     -- Держатель глазами сервера. Для ЧУЖОГО соединения - утилиты, шага задания, чьего-то
     -- окна запросов - это единственный возможный ответ на "кто": отметку контекста кладёт
     -- только сессия NAV. Для самой сессии NAV логин здесь общий, учётной записи службы,
     -- и человеком он не притворяется - на то и отдельный столбец с учётной записью.
-    CONVERT(varchar(30), bs.login_name),
-    CONVERT(varchar(18), bs.host_name),
-    CONVERT(varchar(30), bs.program_name),
-    CONVERT(varchar(12), bs.status),
+    CONVERT(nvarchar(30), bs.login_name),
+    CONVERT(nvarchar(18), bs.host_name),
+    CONVERT(nvarchar(30), bs.program_name),
+    CONVERT(nvarchar(12), bs.status),
     -- Спящая транзакция - это не медленный запрос, а забытое модальное окно: виновник не
     -- исполняет ничего, а транзакцию держит. Лечится звонком, а не правкой кода, и
     -- отличать одно от другого надо сразу.
@@ -132,9 +145,9 @@ SELECT
          ELSE DATEDIFF(second, bs.last_request_end_time, GETDATE()) END,
     bs.open_transaction_count,
     ba.transaction_begin_time,
-    CONVERT(varchar(30), vs.login_name),
-    CONVERT(varchar(18), vs.host_name),
-    CONVERT(varchar(30), vs.program_name)
+    CONVERT(nvarchar(30), vs.login_name),
+    CONVERT(nvarchar(18), vs.host_name),
+    CONVERT(nvarchar(30), vs.program_name)
 FROM sys.dm_os_waiting_tasks wt
 JOIN sys.dm_exec_sessions vs ON vs.session_id = wt.session_id
 LEFT JOIN sys.dm_exec_sessions bs ON bs.session_id = wt.blocking_session_id
@@ -158,8 +171,8 @@ WHERE wt.wait_type LIKE 'LCK[_]%'
 -- 2. Учётные записи NAV - из отметок контекста ОБЕИХ сторон.
 -------------------------------------------------------------------------------
 
-DECLARE @found TABLE (spid int, nav_user varchar(30), company varchar(20),
-                      doc varchar(24), marked datetime);
+DECLARE @found TABLE (spid int, nav_user nvarchar(30), company nvarchar(20),
+                      doc nvarchar(24), marked datetime);
 
 IF @markTable IS NOT NULL AND EXISTS (SELECT 1 FROM @queue)
 BEGIN
@@ -167,7 +180,7 @@ BEGIN
     -- номер сеанса, то есть строка у сессии ОДНА, и держит её сама транзакция стороны.
     -- Спрашиваются ОБЕ стороны: у жертвы отметка своя, и без неё журнал называет её
     -- номером сеанса, то есть не называет.
-    DECLARE @held TABLE (spid int, idx sysname, lockres varchar(100));
+    DECLARE @held TABLE (spid int, idx sysname, lockres nvarchar(100));
     INSERT @held (spid, idx, lockres)
     SELECT DISTINCT l.request_session_id, i.name, RTRIM(l.resource_description)
     FROM sys.dm_tran_locks l
@@ -187,19 +200,19 @@ BEGIN
     -- идёт грязным - вставать в очередь за тем, кого разбираем, было бы смешно.
     -- Просмотр этот дёшев ровно потому, что таблица отметок мала: 0,005 мс на пустой и
     -- 0,026 мс на 82 тысячах строк (docs/FINDINGS.md, раздел 67).
-    DECLARE @spid int, @idx sysname, @lockres varchar(100), @sql nvarchar(max);
+    DECLARE @spid int, @idx sysname, @lockres nvarchar(100), @sql nvarchar(max);
     DECLARE marks CURSOR LOCAL FAST_FORWARD FOR SELECT spid, idx, lockres FROM @held;
     OPEN marks;
     FETCH NEXT FROM marks INTO @spid, @idx, @lockres;
     WHILE @@FETCH_STATUS = 0
     BEGIN
         SET @sql =
-            N'SELECT @spid, CONVERT(varchar(30),[User Id]), CONVERT(varchar(20),[Company Name]),' +
-            N' CONVERT(varchar(24),[Document No_]), [Marked At] FROM ' + QUOTENAME(@markTable) +
+            N'SELECT @spid, CONVERT(nvarchar(30),[User Id]), CONVERT(nvarchar(20),[Company Name]),' +
+            N' CONVERT(nvarchar(24),[Document No_]), [Marked At] FROM ' + QUOTENAME(@markTable) +
             N' WITH (INDEX(' + QUOTENAME(@idx) + N'), NOLOCK)' +
             N' WHERE %%lockres%% = @lockres;';
         INSERT @found (spid, nav_user, company, doc, marked)
-        EXEC sp_executesql @sql, N'@spid int, @lockres varchar(100)', @spid = @spid, @lockres = @lockres;
+        EXEC sp_executesql @sql, N'@spid int, @lockres nvarchar(100)', @spid = @spid, @lockres = @lockres;
         FETCH NEXT FROM marks INTO @spid, @idx, @lockres;
     END;
     CLOSE marks;
@@ -209,6 +222,14 @@ END;
 -------------------------------------------------------------------------------
 -- 3. Один ответ.
 -------------------------------------------------------------------------------
+
+-- Пустая клетка обязана объяснить СЕБЯ, и объяснение стоит В НЕЙ, а не в сообщениях: SSMS
+-- прячет PRINT на отдельную вкладку, и читатель, глядя в сетку, видит пустоту без причины.
+-- Ровно так и прочли съёмку на бою 14.09.2026: скрипт причину называл, а понят был как
+-- поломка. Причин у пустоты две, и они разные - инструмента здесь нет вовсе или отметки не
+-- клал никто, - поэтому текста тоже два.
+DECLARE @noMark nvarchar(30) = CASE WHEN @markTable IS NULL THEN N'(инструмент не установлен)'
+                                    ELSE N'(отметки контекста нет)' END;
 
 -- Отметка берётся САМАЯ СВЕЖАЯ из найденных. У сессии NAV она одна по устройству ключа,
 -- но подставленный опыт может держать и несколько, а размножать строки очереди нельзя:
@@ -220,7 +241,7 @@ SELECT
     q.object_name                  AS [таблица SQL],
     q.nav_key                      AS [ключ NAV],
     q.on_sift                      AS [SIFT],
-    fb.nav_user                    AS [учётная запись NAV держателя],
+    COALESCE(fb.nav_user, @noMark) AS [учётная запись NAV держателя],
     q.blocker_login                AS [логин держателя],
     q.blocker_host                 AS [узел держателя],
     q.blocker_program              AS [программа держателя],
@@ -228,7 +249,7 @@ SELECT
     q.idle_s                       AS [молчит с, с],
     q.open_trans                   AS [открытых транзакций],
     q.tran_began                   AS [транзакция начата],
-    fv.nav_user                    AS [учётная запись NAV жертвы],
+    COALESCE(fv.nav_user, @noMark) AS [учётная запись NAV жертвы],
     q.victim_login                 AS [логин жертвы],
     q.victim_host                  AS [узел жертвы],
     q.victim_program               AS [программа жертвы],
@@ -257,20 +278,22 @@ ORDER BY q.wait_ms DESC;
 -- а имени нет. Проверять надо не запрос, а права.
 IF EXISTS (SELECT 1 FROM @queue WHERE object_name IS NULL)
 BEGIN
-    PRINT 'Имя таблицы не разобралось. sys.objects и sys.indexes фильтруются по правам, и';
-    PRINT 'без видимости каталога они для этого объекта пусты - а sys.partitions виден всем,';
-    PRINT 'поэтому очередь и длительности выше верны. Лечится в базе: GRANT VIEW DEFINITION';
-    PRINT 'той учётной записи, под которой смотрите. Прав на ДАННЫЕ для этого не нужно.';
+    PRINT N'Имя таблицы не разобралось. sys.objects и sys.indexes фильтруются по правам, и';
+    PRINT N'без видимости каталога они для этого объекта пусты - а sys.partitions виден всем,';
+    PRINT N'поэтому очередь и длительности выше верны. Лечится в базе: GRANT VIEW DEFINITION';
+    PRINT N'той учётной записи, под которой смотрите. Прав на ДАННЫЕ для этого не нужно.';
 END;
 
 -- Пустой столбец учётной записи - не отказ инструмента, и объяснить это надо словами:
 -- молчание читается как поломка, а поломки здесь нет.
 IF @markTable IS NULL
-    PRINT 'Таблицы отметок контекста в этой базе нет: инструмент не установлен, и учётную запись NAV назвать нечем - остаётся логин SQL.';
-ELSE IF EXISTS (SELECT 1 FROM @queue) AND NOT EXISTS (SELECT 1 FROM @found)
+    PRINT N'Таблицы отметок контекста в этой базе нет: инструмент не установлен, и учётную запись NAV назвать нечем - остаётся логин SQL.';
+ELSE IF EXISTS (SELECT 1 FROM @queue q
+                WHERE NOT EXISTS (SELECT 1 FROM @found f WHERE f.spid = q.blocker_spid)
+                   OR NOT EXISTS (SELECT 1 FROM @found f WHERE f.spid = q.victim_spid))
 BEGIN
-    PRINT 'Отметки контекста ни у одной из сторон нет. Отметку кладёт только сессия NAV и';
-    PRINT 'только при записи в таблицу контекста: держит блокировку чужое соединение, или';
-    PRINT 'запись шла в таблицу, на которую переходника не ставили. Значит имени NAV не';
-    PRINT 'существует, и назвать держателя можно лишь логином SQL.';
+    PRINT N'Отметки контекста есть не у каждой стороны. Отметку кладёт только сессия NAV и';
+    PRINT N'только при записи в таблицу контекста: держит блокировку чужое соединение, или';
+    PRINT N'запись шла в таблицу, на которую переходника не ставили. Значит имени NAV не';
+    PRINT N'существует, и назвать держателя можно лишь логином SQL.';
 END;
