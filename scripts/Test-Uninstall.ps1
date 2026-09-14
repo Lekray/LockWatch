@@ -21,6 +21,7 @@ param(
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
     [int]    $TaskCodeunitId = 110236,
+    [int]    $PermissionsCodeunitId = 110247,
     [int]    $AdapterObjectNo = 0,
     [int]    $MenuTargetId = 0
 )
@@ -107,6 +108,24 @@ if (-not $armed) {
           ", отметка прохода [$(PassStamp)], сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")")
 }
 Write-Host "  сторож заведён и ПРОШЁЛ: задач в планировщике $(TaskCount), отметка прохода $(PassStamp)"
+
+# Набор разрешений заводится НАРОЧНО - по той же причине, по какой выше заводится сторож:
+# снятие того, чего не было, зелено само собой. Выкладка объектов набор не привозит (он
+# данные), а обкатка сборки убирает за собой, поэтому на стенде его может не быть вовсе.
+Write-Host ''
+Write-Host 'Завожу набор разрешений: снимать будем и его'
+$rightsRunner = Join-Path $outDir 'test-uninstall-rights.ps1'
+$rightsBody = @"
+`$ErrorActionPreference = 'Stop'
+Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $PermissionsCodeunitId -MethodName EnsurePermissionSet -ErrorAction Stop
+"@
+[IO.File]::WriteAllText($rightsRunner, (($rightsBody -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+$rightsLog = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $rightsRunner 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+    Fail "набор разрешений не завёлся, и снятие его ничего не докажет: $(($rightsLog -replace '\s+', ' ').Trim())"
+}
+Write-Host "  $(($rightsLog -replace '\s+', ' ').Trim())"
 
 Write-Host ''
 $argList = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'Uninstall-LockWatch.ps1'),

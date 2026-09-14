@@ -46,6 +46,7 @@ param(
     [int]    $TestCodeunitId = 110231,
     [int]    $BenchCodeunitId = 110233,
     [int]    $AdapterCodeunitId = 110237,
+    [int]    $PermissionsCodeunitId = 110247,
     [int]    $SetupTableId    = 110230,
     [int]    $SetupPageId     = 110230,
     # Диапазон, занятый инструментом целиком. Всё, что вне его, - чужое, и о чужом надо
@@ -982,6 +983,14 @@ if (-not $objRows.Success) {
     if ([int]$objRows.Groups['objs'].Value -ne $shipParts.Count) {
         $listProblems += "там же объектов названо $($objRows.Groups['objs'].Value), а в пакете $($shipParts.Count)"
     }
+    # И ТРЕТИЙ раз - в разделе о снятии, где перечислено, что уходит. Живёт оно там своей
+    # жизнью, и сверка выше его не видела вовсе: 15.09.2026 оно отстало от пакета на объект
+    # и оказалось верным только по совпадению - следующая же правка сделала его верным снова.
+    foreach ($m in [regex]::Matches($installDoc, '(?<n>\d+) строк\w* в `dbo\.\[Object\]`')) {
+        if ([int]$m.Groups['n'].Value -ne $wantRows) {
+            $listProblems += "строк в dbo.[Object] где-то названо $($m.Groups['n'].Value), а выйдет $wantRows"
+        }
+    }
 }
 
 # Списков в разделе два, и у обоих есть в сборке настоящий двойник: мерные кодюниты она
@@ -1276,6 +1285,7 @@ $body = @"
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TestCodeunitId -MethodName SelfTest -ErrorAction Stop
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $BenchCodeunitId -MethodName Bench -ErrorAction Stop
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $PermissionsCodeunitId -MethodName SelfTest -ErrorAction Stop
 "@
 # Обкатки образца здесь больше нет, и не потому, что она лишняя: образец в пакет не едет,
 # значит на стенде после выкладки его нет вовсе. Выкладывает его теперь один прогон -

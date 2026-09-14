@@ -152,6 +152,10 @@ function Our-Rows {
 # сборщик зовёт его "LockWatch Adapter <номер таблицы>", и это единственный след, который
 # не зависит от того, вспомнил ли человек номер.
 function Named-Objects { Count-Sql "SELECT COUNT(*) FROM [dbo].[Object] WHERE [Name] LIKE 'LockWatch%';" }
+# Права на НАШИ таблицы, то есть на диапазон. Строка прав, пережившая снятие, ссылается на
+# таблицу, которой больше нет, и чинить это придётся уже без инструмента.
+function Rights-Rows { Count-Sql "SELECT COUNT(*) FROM [dbo].[Permission] WHERE [Object ID] BETWEEN $rangeFrom AND $rangeTo;" }
+function Rights-Sets { Count-Sql "SELECT COUNT(*) FROM [dbo].[Permission Set] WHERE [Name] LIKE 'LockWatch%' OR [Role ID] LIKE 'LOCKWATCH%';" }
 function Named-Outside {
     $rows = Invoke-Sql "SELECT [Type], [ID], [Name] FROM [dbo].[Object] WHERE [Name] LIKE 'LockWatch%' AND ([ID] < $rangeFrom OR [ID] > $rangeTo) ORDER BY [ID];"
     return @($rows | ForEach-Object { ("$_" -replace '\s*\|\s*', ' ').Trim() })
@@ -205,6 +209,13 @@ if ($episodesBefore -ge 0) { Write-Host ("  строк в журнале эпи�
 $rowsBefore = Our-Rows
 Write-Host ("  строк во всех наших таблицах: {0} - уйдут вместе с ними" -f $rowsBefore)
 Write-Host ("  строк в планировщике задач: {0}" -f (Task-Rows))
+# Набор разрешений - ДАННЫЕ, а не объект, и в диапазоне номеров его не видно. Строки прав
+# ищутся по нашим таблицам, то есть по тому же диапазону, каким инструмент назван; сам
+# набор - по имени, как и объекты вне диапазона. Ни то, ни другое не требует знать код
+# набора отдельным числом.
+$rightsBefore = Rights-Rows
+$setsBefore = Rights-Sets
+Write-Host ("  набор разрешений: строк прав {0}, наборов с нашим именем {1}" -f $rightsBefore, $setsBefore)
 $objectsBefore = Objects-In-Range
 $tablesBefore  = Sql-Tables
 $namedBefore   = Named-Objects
@@ -293,6 +304,26 @@ if ($left -gt 0) {
     Write-Host "  строк задач добрано напрямую: $left"
 }
 
+# ---------- 1а. набор разрешений ----------
+# Снимается ДО удаления объектов: потом звать будет некого. Набор - данные, удаление
+# объектов его не уносит, и оставленный он пережил бы инструмент - ссылками на таблицы,
+# которых уже нет, и назначениями людям, которым они больше ничего не дают.
+Write-Host ''
+Write-Host 'Снимаю набор разрешений'
+$runner = Join-Path $outDir 'uninstall-droprights.ps1'
+$body = @"
+`$ErrorActionPreference = 'Stop'
+Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110247 -MethodName DropPermissionSet -ErrorAction Stop
+"@
+[IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+$rightsSaid = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  $(($rightsSaid -replace '\s+', ' ').Trim())"
+} else {
+    Write-Host '  свой путь не отработал - остаток назовёт сверка ниже' -ForegroundColor Yellow
+}
+
 # ---------- 2. врезка в меню ----------
 if ($MenuTargetId -gt 0) {
     Write-Host ''
@@ -378,6 +409,13 @@ Check 'сторож остановлен своим путём, а не выло
 $tasksLeft = Task-Rows
 Check 'в планировщике задач наших строк нет' ($tasksLeft -eq 0) `
     "строк с нашим кодюнитом $tasksLeft"
+# Числа ДО снятия названы рядом нарочно: на базе, где набор не заводили, ноль после снятия
+# был бы ноль и до него, и проверка доказывала бы собственную бесполезность. Прогон снятия
+# поэтому заводит набор перед тем, как снимать.
+$rightsLeft = Rights-Rows
+$setsLeft = Rights-Sets
+Check 'набор разрешений снят вместе с инструментом' (($rightsLeft -eq 0) -and ($setsLeft -eq 0)) `
+    "строк прав было $rightsBefore, осталось $rightsLeft; наборов было $setsBefore, осталось $setsLeft"
 if ($AdapterObjectNo -gt 0) {
     $adapterLeft = Adapter-Rows
     Check 'собранный переходник удалён' ($adapterLeft -eq 0) "объектов с номером $AdapterObjectNo $adapterLeft"

@@ -1,0 +1,263 @@
+OBJECT Codeunit 110247 LockWatch Permissions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=15.09.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      NoSetErr@1000000000 : TextConst 'ENU=The permission set %1 was not created. Without it the install has nothing to hand out, and the rights have to be typed in by hand.;RUS=Набор разрешений %1 не завёлся. Раздавать при установке нечего, и права придётся набивать руками.';
+      WrongCountErr@1000000001 : TextConst 'ENU=The set %1 holds %2 rows while %3 are declared. A set that carries more than it declares brings rights nobody asked for.;RUS=В наборе %1 строк %2 при объявленных %3. Набор, несущий больше объявленного, привозит права, о которых никто не просил.';
+      NoRowErr@1000000002 : TextConst 'ENU=The set has no row for table %1, so writing to it will be refused inside the transaction of whoever posts the document.;RUS=В наборе нет строки на таблицу %1, и запись в неё откажет внутри транзакции того, кто проводит документ.';
+      WrongRightsErr@1000000003 : TextConst 'ENU=The rights on table %1 differ from the declared ones. A set that looks present and gives nothing is worse than a missing one.;RUS=Права на таблицу %1 разошлись с объявленными. Набор, который выглядит заведённым и не даёт ничего, хуже отсутствующего.';
+      NotIdempotentErr@1000000004 : TextConst 'ENU=A repeat install changed the set: added %1, corrected %2, removed %3. Installing twice must change nothing at all.;RUS=Повторный завод изменил набор: добавлено %1, исправлено %2, убрано %3. Установка, поставленная дважды, не должна менять ничего.';
+      NotRepairedErr@1000000005 : TextConst 'ENU=A right taken away by hand was not put back by the install. Then a set edited by somebody stays broken silently.;RUS=Снятое руками право завод не вернул. Значит набор, поправленный кем-то, молча остаётся сломанным.';
+      InstalledMsg@1000000006 : TextConst 'ENU=The permission set %1 is in place: %2 rows added, %3 corrected, %4 extra removed. Assign it to everyone who writes to the document table - the rights are checked at THEIR session.;RUS=Набор разрешений %1 заведён: строк добавлено %2, исправлено %3, лишних убрано %4. Назначьте его каждому, кто пишет в таблицу документа - права спрашиваются у НЕГО.';
+      RemovedMsg@1000000007 : TextConst 'ENU=The permission set %1 is gone: %2 rows and %3 assignments removed.;RUS=Набор разрешений %1 снят: убрано строк %2 и назначений %3.';
+      OkMsg@1000000008 : TextConst 'ENU=passed 4 of 4 - the set is created, its rows are exactly the declared ones, a repeat install changes nothing, and a right taken away by hand comes back;RUS=пройдено 4 из 4 - набор заведён, строки ровно объявленные, повторный завод ничего не меняет, а снятое руками право возвращается';
+
+    [External]
+    PROCEDURE EnsurePermissionSet@1();
+    VAR
+      Added@1000000000 : Integer;
+      Fixed@1000000001 : Integer;
+      Dropped@1000000002 : Integer;
+    BEGIN
+      // Набор разрешений в NAV - ДАННЫЕ, а не объект: он лежит в таблицах 2000000004 и
+      // 2000000005, и выкладка объектов его не привозит. Поэтому его заводит код, и зовут
+      // этот код руками при установке - как и всё прочее, что установка делает однажды.
+      Sync(Added,Fixed,Dropped);
+      MESSAGE(InstalledMsg,RoleId,Added,Fixed,Dropped);
+    END;
+
+    [External]
+    PROCEDURE DropPermissionSet@2();
+    VAR
+      PermissionSet@1000000000 : Record 2000000004;
+      Permission@1000000001 : Record 2000000005;
+      AccessControl@1000000002 : Record 2000000053;
+      Dropped@1000000003 : Integer;
+      Unassigned@1000000004 : Integer;
+    BEGIN
+      // Снятие объектов набора не уносит по той же причине, по какой выкладка его не
+      // привозит. Уносятся и НАЗНАЧЕНИЯ: набор, удалённый без них, оставил бы людям ссылки
+      // на то, чего больше нет, и разбираться в этом пришлось бы уже без инструмента.
+      Permission.SETRANGE("Role ID",RoleId);
+      Dropped := Permission.COUNT;
+      Permission.DELETEALL;
+      AccessControl.SETRANGE("Role ID",RoleId);
+      Unassigned := AccessControl.COUNT;
+      AccessControl.DELETEALL;
+      IF PermissionSet.GET(RoleId) THEN
+        PermissionSet.DELETE;
+      MESSAGE(RemovedMsg,RoleId,Dropped,Unassigned);
+    END;
+
+    [External]
+    PROCEDURE SelfTest@3();
+    VAR
+      PermissionSet@1000000000 : Record 2000000004;
+      Permission@1000000001 : Record 2000000005;
+      Wanted@1000000002 : TEMPORARY Record 2000000005;
+      Existed@1000000003 : Boolean;
+      Added@1000000004 : Integer;
+      Fixed@1000000005 : Integer;
+      Dropped@1000000006 : Integer;
+      Mine@1000000007 : Integer;
+    BEGIN
+      // Набор, заведённый и не проверенный, ничем не отличается от ненаведённого: узнают
+      // о нём падением чужого проведения, а не отказом здесь.
+      Existed := PermissionSet.GET(RoleId);
+      Sync(Added,Fixed,Dropped);
+      IF NOT PermissionSet.GET(RoleId) THEN
+        ERROR(NoSetErr,RoleId);
+
+      FillWanted(Wanted);
+      Permission.RESET;
+      Permission.SETRANGE("Role ID",RoleId);
+      Mine := Permission.COUNT;
+      IF Mine <> Wanted.COUNT THEN
+        ERROR(WrongCountErr,RoleId,Mine,Wanted.COUNT);
+      IF Wanted.FINDSET THEN
+        REPEAT
+          IF NOT Permission.GET(RoleId,Wanted."Object Type",Wanted."Object ID") THEN
+            ERROR(NoRowErr,Wanted."Object ID");
+          IF NOT SameRights(Permission,Wanted) THEN
+            ERROR(WrongRightsErr,Wanted."Object ID");
+        UNTIL Wanted.NEXT = 0;
+
+      // Второй завод обязан не менять ничего. Установка ставится дважды чаще, чем кажется:
+      // переустановка, перенос на другой контур, повторный шаг после отказа посередине.
+      Sync(Added,Fixed,Dropped);
+      IF (Added <> 0) OR (Fixed <> 0) OR (Dropped <> 0) THEN
+        ERROR(NotIdempotentErr,Added,Fixed,Dropped);
+
+      // Снятое руками право обязано вернуться. Иначе набор, у которого кто-то убрал
+      // вставку, выглядит заведённым и не даёт ничего - худший из возможных исходов.
+      Permission.GET(RoleId,Permission."Object Type"::"Table Data",DATABASE::"LockWatch Context Mark");
+      Permission."Insert Permission" := NoRight;
+      Permission.MODIFY;
+      Sync(Added,Fixed,Dropped);
+      Permission.GET(RoleId,Permission."Object Type"::"Table Data",DATABASE::"LockWatch Context Mark");
+      IF Permission."Insert Permission" <> Permission."Insert Permission"::Yes THEN
+        ERROR(NotRepairedErr);
+
+      // Обкатка убирает за собой ровно то, что завела: набор, которого до неё не было,
+      // остаться после неё не должен.
+      IF NOT Existed THEN
+        DropPermissionSet;
+      MESSAGE(OkMsg);
+    END;
+
+    LOCAL PROCEDURE Sync@4(VAR Added@1000000000 : Integer;VAR Fixed@1000000001 : Integer;VAR Dropped@1000000002 : Integer);
+    VAR
+      PermissionSet@1000000003 : Record 2000000004;
+      Permission@1000000004 : Record 2000000005;
+      Extra@1000000005 : Record 2000000005;
+      Wanted@1000000006 : TEMPORARY Record 2000000005;
+    BEGIN
+      // Набор не просто заводится, а ВЫРАВНИВАЕТСЯ по объявленному. Строка, поправленная
+      // руками, возвращается на место; строка лишняя - убирается. Инструмент отвечает за
+      // свой набор целиком, иначе однажды привезёт права, которых не обещал.
+      Added := 0;
+      Fixed := 0;
+      Dropped := 0;
+      IF NOT PermissionSet.GET(RoleId) THEN BEGIN
+        PermissionSet.INIT;
+        PermissionSet."Role ID" := RoleId;
+        PermissionSet.Name := RoleName;
+        PermissionSet.INSERT;
+      END ELSE
+        IF PermissionSet.Name <> RoleName THEN BEGIN
+          PermissionSet.Name := RoleName;
+          PermissionSet.MODIFY;
+        END;
+
+      FillWanted(Wanted);
+      IF Wanted.FINDSET THEN
+        REPEAT
+          IF NOT Permission.GET(RoleId,Wanted."Object Type",Wanted."Object ID") THEN BEGIN
+            Permission := Wanted;
+            Permission.INSERT;
+            Added := Added + 1;
+          END ELSE
+            IF NOT SameRights(Permission,Wanted) THEN BEGIN
+              Permission."Read Permission" := Wanted."Read Permission";
+              Permission."Insert Permission" := Wanted."Insert Permission";
+              Permission."Modify Permission" := Wanted."Modify Permission";
+              Permission."Delete Permission" := Wanted."Delete Permission";
+              Permission."Execute Permission" := Wanted."Execute Permission";
+              Permission.MODIFY;
+              Fixed := Fixed + 1;
+            END;
+        UNTIL Wanted.NEXT = 0;
+
+      Permission.RESET;
+      Permission.SETRANGE("Role ID",RoleId);
+      IF Permission.FINDSET THEN
+        REPEAT
+          IF NOT Wanted.GET(RoleId,Permission."Object Type",Permission."Object ID") THEN
+            IF Extra.GET(Permission."Role ID",Permission."Object Type",Permission."Object ID") THEN BEGIN
+              Extra.DELETE;
+              Dropped := Dropped + 1;
+            END;
+        UNTIL Permission.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FillWanted@5(VAR Wanted@1000000000 : TEMPORARY Record 2000000005);
+    BEGIN
+      // Права выведены ОПЫТОМ (FINDINGS, раздел 92), а не рассуждением. Подписчик
+      // исполняется в транзакции того, кто пишет документ, и платформа спрашивает права
+      // у НЕГО. Косвенные права - те самые, на которые вся эта механика в NAV и
+      // рассчитана, - не сработали ни в одном из восьми сочетаний, поэтому здесь прямые.
+      Wanted.RESET;
+      Wanted.DELETEALL;
+      // Строку контекста подписчик только читает: она отвечает, участвует ли таблица.
+      AddWanted(Wanted,DATABASE::"LockWatch Context Table",FALSE);
+      // Отметку он заводит, переписывает и снимает - нужны все четыре права.
+      AddWanted(Wanted,DATABASE::"LockWatch Context Mark",TRUE);
+    END;
+
+    LOCAL PROCEDURE AddWanted@6(VAR Wanted@1000000000 : TEMPORARY Record 2000000005;TableNo@1000000001 : Integer;CanWrite@1000000002 : Boolean);
+    BEGIN
+      Wanted.INIT;
+      Wanted."Role ID" := RoleId;
+      Wanted."Object Type" := Wanted."Object Type"::"Table Data";
+      Wanted."Object ID" := TableNo;
+      // Чтение нужно обеим таблицам, и отдельным доводом оно не бывает: строку контекста
+      // подписчик читает, а отметку - ищет перед тем, как переписать.
+      Wanted."Read Permission" := Wanted."Read Permission"::Yes;
+      IF CanWrite THEN BEGIN
+        Wanted."Insert Permission" := Wanted."Insert Permission"::Yes;
+        Wanted."Modify Permission" := Wanted."Modify Permission"::Yes;
+        Wanted."Delete Permission" := Wanted."Delete Permission"::Yes;
+      END;
+      Wanted.INSERT;
+    END;
+
+    LOCAL PROCEDURE SameRights@7(VAR Has@1000000000 : Record 2000000005;VAR Want@1000000001 : Record 2000000005) : Boolean;
+    BEGIN
+      EXIT((Has."Read Permission" = Want."Read Permission") AND
+           (Has."Insert Permission" = Want."Insert Permission") AND
+           (Has."Modify Permission" = Want."Modify Permission") AND
+           (Has."Delete Permission" = Want."Delete Permission") AND
+           (Has."Execute Permission" = Want."Execute Permission"));
+    END;
+
+    LOCAL PROCEDURE RoleId@8() : Code[20];
+    BEGIN
+      // Имя набора - имя инструмента, и меняться ему нельзя: по нему набор находят снятие,
+      // прогон и человек, раздающий права. Код набора у платформы - двадцать знаков.
+      EXIT('LOCKWATCH');
+    END;
+
+    LOCAL PROCEDURE RoleName@9() : Text[30];
+    BEGIN
+      // Имя видит тот, кто раздаёт права, и по нему он решает, кому набор нужен. Поэтому
+      // сказано здесь не про наблюдение за блокировками, а про то, кому набор выдают.
+      EXIT('LockWatch: пишущим документы');
+    END;
+
+    LOCAL PROCEDURE NoRight@10() : Integer;
+    BEGIN
+      // Первое значение опции прав - ПУСТОЕ: имени у него нет, и назвать его в коде нечем.
+      // Отсюда число; отсюда же и эта функция - у величины должен быть довод.
+      EXIT(0);
+    END;
+
+    BEGIN
+    {
+      Свой набор разрешений: инструмент привозит его сам, а не просит собрать руками.
+
+      Зачем он вообще. Отметку контекста кладёт ПОДПИСЧИК, а исполняется тот в транзакции
+      человека, который проводит документ, - и права платформа спрашивает у ЧЕЛОВЕКА, а не
+      у инструмента. Свойство Permissions у кодюнита эту беду не закрывает: проверено
+      лестницей из восьми ступеней (FINDINGS, раздел 92), и косвенные права не сработали
+      ни в одном сочетании. Работают только прямые, и вот они, объявленные один раз.
+
+      На установке, где все ходят под SUPER, беды не видно вовсе. Она вылезает там, где
+      права раздают по-настоящему, и вылезает падением ЧУЖОГО проведения - то есть в самом
+      дорогом месте, какое можно придумать.
+
+      Три оговорки, каждая нарочно:
+
+      1. Набор ВЫРАВНИВАЕТСЯ, а не только заводится. Строку, у которой кто-то снял право,
+         завод возвращает; строку лишнюю - убирает. Набор, выглядящий заведённым и не
+         дающий ничего, хуже отсутствующего: на него надеются.
+      2. Назначение людям - НЕ работа инструмента. Кому нужен набор, решает тот, кто знает,
+         кто в этой базе проводит документы. Инструмент отвечает за то, чтобы назначать
+         было ЧТО, и говорит об этом вслух при заводе.
+      3. Снятие уносит и набор, и назначения. Набор - данные, и снятие объектов его не
+         трогает вовсе; оставленный, он пережил бы инструмент и ссылался бы на таблицы,
+         которых уже нет.
+    }
+    END.
+  }
+}
