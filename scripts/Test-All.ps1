@@ -119,7 +119,7 @@ function Stop-Tree([int]$id) {
 $runs = @(
     @{
         Name = 'onstand'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 53; Critical = $true; WithInstance = $true
+        Checks = 51; Critical = $true; WithInstance = $true
         Why = 'выкладка первой: всё дальнейшее меряет то, что она положила на стенд'
         What = 'сборка пакета, выкладка компилятором, разбор без базы, мерный прогон журнала'
     }
@@ -180,8 +180,8 @@ $runs = @(
     }
     @{
         Name = 'adapter'; Script = 'Test-Adapter.ps1'; Extra = @()
-        Checks = 9; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO', 'LW_DOC_FIELD_NO')
-        Why = 'снимает со стенда штатный переходник; всё, кому он нужен целым, уже прошло'
+        Checks = 12; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO', 'LW_DOC_FIELD_NO')
+        Why = 'единственный, кто выкладывает образец, - и снимает его насовсем: после него на стенде ровно то, что поедет'
         What = 'цена подписки тремя вариантами, сборщик переходника от начала до конца'
     }
     @{
@@ -204,7 +204,7 @@ $runs = @(
     }
     @{
         Name = 'redeploy'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 53; WithInstance = $true
+        Checks = 51; WithInstance = $true
         Why = 'возвращает стенд в рабочее состояние - и это же второй замер: выкладка на ОЧИЩЕННУЮ базу'
         What = 'повторная выкладка на базу, с которой инструмент только что сняли'
     }

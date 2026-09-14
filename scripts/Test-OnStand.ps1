@@ -578,6 +578,30 @@ for ($i = 0; $i -lt $heads.Count; $i++) {
         Body = $monolith.Substring($heads[$i].Index, $to - $heads[$i].Index)
     }
 }
+
+# Образец подписчика в ПАКЕТ НЕ ЕДЕТ, и правило это ВЫВОДИТСЯ, а не пишется номером.
+# Номер таблицы у подписки - константа времени компиляции, поэтому всякий подписчик,
+# лежащий в git, по определению образец: на бою на его месте стоит объект, СОБРАННЫЙ под
+# таблицу установки (scripts/New-ContextAdapter.ps1). Заведётся второй образец - отсеется
+# сам, и списка править не придётся.
+#
+# Везти его было бы не мелочью. Это живой подписчик на ШТАТНОЙ таблице NAV: он срабатывает
+# на каждой её записи ни за чем (раздел 23 - надбавка от двух процентов до двенадцати даже
+# при выключенной строке контекста), а его обкатка в эту таблицу ПИШЕТ. На стенде ему
+# место, на бою - нет.
+#
+# Проверки выше смотрят на ВСЕ объекты папки, включая образец: он настоящий C/AL, и
+# сортировка, кодировки, номера переменных и объявленные права нужны ему не меньше. Отсев
+# касается только того, что повезём.
+$shipFiles = @(); $shipParts = @(); $sampleParts = @()
+for ($i = 0; $i -lt $parts.Count; $i++) {
+    if ($parts[$i].Body -match '\[EventSubscriber\(') { $sampleParts += $parts[$i] }
+    else { $shipParts += $parts[$i]; $shipFiles += $files[$i] }
+}
+if ($sampleParts.Count -ne 1) {
+    Fail ("образцов подписчика в objects/ $($sampleParts.Count) при одном ожидаемом - " +
+          'сборщик переходника берёт образец единственным, и выбирать ему не из чего')
+}
 $pinProblems = @()
 foreach ($pureNo in $pureCodeunits) {
     $pure = $parts | Where-Object { ($_.Kind -eq 'Codeunit') -and ($_.No -eq $pureNo) }
@@ -898,9 +922,10 @@ if ($hidden) {
 # выйдет в dbo.[Object] и какие кодюниты мерные. Пересчитывать их было некому: добавленный
 # объект молча оставлял список прежним, и служба безопасности согласовывала бы не то, что
 # приедет. Считает теперь сборка, и считает по ТОМУ САМОМУ пакету, который и повезёт
-# объекты, - не по папке и не по списку рядом.
+# объекты, - не по папке и не по списку рядом. Образец подписчика в счёт не идёт по той же
+# причине: в пакет он не едет, и обещать его установке значит обещать не то.
 $kindCount = @{}; $kindFrom = @{}; $kindTo = @{}
-foreach ($p in $parts) {
+foreach ($p in $shipParts) {
     if (-not $kindCount.ContainsKey($p.Kind)) {
         $kindCount[$p.Kind] = 0; $kindFrom[$p.Kind] = $p.No; $kindTo[$p.Kind] = $p.No
     }
@@ -934,8 +959,8 @@ $whole = [regex]::Match($installDoc, '(?<n>\d+)\s+объект\w*\s+в диап�
 if (-not $whole.Success) {
     $listProblems += 'в docs/INSTALL.md нет строки «N объектов в диапазоне A-B» - правило о ней протухло'
 } else {
-    if ([int]$whole.Groups['n'].Value -ne $parts.Count) {
-        $listProblems += "объектов обещано $($whole.Groups['n'].Value), а в пакете $($parts.Count)"
+    if ([int]$whole.Groups['n'].Value -ne $shipParts.Count) {
+        $listProblems += "объектов обещано $($whole.Groups['n'].Value), а в пакете $($shipParts.Count)"
     }
     if (([int]$whole.Groups['from'].Value -ne $OurFirstObject) -or ([int]$whole.Groups['to'].Value -ne $OurLastObject)) {
         $listProblems += ("диапазон обещан $($whole.Groups['from'].Value)-$($whole.Groups['to'].Value), " +
@@ -945,17 +970,17 @@ if (-not $whole.Success) {
 
 # Строк в dbo.[Object] БОЛЬШЕ, чем объектов: у каждой таблицы там ещё одна, на её данные.
 # Число это тоже написано в документе, и выводится оно отсюда же, а не запоминается.
-$objRows = [regex]::Match($installDoc, 'В таблице `dbo\.\[Object\]` это \*\*(?<n>\d+) строк\*\*, а не (?<objs>\d+)')
+$objRows = [regex]::Match($installDoc, 'В таблице `dbo\.\[Object\]` это \*\*(?<n>\d+) строк\w*\*\*, а не (?<objs>\d+)')
 if (-not $objRows.Success) {
     $listProblems += 'в docs/INSTALL.md нет строки о числе строк в dbo.[Object] - правило о ней протухло'
 } else {
-    $wantRows = $parts.Count + $(if ($kindCount.ContainsKey('Table')) { $kindCount['Table'] } else { 0 })
+    $wantRows = $shipParts.Count + $(if ($kindCount.ContainsKey('Table')) { $kindCount['Table'] } else { 0 })
     if ([int]$objRows.Groups['n'].Value -ne $wantRows) {
         $listProblems += "строк в dbo.[Object] обещано $($objRows.Groups['n'].Value), а выйдет $wantRows"
     }
     # Число объектов названо в той же строке второй раз, и разойтись эти два могут порознь.
-    if ([int]$objRows.Groups['objs'].Value -ne $parts.Count) {
-        $listProblems += "там же объектов названо $($objRows.Groups['objs'].Value), а в пакете $($parts.Count)"
+    if ([int]$objRows.Groups['objs'].Value -ne $shipParts.Count) {
+        $listProblems += "там же объектов названо $($objRows.Groups['objs'].Value), а в пакете $($shipParts.Count)"
     }
 }
 
@@ -966,7 +991,7 @@ if (-not $objRows.Success) {
 $toldLists = @(
     @{ Head = '**Мерные кодюниты**'; Want = @($benchCodeunits) }
     @{ Head = '**Кодюниты показа и таблица к ним**'
-       Want = @($parts | Where-Object { $_.Name -match 'Demo' } | ForEach-Object { $_.No }) }
+       Want = @($shipParts | Where-Object { $_.Name -match 'Demo' } | ForEach-Object { $_.No }) }
 )
 foreach ($told in $toldLists) {
     $saidBody = [regex]::Match($installDoc, '(?s)' + [regex]::Escape($told.Head) + '(.*?)\r?\n\r?\n').Groups[1].Value
@@ -1157,11 +1182,17 @@ if ($nameProblems) {
     Fail ("документ указывает на то, чего человек на экране не найдёт:`n  " +
           (($nameProblems | Sort-Object) -join "`n  "))
 }
+# Пакет собирается из ТОГО, ЧТО ЕДЕТ. Тела берутся уже разобранные: каждое кончается
+# переводом строки, и склейка возвращает те же байты за вычетом отсеянного.
+$shipMonolith = ($shipParts | ForEach-Object { $_.Body }) -join ''
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
-[IO.File]::WriteAllText($packUtf, $monolith, (New-Object System.Text.UTF8Encoding($false)))
-[IO.File]::WriteAllBytes($pack, $cp866.GetBytes($monolith))
-Write-Host ("  объектов {0}, пакет {1:N0} байт" -f $files.Count, (Get-Item $pack).Length)
+[IO.File]::WriteAllText($packUtf, $shipMonolith, (New-Object System.Text.UTF8Encoding($false)))
+[IO.File]::WriteAllBytes($pack, $cp866.GetBytes($shipMonolith))
+Write-Host ("  объектов {0}, пакет {1:N0} байт" -f $shipParts.Count, (Get-Item $pack).Length)
+foreach ($s in $sampleParts) {
+    Write-Host "  образец в пакет не едет: $($s.Kind) $($s.No) $($s.Name)" -ForegroundColor DarkYellow
+}
 
 # Состояние ДО: чужой отказ не должен засчитываться нашей выкладке.
 $uncompiledBefore = [int]((Invoke-Sql 'SELECT COUNT(*) FROM [dbo].[Object] WHERE [Compiled] = 0;')[0])
@@ -1175,7 +1206,7 @@ Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,Synch
 # нет вовсе. Ошибка здесь не роняет выкладку, а МОЛЧА проверяет не тот объект.
 $typeNo = @{ 't' = 1; 'c' = 5; 'r' = 3; 'p' = 8; 'x' = 6; 'q' = 9; 'm' = 7 }
 $typeNm = @{ 't' = 'Table'; 'c' = 'Codeunit'; 'r' = 'Report'; 'p' = 'Page'; 'x' = 'XMLport'; 'q' = 'Query'; 'm' = 'MenuSuite' }
-$declared = foreach ($file in $files) {
+$declared = foreach ($file in $shipFiles) {
     $head = (Get-Content $file.FullName -TotalCount 12) -join "`n"
     if ($head -notmatch '(?m)^OBJECT\s+(\w+)\s+(\d+)\s') { Fail "не разобрать заголовок объекта: $($file.Name)" }
     $kind = $Matches[1]; $id = [int]$Matches[2]
@@ -1245,8 +1276,10 @@ $body = @"
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TestCodeunitId -MethodName SelfTest -ErrorAction Stop
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $BenchCodeunitId -MethodName Bench -ErrorAction Stop
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $AdapterCodeunitId -MethodName SelfTest -ErrorAction Stop
 "@
+# Обкатки образца здесь больше нет, и не потому, что она лишняя: образец в пакет не едет,
+# значит на стенде после выкладки его нет вовсе. Выкладывает его теперь один прогон -
+# Test-Adapter.ps1, - он же его и спрашивает.
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 
 # Обкатка и мерный прогон идут одной сессией: первая проверяет разбор без базы, второй -

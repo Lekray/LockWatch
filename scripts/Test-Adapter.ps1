@@ -336,6 +336,15 @@ VALUES ($TableNo,N'',$FieldNo,N'',N'',0);
         ($selfTest -match 'passed 3 of 3|пройдено 3 из 3') `
         (($selfTest -split "`n" | Where-Object { $_ -match 'passed|пройдено|ERROR|Ошибка' } | Select-Object -First 1) -replace '\s+', ' ')
 
+    # Обкатка образца переехала сюда из сборки: в пакет образец не едет, и на стенде он
+    # стоит только здесь - этот прогон его и выкладывает. Спрашивает она то, чего не
+    # спрашивает замер: знает ли платформа подписку и лёг ли в отметку ТОТ САМЫЙ документ,
+    # который записан. Замер считает отметки, а не сверяет их содержимое.
+    $sampleSelf = Invoke-Codeunit $SampleAdapterId 'SelfTest' 'обкатка образца'
+    Check 'образец сам прошёл по мосту: подписка жива, и в отметке тот документ, что записан' `
+        ($sampleSelf -match 'passed 2 of 2|пройдено 2 из 2') `
+        (($sampleSelf -split "`n" | Where-Object { $_ -match 'passed|пройдено|ERROR|Ошибка' } | Select-Object -First 1) -replace '\s+', ' ')
+
     $report += ''
     $report += "цена подписки на 2000 записей: без подписчика $($noAdapter.Us) мкс на строку, " +
                "выключен $($offAdapter.Us), включён $($onAdapter.Us)"
@@ -348,9 +357,10 @@ finally {
         try { Delete-Codeunit $AdapterObjectNo 'made-adapter-drop' } catch { }
         if (Test-Path $generated) { Remove-Item $generated -Force }
     }
-    # Образец возвращается на место: его удаляли ради первого варианта замера.
-    try { Import-Object (Join-Path $root 'objects\c110237_LockWatch_Context_Adapter.txt') 'sample-adapter-back' } catch { }
-    try { Compile-Codeunit $SampleAdapterId 'sample-adapter-back' } catch { }
+    # Образец со стенда СНИМАЕТСЯ, а не возвращается на место. В пакет он не едет, значит
+    # после выкладки его на стенде нет, и оставить его здесь значило бы развести стенд с
+    # установкой - ровно той разницей, которую прогон и обязан не допускать.
+    try { Delete-Codeunit $SampleAdapterId 'sample-adapter-drop' } catch { }
     & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q `
         "DELETE FROM $context WHERE [Table No_] IN ($sampleTableNo,$TableNo); DELETE FROM $mark;" 2>&1 | Out-Null
     try { Restart-Nav 'стенд возвращён в исходное' } catch { }
