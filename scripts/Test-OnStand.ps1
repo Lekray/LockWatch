@@ -210,8 +210,14 @@ if ($leaks) {
 # Объекту BOM запрещён по своей причине, и причина эта не в пакете: .NET снимает BOM при
 # чтении (замерено там же), так что сборка его не увидит вовсе. Увидит его C/SIDE - если
 # объект понесут туда файлом, а не пакетом.
+#
+# У .sql правило ОБРАТНОЕ объектам, и оно тоже замерено (14.09.2026): sqlcmd читает файл
+# без BOM как OEM, и русская шапка отчёта приезжает в консоль мусором - «Р¶РґС‘С‚ spid»
+# вместо «ждёт spid». Данные при этом верны, и беда выглядит не порчей файла, а поломкой
+# консоли. Скрипт ручного разбора пишет про это в своей же шапке; теперь про это знает и
+# сборка.
 $encProblems = @()
-foreach ($rel in (& git -C $root ls-files '*.ps1' '*.txt')) {
+foreach ($rel in (& git -C $root ls-files '*.ps1' '*.txt' '*.sql')) {
     $full = Join-Path $root $rel
     if (-not (Test-Path $full)) { continue }
     $bytes = [IO.File]::ReadAllBytes($full)
@@ -226,7 +232,9 @@ foreach ($rel in (& git -C $root ls-files '*.ps1' '*.txt')) {
     # вопроса в сообщении, которые уже не скажут, где их потеряли.
     try { [void]([Text.UTF8Encoding]::new($false, $true)).GetString($bytes) }
     catch { $encProblems += "$rel : это не UTF-8" }
-    if ($rel -like '*.txt') {
+    if ($rel -like '*.sql') {
+        if (-not $hasBom) { $encProblems += "$rel : скрипту SQL BOM обязателен - sqlcmd прочтёт его как OEM" }
+    } elseif ($rel -like '*.txt') {
         if ($hasBom) { $encProblems += "$rel : объекту BOM запрещён - пакет его снимет, а C/SIDE увидит" }
     } elseif (-not $hasBom) {
         if ([Text.Encoding]::UTF8.GetString($bytes) -notmatch '(?m)^\s*#requires\s+-Version\s+7') {
