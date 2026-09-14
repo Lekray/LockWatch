@@ -9,6 +9,8 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
   }
   PROPERTIES
   {
+    Permissions=TableData 110232=rim,
+                TableData 110233=rimd;
   }
   CODE
   {

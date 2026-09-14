@@ -315,6 +315,58 @@ foreach ($rel in (& git -C $root ls-files '*.sql')) {
 if ($sqlProblems) {
     Fail ("текст .sql зависит от сортировки чужой базы:`n  " + (($sqlProblems | Sort-Object) -join "`n  "))
 }
+
+# Подписчик - единственный наш объект, исполняющийся В ЧУЖОМ СЕАНСЕ: платформа зовёт его
+# внутри транзакции того, кто пишет строку документа. Права на запись отметки проверяются
+# поэтому у ТОГО человека, а не у нас, и отказ прилетает ВНУТРЬ его транзакции - проведение
+# падает. На стенде этого не увидеть ничем: там всё ходит под SUPER, а на бою пользователи
+# не SUPER почти никогда.
+#
+# Лечится свойством Permissions: платформа даёт косвенные права на время работы кодюнита, и
+# выдавать пользователям разрешения на наши таблицы не нужно вовсе. Снять свойство легко и
+# незаметно - потому его и сверяет сборка.
+#
+# Номера таблиц берутся ИЗ ПАКЕТА по именам, а не пишутся числом: перенумеруй объект - и
+# сторож, знающий число, промолчал бы (то же правило, что в разделе 81).
+function Get-ObjectNo([string]$name) {
+    foreach ($rel in (& git -C $root ls-files 'objects/*.txt')) {
+        $full = Join-Path $root $rel
+        if (-not (Test-Path $full)) { continue }
+        $m = [regex]::Match([IO.File]::ReadAllText($full), "(?m)^OBJECT\s+Table\s+(\d+)\s+$([regex]::Escape($name))\s*$")
+        if ($m.Success) { return [int]$m.Groups[1].Value }
+    }
+    return 0
+}
+$markNo = Get-ObjectNo 'LockWatch Context Mark'
+$ctxNo  = Get-ObjectNo 'LockWatch Context Table'
+$permProblems = @()
+if (($markNo -eq 0) -or ($ctxNo -eq 0)) {
+    $permProblems += "таблицы отметок и контекста не нашлись в пакете по именам ($markNo, $ctxNo)"
+} else {
+    foreach ($rel in (& git -C $root ls-files 'objects/c*.txt')) {
+        $full = Join-Path $root $rel
+        if (-not (Test-Path $full)) { continue }
+        $text = [IO.File]::ReadAllText($full)
+        if ($text -notmatch '\[EventSubscriber\(') { continue }
+        # Свойство C/SIDE переносит по строкам, поэтому оно склеивается в одну.
+        $props = ([regex]::Match($text, '(?s)Permissions=(.*?);')).Groups[1].Value -replace '\s', ''
+        foreach ($need in @(@{ No = $markNo; Rights = 'rimd'; What = 'таблицу отметок' },
+                            @{ No = $ctxNo;  Rights = 'rim';  What = 'строку контекста' })) {
+            $m = [regex]::Match($props, "TableData$($need.No)=([rimd]+)")
+            if (-not $m.Success) {
+                $permProblems += "$rel : подписчик не объявляет прав на $($need.What) ($($need.No)) - запись пойдёт правами чужого сеанса"
+            } else {
+                $missing = ($need.Rights.ToCharArray() | Where-Object { $m.Groups[1].Value -notmatch $_ }) -join ''
+                if ($missing) {
+                    $permProblems += "$rel : у прав на $($need.What) ($($need.No)) не хватает букв «$missing» - объявлено «$($m.Groups[1].Value)»"
+                }
+            }
+        }
+    }
+}
+if ($permProblems) {
+    Fail ("подписчик пишет чужими правами:`n  " + (($permProblems | Sort-Object) -join "`n  "))
+}
 function Invoke-Finsql([string]$argLine, [string]$logName) {
     $log = Join-Path $outDir $logName
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""

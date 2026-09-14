@@ -277,6 +277,25 @@ UPDATE $state SET [Watchdog Message] = N'';
         ((Test-Path $generated) -and (([IO.File]::ReadAllText($generated)) -match "\[EventSubscriber\(Table,$TableNo,")) `
         "файл $(Split-Path -Leaf $generated), подписка на таблицу $TableNo"
 
+    # Права подписчик объявляет свойством, и сверяет их сборка - но сверяет она ОБРАЗЕЦ, а
+    # на объект встаёт СОБРАННЫЙ файл. Потеряй сборщик свойство по дороге - отметка пошла бы
+    # правами чужого сеанса, и увидели бы это на бою, отказом внутри чужой транзакции.
+    # Сличается с образцом, а не с ожидаемой строкой: образец тут - источник правды, и
+    # расходиться им нельзя.
+    $sample = @(Get-ChildItem (Join-Path $root 'objects') -Filter 'c*.txt' |
+                Where-Object { ([IO.File]::ReadAllText($_.FullName)) -match '\[EventSubscriber\(' })
+    $samplePerm = ''
+    if ($sample.Count -eq 1) {
+        $samplePerm = ([regex]::Match([IO.File]::ReadAllText($sample[0].FullName), '(?s)Permissions=(.*?);')).Groups[1].Value -replace '\s', ''
+    }
+    $genPerm = ''
+    if (Test-Path $generated) {
+        $genPerm = ([regex]::Match([IO.File]::ReadAllText($generated), '(?s)Permissions=(.*?);')).Groups[1].Value -replace '\s', ''
+    }
+    Check 'собранный переходник несёт права на свои таблицы, а не только образец' `
+        (($samplePerm -ne '') -and ($genPerm -eq $samplePerm)) `
+        "у собранного «$genPerm», у образца «$samplePerm»"
+
     Import-Object $generated 'names-adapter'
     Compile-Codeunit $AdapterObjectNo 'names-adapter'
     $adapterUp = $true
