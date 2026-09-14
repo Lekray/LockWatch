@@ -239,6 +239,10 @@ IF NOT EXISTS (SELECT 1 FROM $context WHERE [Table No_] = $TableNo)
 INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
 VALUES ($TableNo,N'',$FieldNo,N'',N'',1);
 UPDATE $context SET [Enabled] = 1, [Document Field No_] = $FieldNo WHERE [Table No_] = $TableNo;
+-- Чужие строки контекста ГАСЯТСЯ. Держатель берёт первую включённую таблицу, и оставленная
+-- кем-то включённой чужая строка уводит его в другую таблицу - а говорит он при этом «строки
+-- LOCKWATCH-LIVE нет в таблице Sales Line», то есть указывает на подкладку, а не на настройку.
+UPDATE $context SET [Enabled] = 0 WHERE [Table No_] <> $TableNo;
 UPDATE $state SET [Watchdog Message] = N'';
 "@ | Out-Null
     Restart-Nav 'настройка правится мимо NAV, и в кэше службы лежит прежняя'
