@@ -993,6 +993,49 @@ if (-not $objRows.Success) {
     }
 }
 
+# Команда, названная документом, обязана быть ИСПОЛНИМА. Числа этого раздела сверяются с
+# пакетом давно, а команды порядка установки не сверялись ничем: переименованный метод,
+# перенумерованный объект, исчезнувший ключ скрипта оставляют документ, который ведёт
+# установщика в отказ - и узнаёт об этом он, на чужой базе, а не сборка здесь.
+#
+# Спрашивается ровно исполнимость, а не смысл: у вызова кодюнита - что такой объект в пакете
+# есть и несёт ВНЕШНЮЮ функцию с таким именем (внутреннюю платформа звать не даст); у вызова
+# скрипта - что файл на месте и что каждый названный ключ у него объявлен.
+$cmdProblems = @()
+foreach ($m in [regex]::Matches($installDoc, '-CodeunitId\s+(?<no>\d+)\s+-MethodName\s+(?<name>[A-Za-z0-9_]+)')) {
+    $cmdNo = [int]$m.Groups['no'].Value
+    $cmdName = $m.Groups['name'].Value
+    $cmdPart = $shipParts | Where-Object { ($_.Kind -eq 'Codeunit') -and ($_.No -eq $cmdNo) }
+    if (-not $cmdPart) {
+        $cmdProblems += "документ зовёт Codeunit $cmdNo, а пакет его не везёт"
+        continue
+    }
+    if ($cmdPart.Body -notmatch "(?m)^\s*\[External\]\s*\r?\n\s*PROCEDURE\s+$cmdName@") {
+        $cmdProblems += "документ зовёт $cmdName у Codeunit $cmdNo, а внешней функции с таким именем там нет"
+    }
+}
+# Обратная кавычка в конце строки - перенос команды, и хвост за ней читать нельзя: там уже
+# другая строка документа, а не ключи этого вызова.
+foreach ($m in [regex]::Matches($installDoc, '(?m)pwsh\s+(?<path>scripts/[A-Za-z0-9_\-]+\.ps1)(?<tail>[^\r\n`]*)')) {
+    $cmdRel = $m.Groups['path'].Value -replace '/', '\'
+    $cmdFull = Join-Path $root $cmdRel
+    if (-not (Test-Path $cmdFull)) {
+        $cmdProblems += "документ зовёт $($m.Groups['path'].Value), а такого файла нет"
+        continue
+    }
+    $cmdText = [IO.File]::ReadAllText($cmdFull)
+    foreach ($k in [regex]::Matches($m.Groups['tail'].Value, '(?<![A-Za-z0-9])-(?<key>[A-Za-z][A-Za-z0-9]*)')) {
+        $key = $k.Groups['key'].Value
+        if ($cmdText -notmatch "(?m)^\s*(?:\[[^\]]*\]\s*)*\`$$key\s*(?:=|,|\)|$)") {
+            $cmdProblems += "документ зовёт $($m.Groups['path'].Value) с ключом -$key, а такого параметра у него нет"
+        }
+    }
+}
+if ($cmdProblems) {
+    Fail ("порядок установки зовёт то, чего нет - по нему ставят руками:`n  " +
+          (($cmdProblems | Sort-Object -Unique) -join "`n  "))
+}
+
 # Списков в разделе два, и у обоих есть в сборке настоящий двойник: мерные кодюниты она
 # знает поимённо, объекты показа зовутся словом Demo. Сверяются они целиком - разойтись
 # список может в обе стороны, и забытым именем, и лишним, - а номер берётся только из
