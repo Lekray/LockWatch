@@ -15,6 +15,10 @@
     единого замечания и просто никогда не срабатывает. Колонка документа остаётся пустой,
     а пустая колонка читается как "спорили не за документы".
 
+    Номер объекта сверяется с базой на ЗАНЯТОСТЬ: собранное кладут импортом с перезаписью,
+    и занятый номер - это ЧУЖОЙ объект, который был бы перекрыт молча. Отказ называет, чем
+    номер занят.
+
     Собранный объект кладётся в out/ и в git не попадает: номер таблицы заказчика - ровно
     то, чего в публичном репозитории быть не должно.
 
@@ -58,11 +62,46 @@ if (($ObjectNo -ge 110230) -and ($ObjectNo -le 110249)) {
 }
 if ($ObjectNo -le 0) { Fail 'номер объекта должен быть положительным' }
 
+# Имя объекта - не длиннее тридцати знаков, иначе C/SIDE откажет при импорте.
+$objectName = "LockWatch Adapter $TableNo"
+if ($objectName.Length -gt 30) { Fail "имя объекта длиннее тридцати знаков: [$objectName]" }
+
+# Номер проверяется на ЗАНЯТОСТЬ, а не только на диапазон. Собранный объект кладут на
+# установку импортом с ImportAction=overwrite, и занятый номер - это ЧУЖОЙ объект, который
+# будет молча перекрыт: имя сборщика подстановкой не проверяет никто, а потеря находится
+# потом и не там. Тип и имя занявшего спрашиваются затем, чтобы отказ называл потерю.
+if (-not $Database) { Fail 'не задано имя базы: занятость номера не с чем сверить - переменная LW_DATABASE или параметр -Database' }
+$busy = & sqlcmd -S $Server -d $Database -E -b -l 30 -W -h -1 -s '|' -Q `
+    "SET NOCOUNT ON; SELECT [Type], [Name] FROM [dbo].[Object] WHERE [ID] = $ObjectNo AND [Type] <> 0;" 2>&1
+if ($LASTEXITCODE -ne 0) { Fail "занятость номера $ObjectNo не проверилась:`n$($busy -join ' ')" }
+$busyLines = @($busy | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and ($_ -notmatch '^\(\d+ rows? affected\)$') })
+if ($busyLines.Count -gt 0) {
+    $kinds = @{ '1' = 'таблица'; '2' = 'форма'; '3' = 'отчёт'; '4' = 'dataport'; '5' = 'кодюнит';
+                '6' = 'XMLport'; '7' = 'меню'; '8' = 'страница'; '9' = 'запрос' }
+    $what = @()
+    foreach ($line in $busyLines) {
+        $p = $line -split '\|'
+        $kindNo = "$($p[0])".Trim()
+        $kindName = if ($p.Count -gt 1) { "$($p[1])".Trim() } else { '' }
+        $kind = if ($kinds.ContainsKey($kindNo)) { $kinds[$kindNo] } else { "тип $kindNo" }
+        $what += "$kind [$kindName]"
+    }
+    # Свой же прошлый сбор занятым не считается: сборщик пересобирает объект под тот же
+    # номер, и отказ на нём запретил бы повторную сборку после правки образца. Разрешается
+    # он только тогда, когда занявший - кодюнит с ТЕМ ЖЕ именем, какое собрал бы скрипт.
+    $only = $busyLines[0] -split '\|'
+    $mine = (($busyLines.Count -eq 1) -and ("$($only[0])".Trim() -eq '5') -and ("$($only[1])".Trim() -eq $objectName))
+    if (-not $mine) {
+        Fail ("номер $ObjectNo в базе $Database занят: $($what -join ', '). Перезаписывать чужое " +
+              'сборщик не станет - выберите свободный номер ключом -ObjectNo.')
+    }
+    Write-Host "  номер $ObjectNo занят нашим же переходником - пересобираю его"
+}
+
 # Имена спрашиваем у строки таблицы контекста - там их заполнил сам NAV. Своей выдумке
 # здесь не место: имя, разошедшееся с тем, что знает платформа, даст объект, который не
 # соберётся, и это ещё лучший исход.
 if ((-not $TableName) -or (-not $FieldName)) {
-    if (-not $Database) { Fail 'не задано имя базы: переменная LW_DATABASE или параметр -Database' }
     if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY или параметр -Company' }
     $context = "[$Company`$LockWatch Context Table]"
     $row = & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -W -Q `
@@ -85,10 +124,6 @@ if (-not $TableName) { Fail 'имя таблицы пусто: подставл�
 if (-not $FieldName) { Fail 'имя поля документа пусто: подставлять Rec."" нельзя' }
 if ($TableName -match '"') { Fail "в имени таблицы есть кавычка: [$TableName]" }
 if ($FieldName -match '"') { Fail "в имени поля есть кавычка: [$FieldName]" }
-
-# Имя объекта - не длиннее тридцати знаков, иначе C/SIDE откажет при импорте.
-$objectName = "LockWatch Adapter $TableNo"
-if ($objectName.Length -gt 30) { Fail "имя объекта длиннее тридцати знаков: [$objectName]" }
 
 $text = [IO.File]::ReadAllText($sample, [Text.UTF8Encoding]::new($false))
 

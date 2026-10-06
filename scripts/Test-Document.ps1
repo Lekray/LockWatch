@@ -67,6 +67,13 @@ $outDir = Join-Path $root 'out'
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
+function Invoke-CleanupSql([string]$query, [string]$why) {
+    # -b обязателен: без него sqlcmd отдаёт НОЛЬ и на ошибке SQL, и уборка, не выполнившаяся
+    # вовсе, выглядела бы сделанной. Отказ уборки прогон не роняет - о нём говорят словами:
+    # к этому месту он либо уже отработал, либо отказал, и решает не она.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $query 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Host "ВНИМАНИЕ: $why не убралось: $(($answer -join ' ') -replace '\s+', ' ')" -ForegroundColor Red }
+}
 if (-not $Database) { Fail 'не задано имя базы: переменная LW_DATABASE или параметр -Database' }
 if (-not $Instance) { Fail 'не задан экземпляр службы: переменная LW_INSTANCE' }
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
@@ -75,8 +82,9 @@ if ($FieldNo -le 0) { Fail 'не задано поле документа: пе�
 
 $episode = "[$Company`$LockWatch Episode]"
 $context = "[$Company`$LockWatch Context Table]"
-$setup   = "[$Company`$LockWatch Setup]"
-$state   = "[$Company`$LockWatch Watchdog]"
+# Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
+$setup   = '[LockWatch Setup]'
+$state   = '[LockWatch Watchdog]'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
 # Номера заведомо не встречающиеся: прогон пишет в ЖИВУЮ таблицу установки, и столкнуться
@@ -123,13 +131,21 @@ function Check([string]$what, [bool]$ok, [string]$detail) {
 }
 
 $blocker = $null; $waiter = $null; $sqlTable = ''; $sqlTableName = ''; $docColumn = ''
+# Что стоит в базе ДО прогона. Спрашивается первым же запросом: строка контекста на время
+# опыта переписывается, настройка гасится - и вернуть их прежнее состояние можно, только
+# зная, каким оно было. Заводские значения тут не годятся: и выключатель сбора, и чужая
+# строка контекста принадлежат установке, а не прогону.
+$hadContext = 0; $hadEnabled = ''; $deadlocksWas = ''
 function Start-Sqlcmd([string]$name, [string]$sql) {
     # Запрос уезжает ФАЙЛОМ, а не параметром -Q. Start-Process склеивает элементы
     # -ArgumentList пробелом и кавычек вокруг них не ставит: запрос с пробелами рассыпается
     # на аргументы, sqlcmd молча выходит с ошибкой, а выглядит это как "блокировка не
     # случилась". В имени таблицы NAV к тому же стоит доллар.
     $file = Join-Path $outDir $name
-    [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    # BOM обязателен, как и во всех .sql репозитория: файл читает sqlcmd, и без BOM он
+    # разбирает его как OEM. Кириллицы в этих запросах нет, но правило одно на весь
+    # репозиторий - иначе оно держится памятью того, кто писал файл.
+    [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
     Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList @(
         '-S', $Server, '-d', $Database, '-E', '-b', '-l', '30', '-i', $file
     )
@@ -323,6 +339,9 @@ FROM $episode ORDER BY [Entry No_] DESC;
 }
 
 try {
+    $hadContext = [int](Scalar "SELECT COUNT(*) FROM $context WHERE [Table No_] = $TableNo;")
+    $hadEnabled = if ($hadContext -gt 0) { Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $context WHERE [Table No_] = $TableNo;" } else { '' }
+    $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
     Write-Host 'Подготовка стенда'
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
     # Сбор взаимоблокировок на время опыта выключается. Он берёт графы из КОЛЬЦЕВОГО
@@ -386,6 +405,13 @@ WHERE ic.object_id = OBJECT_ID(N'$sqlTable') AND ic.index_id = 1 AND ic.is_inclu
     $docColumn = $columns[0].Trim()
     Write-Host "  цель: $sqlTable, столбец [$docColumn]"
 
+    # Остатки ПРОШЛЫХ прогонов подметаются здесь - до первого опыта. Оборванный прогон
+    # оставляет свои строки в ЖИВОЙ таблице установки, и следующий за ним опыт принял бы их
+    # за свои: опыт ищет строку по номеру документа, а номер у двух прогонов один и тот же.
+    # Отбор ТОЧНЫЙ - по префиксу номера, какой заводит только этот прогон, и ничего чужого
+    # он не трогает.
+    Invoke-Sql "DELETE FROM $sqlTable WHERE [$docColumn] LIKE N'LOCKWATCH-DOC-%';" | Out-Null
+
     Write-Host 'Опыт первый'
     $f = Invoke-Experiment $docA
     Check 'эпизод заведён ровно один' (($f.Count -ge 7) -and ($f[6] -eq '1')) `
@@ -421,14 +447,26 @@ finally {
     Stop-Sqlcmd $blocker
     Stop-Sqlcmd $waiter
     # Убираем за собой ОБЕ подложенные строки и строку настройки. Чужая таблица обязана
-    # остаться ровно такой, какой была: отбор по номеру документа, и никаких DELETE без него.
-    # Признак возвращается в исходное - таким он заводится при создании настройки.
-    $cleanup = "DELETE FROM $context WHERE [Table No_] = $TableNo; UPDATE $setup SET [Deadlocks Enabled] = 1;"
+    # остаться ровно такой, какой была: отбор по префиксу номера документа, и никаких
+    # DELETE без него.
+    #
+    # Возвращается НАЙДЕННОЕ, а не заводское. Строка контекста, стоявшая в базе до прогона,
+    # возвращается на своё место, а не сносится: снести её значит молча выключить установке
+    # объявленную таблицу документа, а завести заново прогон был бы не вправе - прежнего
+    # содержимого он не знает. Выключатель сбора взаимоблокировок возвращается таким, каким
+    # его застали: единица тут - догадка о чужой настройке.
+    $deadlocksSet = if ($deadlocksWas -match '^\d+$') { $deadlocksWas } else { 1 }
+    if ($deadlocksWas -notmatch '^\d+$') {
+        Write-Host 'ВНИМАНИЕ: прежнее значение [Deadlocks Enabled] прочитать не удалось - вернул 1' -ForegroundColor Red
+    }
+    $cleanup = "UPDATE $setup SET [Deadlocks Enabled] = $deadlocksSet;"
+    if ($hadContext -eq 0) { $cleanup += " DELETE FROM $context WHERE [Table No_] = $TableNo;" }
+    elseif ($hadEnabled -match '^[01]$') { $cleanup += " UPDATE $context SET [Enabled] = $hadEnabled WHERE [Table No_] = $TableNo;" }
     if ($sqlTable -and $docColumn) {
-        $cleanup += " DELETE FROM $sqlTable WHERE [$docColumn] IN (N'$docA',N'$docB',N'$docC',N'$docD');"
+        $cleanup += " DELETE FROM $sqlTable WHERE [$docColumn] LIKE N'LOCKWATCH-DOC-%';"
     }
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
-    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
+    Invoke-CleanupSql $cleanup 'уборка за прогоном'
     if ($StopInstance) { Stop-Service $service -Force }
 }
 

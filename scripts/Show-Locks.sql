@@ -73,7 +73,7 @@
     прочли вовсе - пустую клетку приняли за поломку (docs/FINDINGS.md, раздел 87). Теперь
     замечания ложатся ВТОРОЙ ТАБЛИЦЕЙ, прямо под первой, и не заметить их нельзя.
 
-    Причин у пустой учётной записи ЧЕТЫРЕ, и путать их дорого - три из них не поломка:
+    Причин у пустой учётной записи ПЯТЬ, и путать их дорого - четыре из них не поломка:
 
       держателя не видно       сервер не назвал виновника: ждут не одного соединения, или
                                сессия уже ушла. Называть по нему нечего вовсе.
@@ -85,6 +85,9 @@
       отметки нет              сторона - сессия NAV, но в таблицу контекста не писала:
                                читала, держит блокировку на другом, или подписчик стоит
                                не на той таблице.
+      спор в другой базе       ожидание идёт в ДРУГОЙ базе этого же экземпляра, а съёмка
+                               снята в базе установки: имени таблицы и номера ключа NAV у
+                               такой строки нет вовсе, и спрашивать их тут не у чего.
 
     ОТМЕТКА КОНТЕКСТА, раз уж она тут поминается на каждом шагу, - это строка, которую
     подписчик LockWatch кладёт в свою таблицу в ТОЙ ЖЕ транзакции, что и запись
@@ -119,7 +122,7 @@ DECLARE @queue TABLE (
     victim_spid int, blocker_spid int, wait_ms bigint,
     wait_type nvarchar(22), resource_kind nvarchar(9),
     object_name nvarchar(34), index_name nvarchar(34), nav_key int, on_sift bit,
-    lockres nvarchar(22),
+    lockres nvarchar(22), other_db bit,
     blocker_login nvarchar(30), blocker_host nvarchar(18), blocker_program nvarchar(30),
     blocker_status nvarchar(12), idle_s int, open_trans int, tran_began datetime,
     victim_login nvarchar(30), victim_host nvarchar(18), victim_program nvarchar(30));
@@ -128,7 +131,7 @@ DECLARE @queue TABLE (
 -- жертвы лежит в dm_tran_locks сама, и в ней уже есть и hobt, и хэш спорной строки.
 -- Разбирать текст пришлось бы по четырём образцам - у KEY, PAGE, OBJECT и RID они разные.
 INSERT @queue (victim_spid, blocker_spid, wait_ms, wait_type, resource_kind,
-               object_name, index_name, nav_key, on_sift, lockres,
+               object_name, index_name, nav_key, on_sift, lockres, other_db,
                blocker_login, blocker_host, blocker_program, blocker_status,
                idle_s, open_trans, tran_began,
                victim_login, victim_host, victim_program)
@@ -157,6 +160,7 @@ SELECT
     END,
     CASE WHEN o.name LIKE '%$VSIFT$%' THEN 1 ELSE 0 END,
     CONVERT(nvarchar(22), w.resource_description),
+    ISNULL(w.other_db, 0),
     -- Держатель глазами сервера. Для ЧУЖОГО соединения - утилиты, шага задания, чьего-то
     -- окна запросов - это единственный возможный ответ на "кто": отметку контекста кладёт
     -- только сессия NAV. Для самой сессии NAV логин здесь общий, учётной записи службы,
@@ -181,12 +185,28 @@ LEFT JOIN sys.dm_exec_sessions bs ON bs.session_id = wt.blocking_session_id
 LEFT JOIN sys.dm_tran_session_transactions bt ON bt.session_id = wt.blocking_session_id
 LEFT JOIN sys.dm_tran_active_transactions ba ON ba.transaction_id = bt.transaction_id
 OUTER APPLY (
-    SELECT TOP 1 l.resource_type, l.resource_associated_entity_id,
-           RTRIM(l.resource_description) AS resource_description
+    -- Ожидание в ЧУЖОЙ базе этого же экземпляра помечается, а не выбрасывается и не
+    -- разбирается: имя таблицы и номер ключа NAV поднимаются из каталога той базы, где
+    -- снята съёмка, а hobt чужой базы к нашим sys.partitions не относится вовсе - и
+    -- совпади он номером с чужим объектом, ответ назвал бы ЧУЖОЕ имя. Поэтому ресурс
+    -- разбирается только для своей базы, а факт "спор в другой базе" идёт отдельным
+    -- столбцом: без него строка пришла бы с пустым именем, и замечание объяснило бы это
+    -- невидимостью каталога - то есть свалило бы на учётную запись то, что к ней не
+    -- относится (замечание 2 ниже).
+    SELECT TOP 1 l.resource_type,
+           CASE WHEN l.resource_database_id = DB_ID()
+                THEN l.resource_associated_entity_id END AS resource_associated_entity_id,
+           CASE WHEN l.resource_database_id = DB_ID()
+                THEN RTRIM(l.resource_description) END AS resource_description,
+           CONVERT(bit, CASE WHEN l.resource_database_id IS NULL OR l.resource_database_id = DB_ID()
+                             THEN 0 ELSE 1 END) AS other_db
     FROM sys.dm_tran_locks l
     WHERE l.request_session_id = wt.session_id
       AND l.request_status <> 'GRANT'
-      AND l.resource_database_id = DB_ID()
+    -- Своя база идёт первой: у сессии, ждущей сразу в двух базах, в ответ обязано попасть
+    -- то ожидание, ради которого съёмку и запускали.
+    ORDER BY CASE WHEN l.resource_database_id IS NULL OR l.resource_database_id = DB_ID()
+                  THEN 0 ELSE 1 END
 ) w
 LEFT JOIN sys.partitions p ON p.hobt_id = w.resource_associated_entity_id
 LEFT JOIN sys.objects o ON o.object_id = p.object_id
@@ -268,11 +288,15 @@ SELECT
     q.victim_spid                  AS [ждёт spid],
     q.blocker_spid                 AS [держит spid],
     q.wait_ms                      AS [ждёт мс],
-    q.object_name                  AS [таблица SQL],
+    -- Имя таблицы у чужой базы пусто по делу, и клетка говорит это САМА: пустая она читалась
+    -- бы как невидимость каталога, а это неправда про учётную запись читателя.
+    CASE WHEN q.other_db = 1 THEN N'(спор в другой базе)'
+         ELSE q.object_name END    AS [таблица SQL],
     q.nav_key                      AS [ключ NAV],
     q.on_sift                      AS [SIFT],
     COALESCE(fb.nav_user,
-        CASE WHEN q.blocker_spid IS NULL OR q.blocker_program IS NULL THEN N'(держателя не видно)'
+        CASE WHEN q.other_db = 1 THEN N'(спор в другой базе)'
+             WHEN q.blocker_spid IS NULL OR q.blocker_program IS NULL THEN N'(держателя не видно)'
              WHEN UPPER(q.blocker_program) NOT LIKE N'MICROSOFT DYNAMICS NAV%' THEN N'(не служба NAV)'
              WHEN @markTable IS NULL THEN N'(LockWatch не установлен)'
              ELSE N'(отметки нет)' END)
@@ -285,7 +309,8 @@ SELECT
     q.open_trans                   AS [открытых транзакций],
     q.tran_began                   AS [транзакция начата],
     COALESCE(fv.nav_user,
-        CASE WHEN q.victim_program IS NULL THEN N'(жертвы не видно)'
+        CASE WHEN q.other_db = 1 THEN N'(спор в другой базе)'
+             WHEN q.victim_program IS NULL THEN N'(жертвы не видно)'
              WHEN UPPER(q.victim_program) NOT LIKE N'MICROSOFT DYNAMICS NAV%' THEN N'(не служба NAV)'
              WHEN @markTable IS NULL THEN N'(LockWatch не установлен)'
              ELSE N'(отметки нет)' END)
@@ -332,7 +357,7 @@ IF NOT EXISTS (SELECT 1 FROM @queue)
         N'Ни одна сессия сейчас не ждёт блокировки. Съёмка видит ТОЛЬКО идущий спор: ожидание кончилось - и в dm_tran_locks его больше нет.',
         N'Снимать надо в минуту жалобы, а попасть в неё руками трудно - для того LockWatch и ведёт журнал эпизодов сам, без человека у экрана.');
 
-IF EXISTS (SELECT 1 FROM @queue WHERE object_name IS NULL)
+IF EXISTS (SELECT 1 FROM @queue WHERE object_name IS NULL AND other_db = 0)
     INSERT @notes (seq, what, why, fix) VALUES (2, N'имя таблицы',
         N'Каталог базы не виден вашей учётной записи: sys.objects и sys.indexes для этого объекта пусты. sys.partitions виден всем - поэтому очередь и длительности выше ВЕРНЫ.',
         N'GRANT VIEW DEFINITION в этой базе той учётной записи, под которой смотрите. Прав на ДАННЫЕ для этого не нужно.');
@@ -356,13 +381,23 @@ IF @markTable IS NULL AND EXISTS (SELECT 1 FROM @queue)
 
 IF @markTable IS NOT NULL AND EXISTS (
         SELECT 1 FROM @queue q
-        WHERE (q.blocker_spid IS NOT NULL AND UPPER(q.blocker_program) LIKE N'MICROSOFT DYNAMICS NAV%'
+        WHERE q.other_db = 0
+          AND ((q.blocker_spid IS NOT NULL AND UPPER(q.blocker_program) LIKE N'MICROSOFT DYNAMICS NAV%'
                AND NOT EXISTS (SELECT 1 FROM @found f WHERE f.spid = q.blocker_spid))
            OR (UPPER(q.victim_program) LIKE N'MICROSOFT DYNAMICS NAV%'
-               AND NOT EXISTS (SELECT 1 FROM @found f WHERE f.spid = q.victim_spid)))
+               AND NOT EXISTS (SELECT 1 FROM @found f WHERE f.spid = q.victim_spid))))
     INSERT @notes (seq, what, why, fix) VALUES (6, N'учётная запись NAV',
         N'Сторона - сессия NAV, но отметки контекста она не клала: писала не в ту таблицу, на которую поставлен подписчик LockWatch, читала, или держит блокировку на чём-то другом.',
         N'Подписчик ставится на таблицу документа установки. Проверьте, что он стоит на той таблице, за строки которой идёт спор.');
+
+-- Ожидание в чужой базе. Имя таблицы и номер ключа NAV поднимаются из каталога той базы,
+-- где снята съёмка, поэтому у такой строки их нет - и объяснять это невидимостью каталога
+-- было бы неправдой про вашу учётную запись. Отдельным замечанием, а не выбросом строки:
+-- очередь серверная, и она верна и здесь - включая того, кто ждёт.
+IF EXISTS (SELECT 1 FROM @queue WHERE other_db = 1)
+    INSERT @notes (seq, what, why, fix) VALUES (7, N'спор в другой базе',
+        N'Ожидание идёт в ДРУГОЙ базе этого же экземпляра, а съёмка снята в базе установки: имя таблицы, номер ключа NAV и хэш спорной строки берутся из каталога ТОЙ базы, где снята съёмка, и у чужой строки их нет вовсе. Очередь, длительности и логины выше серверные, и они верны.',
+        N'Снять там же, где идёт спор: sqlcmd -S <сервер> -d <та база> -E -i Show-Locks.sql');
 
 -- Пустой второй таблицы быть не должно: пустота читается как «замечания не посчитались».
 IF NOT EXISTS (SELECT 1 FROM @notes)

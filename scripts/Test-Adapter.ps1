@@ -25,6 +25,10 @@
     она его подписку. После проверки объект из базы удаляется: оставлять на стенде
     подписчика на чужой таблице прогон не вправе.
 
+    Строки контекста, заведённые замеру, возвращаются в ТО состояние, в каком прогон их
+    застал: строка, снесённая после себя, выключила бы установке объявленную таблицу
+    документа - а заметно это стало бы только по пустой колонке в журнале.
+
     Сломано нарочно 11.09.2026: у переходника убрана проверка галки в строке контекста.
     На прежнем устройстве прогона это не изменило НИЧЕГО - 5 из 5, - потому что вариант,
     названный "выключен", строки контекста не имел вовсе: переходник выходил на GET, до
@@ -59,6 +63,20 @@ $finsql = 'C:\Program Files (x86)\Microsoft Dynamics NAV\110\RoleTailored Client
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
+function Warn-Cleanup([string]$message) { Write-Host "ВНИМАНИЕ: $message" -ForegroundColor Red }
+function Refuse([string]$message, [bool]$soft) {
+    # Мягкий отказ - предупреждение вместо завершения процесса. Он нужен УБОРКЕ: Fail делает
+    # exit, а exit прекращает процесс сразу и до конца блока finally - catch его не ловит
+    # вовсе, и слова уборки не печатались бы никогда.
+    if ($soft) { Warn-Cleanup $message; return $false }
+    Fail $message
+}
+function Invoke-CleanupSql([string]$query, [string]$why) {
+    # -b обязателен: без него sqlcmd отдаёт НОЛЬ и на ошибке SQL, и уборка, не выполнившаяся
+    # вовсе, выглядела бы сделанной. Отказ уборки прогон не роняет - о нём говорят словами.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $query 2>&1
+    if ($LASTEXITCODE -ne 0) { Warn-Cleanup "$why не убралось: $(($answer -join ' ') -replace '\s+', ' ')" }
+}
 if (-not $Database) { Fail 'не задано имя базы: переменная LW_DATABASE или параметр -Database' }
 if (-not $Instance) { Fail 'не задан экземпляр службы: переменная LW_INSTANCE' }
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
@@ -85,19 +103,20 @@ function Invoke-Sql([string]$query) {
 }
 function Scalar([string]$query) { $rows = Invoke-Sql $query; if ($rows.Count -eq 0) { return '' }; return "$($rows[0])".Trim() }
 
-function Invoke-Finsql([string]$argLine, [string]$logName) {
+function Invoke-Finsql([string]$argLine, [string]$logName, [switch]$Soft) {
     $log = Join-Path $outDir $logName
     if (Test-Path $log) { Remove-Item $log -Force }
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""
     $process = Start-Process -FilePath $finsql -PassThru -NoNewWindow -ArgumentList "$argLine,$navArgs"
     if (-not $process.WaitForExit($TimeoutMinutes * 60000)) {
         $process.Kill()
-        Fail "finsql завис дольше $TimeoutMinutes мин и снят"
+        return (Refuse "finsql завис дольше $TimeoutMinutes мин и снят" $Soft)
     }
     if (Test-Path $log) {
         $text = ([System.Text.Encoding]::GetEncoding(866).GetString([IO.File]::ReadAllBytes($log))).Trim()
-        if ($text) { Fail "finsql ($logName):`n$text" }
+        if ($text) { return (Refuse "finsql ($logName):`n$text" $Soft) }
     }
+    return $true
 }
 
 function Import-Object([string]$sourceFile, [string]$tag) {
@@ -108,15 +127,17 @@ function Import-Object([string]$sourceFile, [string]$tag) {
     if ($cp866.GetString($cp866.GetBytes($text)) -ne $text) { Fail "cp866 теряет символы в $sourceFile" }
     $pack = Join-Path $outDir "$tag.cp866.txt"
     [IO.File]::WriteAllBytes($pack, $cp866.GetBytes($text))
-    Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "import-$tag.log"
+    # Свой ответ (истина) глушится: он нужен уборке, а в прогоне это был бы лишний шум.
+    Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "import-$tag.log" | Out-Null
 }
 
 function Compile-Codeunit([int]$id, [string]$tag) {
-    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=Codeunit;ID=$id`",SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "compile-$tag.log"
+    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=Codeunit;ID=$id`",SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "compile-$tag.log" | Out-Null
 }
 
-function Delete-Codeunit([int]$id, [string]$tag) {
-    Invoke-Finsql "Command=DeleteObjects,Filter=`"Type=Codeunit;ID=$id`"" "delete-$tag.log"
+function Delete-Codeunit([int]$id, [string]$tag, [switch]$Soft) {
+    # Ответ вызова возвращается, а не глушится: уборке он и нужен - она говорит, что снялось.
+    return (Invoke-Finsql "Command=DeleteObjects,Filter=`"Type=Codeunit;ID=$id`"" "delete-$tag.log" -Soft:$Soft)
 }
 
 # Модуль NAV живёт только в Windows PowerShell 5.1, поэтому и ожидание готовности, и сами
@@ -136,11 +157,12 @@ while ((Get-Date) -lt `$deadline) {
 exit 1
 "@
 
-function Restart-Nav([string]$why) {
+function Restart-Nav([string]$why, [switch]$Soft) {
     Write-Host "  перезапускаю службу $Instance ($why)"
     Restart-Service $service -Force
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
+    if ($LASTEXITCODE -ne 0) { return (Refuse "экземпляр $Instance не ответил по порту управления" $Soft) }
+    return $true
 }
 
 function Invoke-Codeunit([int]$id, [string]$method, [string]$why) {
@@ -205,16 +227,25 @@ function Measure-Mode([string]$why) {
 }
 
 $generated = $null
+# Что стоит в базе ДО прогона. Строки контекста на время замера переписываются, и вернуть
+# их прежнее состояние можно, только зная, каким оно было: помнится ПРИЗНАК (была ли
+# строка) и её галка. Содержимое строки прогон не выдумывает - имена в неё кладёт сам NAV.
+$rowsWas = @{}
 try {
     Write-Host 'Подготовка стенда'
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
+    foreach ($no in @($sampleTableNo, $TableNo)) {
+        $exists = [int](Scalar "SELECT COUNT(*) FROM $context WHERE [Table No_] = $no;")
+        $enabled = if ($exists -gt 0) { Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $context WHERE [Table No_] = $no;" } else { '' }
+        $rowsWas[$no] = @{ Exists = $exists; Enabled = $enabled }
+    }
     Invoke-Sql "DELETE FROM $context WHERE [Table No_] IN ($sampleTableNo,$TableNo);" | Out-Null
     Invoke-Sql "DELETE FROM $mark;" | Out-Null
 
     # ---------- вариант 1: подписчика нет вовсе ----------
     Write-Host 'Вариант первый: подписчика нет'
-    Delete-Codeunit $SampleAdapterId 'adapter'
-    Restart-Nav 'подписчик удалён'
+    Delete-Codeunit $SampleAdapterId 'adapter' | Out-Null
+    Restart-Nav 'подписчик удалён' | Out-Null
     $noAdapter = Measure-Mode 'замер без подписчика'
     Write-Host "  $($noAdapter.Ms) мс на $($noAdapter.Rows) строк, $($noAdapter.Us) мкс на строку, отметка $($noAdapter.Marked)"
 
@@ -233,7 +264,7 @@ DELETE FROM $context WHERE [Table No_] = $sampleTableNo;
 INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
 VALUES ($sampleTableNo,N'Sales Line',3,N'Document No.',N'Строка продажи',0);
 "@ | Out-Null
-    Restart-Nav 'подписчик вернулся, галка снята'
+    Restart-Nav 'подписчик вернулся, галка снята' | Out-Null
     $offAdapter = Measure-Mode 'замер с выключенной подпиской'
     Write-Host "  $($offAdapter.Ms) мс на $($offAdapter.Rows) строк, $($offAdapter.Us) мкс на строку, отметка $($offAdapter.Marked)"
 
@@ -242,7 +273,7 @@ VALUES ($sampleTableNo,N'Sales Line',3,N'Document No.',N'Строка прода
     # переходник один и тот же, меняется одно поле. Так и спрашивается обещание.
     Write-Host 'Вариант третий: подписчик работает'
     Invoke-Sql "UPDATE $context SET [Enabled] = 1 WHERE [Table No_] = $sampleTableNo;" | Out-Null
-    Restart-Nav 'галка поставлена'
+    Restart-Nav 'галка поставлена' | Out-Null
     $onAdapter = Measure-Mode 'замер с включённой подпиской'
     Write-Host "  $($onAdapter.Ms) мс на $($onAdapter.Rows) строк, $($onAdapter.Us) мкс на строку, отметка $($onAdapter.Marked)"
 
@@ -293,7 +324,7 @@ VALUES ($sampleTableNo,N'Sales Line',3,N'Document No.',N'Строка прода
     $retryNote = ''
     if ($onAdapter.Us -gt (2 * $noAdapter.Us)) {
         Write-Host 'Потолок перейдён - перемеряю дорогой вариант, прежде чем судить'
-        Restart-Nav 'повторный замер с включённой подпиской'
+        Restart-Nav 'повторный замер с включённой подпиской' | Out-Null
         $again = Measure-Mode 'повторный замер с включённой подпиской'
         Write-Host "  $($again.Ms) мс на $($again.Rows) строк, $($again.Us) мкс на строку, отметка $($again.Marked)"
         $retryNote = ", повтор $($again.Us) мкс"
@@ -330,7 +361,7 @@ VALUES ($TableNo,N'',$FieldNo,N'',N'',0);
     Import-Object $generated 'made-adapter'
     Compile-Codeunit $AdapterObjectNo 'made-adapter'
     Invoke-Sql "UPDATE $context SET [Enabled] = 1 WHERE [Table No_] = $TableNo;" | Out-Null
-    Restart-Nav 'собранный переходник выложен'
+    Restart-Nav 'собранный переходник выложен' | Out-Null
     $selfTest = Invoke-Codeunit $AdapterObjectNo 'SelfTest' 'обкатка собранного переходника'
     Check 'платформа знает подписку собранного переходника' `
         ($selfTest -match 'passed 3 of 3|пройдено 3 из 3') `
@@ -351,19 +382,40 @@ VALUES ($TableNo,N'',$FieldNo,N'',N'',0);
 }
 finally {
     Write-Host 'Убираю за собой'
+    # Порядок уборки - от ЦЕНЫ ОШИБКИ. Первыми возвращаются строки контекста: прогон правит
+    # ЧУЖУЮ настройку, и установленный переходник без своей строки молча перестаёт отмечать
+    # документ. Только потом идёт то, что может отказать, - снятие кодюнитов и перезапуск
+    # службы: Fail делает exit, а exit прекращает процесс сразу и до конца finally, и прежний
+    # порядок оставлял строки неубранными ровно тогда, когда уборка и нужна была.
+    $restore = "DELETE FROM $mark;"
+    if ($rowsWas.Count -eq 0) {
+        Warn-Cleanup 'прежнее состояние строк контекста прочитать не удалось - убираю строки целиком'
+        $restore += " DELETE FROM $context WHERE [Table No_] IN ($sampleTableNo,$TableNo);"
+    } else {
+        foreach ($no in @($sampleTableNo, $TableNo)) {
+            $was = $rowsWas[$no]
+            if ($was.Exists -eq 0) { $restore += " DELETE FROM $context WHERE [Table No_] = $no;" }
+            elseif ($was.Enabled -match '^[01]$') { $restore += " UPDATE $context SET [Enabled] = $($was.Enabled) WHERE [Table No_] = $no;" }
+        }
+    }
+    Invoke-CleanupSql $restore 'уборка за прогоном'
+
     # Собранный переходник со стенда снимается ОБЯЗАТЕЛЬНО: оставить на чужой таблице
-    # подписчика, о котором никто не просил, прогон не вправе.
+    # подписчика, о котором никто не просил, прогон не вправе. Отказ в этом хвосте виден
+    # предупреждением: чужие данные к нему уже возвращены, и он говорит о другом - о том,
+    # что на стенде остался живой подписчик на чужую таблицу.
     if ($generated) {
-        try { Delete-Codeunit $AdapterObjectNo 'made-adapter-drop' } catch { }
+        try { Delete-Codeunit $AdapterObjectNo 'made-adapter-drop' -Soft | Out-Null }
+        catch { Warn-Cleanup "собранный переходник $AdapterObjectNo снять не удалось: $($_.Exception.Message)" }
         if (Test-Path $generated) { Remove-Item $generated -Force }
     }
     # Образец со стенда СНИМАЕТСЯ, а не возвращается на место. В пакет он не едет, значит
     # после выкладки его на стенде нет, и оставить его здесь значило бы развести стенд с
     # установкой - ровно той разницей, которую прогон и обязан не допускать.
-    try { Delete-Codeunit $SampleAdapterId 'sample-adapter-drop' } catch { }
-    & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q `
-        "DELETE FROM $context WHERE [Table No_] IN ($sampleTableNo,$TableNo); DELETE FROM $mark;" 2>&1 | Out-Null
-    try { Restart-Nav 'стенд возвращён в исходное' } catch { }
+    try { Delete-Codeunit $SampleAdapterId 'sample-adapter-drop' -Soft | Out-Null }
+    catch { Warn-Cleanup "образец $SampleAdapterId снять не удалось: $($_.Exception.Message)" }
+    try { Restart-Nav 'стенд возвращён в исходное' -Soft | Out-Null }
+    catch { Warn-Cleanup "служба $Instance не перезапустилась: $($_.Exception.Message)" }
     if ($StopInstance) { Stop-Service $service -Force }
 }
 

@@ -19,7 +19,9 @@
     лишь те транзакции, что платформа завела в свою карту, а соединение sqlcmd в неё не
     попадает никогда. Держит Codeunit 110242, ждёт всё тот же sqlcmd.
 
-    Прогон возвращает ключ в то состояние, в котором его нашёл.
+    Прогон возвращает ключ в то состояние, в котором его нашёл, - и настройку тоже: имена от
+    платформы, канал тревоги и сбор кругов он правит на время опыта, а возвращает теми,
+    какими их застал.
 
     Сломано нарочно 11.09.2026: у дороги снята перекрёстная проверка "права на месте, сессия
     работает, а таблица пуста ПРИ НЕПУСТОЙ ОЧЕРЕДИ". Прогон даёт 4 из 5, красная - та, что
@@ -49,12 +51,27 @@ $outDir = Join-Path $root 'out'
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
+function Warn-Cleanup([string]$message) { Write-Host "ВНИМАНИЕ: $message" -ForegroundColor Red }
+function Refuse([string]$message, [bool]$soft) {
+    # Мягкий отказ - предупреждение вместо завершения процесса. Он нужен УБОРКЕ: Fail делает
+    # exit, а exit прекращает процесс сразу и до конца блока finally - catch его не ловит
+    # вовсе, и предупреждение о невозврате ключа было бы мёртвым кодом.
+    if ($soft) { Warn-Cleanup $message; return $false }
+    Fail $message
+}
+function Invoke-CleanupSql([string]$query, [string]$why) {
+    # -b обязателен: без него sqlcmd отдаёт НОЛЬ и на ошибке SQL, и уборка, не выполнившаяся
+    # вовсе, выглядела бы сделанной. Отказ уборки прогон не роняет - о нём говорят словами.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $query 2>&1
+    if ($LASTEXITCODE -ne 0) { Warn-Cleanup "$why не убралось: $(($answer -join ' ') -replace '\s+', ' ')" }
+}
 if (-not $Database) { Fail 'не задано имя базы: переменная LW_DATABASE или параметр -Database' }
 if (-not $Instance) { Fail 'не задан экземпляр службы: переменная LW_INSTANCE' }
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
 
 $episode = "[$Company`$LockWatch Episode]"
-$setup   = "[$Company`$LockWatch Setup]"
+# Настройка - одна на базу, и приставки компании в её SQL-имени нет.
+$setup   = '[LockWatch Setup]'
 $mark    = "[$Company`$LockWatch Context Mark]"
 # Та же таблица, но именем, каким её пишет в журнал разбор: без компании и без скобок.
 $markName = 'LockWatch Context Mark'
@@ -129,7 +146,7 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
         -RedirectStandardOutput $holdOut -RedirectStandardError $holdErr `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$runFile`""
 }
-function Set-Monitoring([string]$value, [string]$why) {
+function Set-Monitoring([string]$value, [string]$why, [switch]$Soft) {
     $cfgFile = Join-Path $outDir 'set-monitoring.ps1'
     Write-Ps51 $cfgFile @"
 `$ErrorActionPreference = 'Stop'
@@ -137,11 +154,12 @@ $navImport
 Set-NAVServerConfiguration -ServerInstance $Instance -KeyName EnableDeadlockMonitoring -KeyValue $value -ErrorAction Stop
 "@
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $cfgFile | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail "ключ мониторинга не переключился ($why)" }
+    if ($LASTEXITCODE -ne 0) { return (Refuse "ключ мониторинга не переключился ($why)" $Soft) }
     Write-Host "  ключ EnableDeadlockMonitoring = $value, перезапускаю службу ($why)"
     Restart-Service $service -Force
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
+    if ($LASTEXITCODE -ne 0) { return (Refuse "экземпляр $Instance не ответил по порту управления" $Soft) }
+    return $true
 }
 function Get-Monitoring() {
     $cfgFile = Join-Path $outDir 'get-monitoring.ps1'
@@ -155,7 +173,10 @@ $navImport
 }
 function Start-Sqlcmd([string]$name, [string]$body) {
     $file = Join-Path $outDir $name
-    [IO.File]::WriteAllText($file, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    # BOM обязателен, как и во всех .sql репозитория: файл читает sqlcmd, и без BOM он
+    # разбирает его как OEM. Кириллицы в этих запросах нет, но правило одно на весь
+    # репозиторий - иначе оно держится памятью того, кто писал файл.
+    [IO.File]::WriteAllText($file, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
     # Путь БЕЗ кавычек: список аргументов Start-Process экранирует его сам, а добавленные
     # руками кавычки уезжают в sqlcmd частью имени файла, и он молча не находит его.
     return Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden `
@@ -166,6 +187,7 @@ function Stop-Sqlcmd($process) {
 }
 
 $wasMonitoring = ''
+$setupWas = ''
 $holder = $null
 $waiter = $null
 try {
@@ -173,13 +195,17 @@ try {
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
     $wasMonitoring = Get-Monitoring
     Write-Host "  ключ мониторинга найден в состоянии $wasMonitoring"
+    # Настройка возвращается НАЙДЕННОЙ, а не заводской: имена от платформы, канал тревоги и
+    # сбор кругов принадлежат установке, и прогон правит их только на время опыта. Заводские
+    # значения тут - догадка о чужой настройке.
+    $setupWas = Scalar "SELECT CONVERT(varchar(2),[Platform Names Enabled]) + '|' + CONVERT(varchar(2),[Alert Channel]) + '|' + CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
     Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Platform Names Enabled] = 1, [Alert Channel] = 0, [Deadlocks Enabled] = 0;" | Out-Null
     if (-not $KeepJournal) { Invoke-Sql "DELETE FROM $episode;" | Out-Null }
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
 
     # ---------- дорога СНЯТА: инструмент обязан сказать это словами ----------
     Write-Host 'Ключ снят - дорога должна быть названа мёртвой'
-    Set-Monitoring 'false' 'дорога снимается'
+    Set-Monitoring 'false' 'дорога снимается' | Out-Null
     Invoke-Codeunit $PlatformCodeunitId 'CheckRoad' 'проверка дороги при снятом ключе' | Out-Null
     $deadStatus = Scalar "SELECT [Platform Road Status] FROM $setup;"
     Check 'при снятом ключе дорога названа мёртвой, а не показана пустой колонкой' `
@@ -188,7 +214,7 @@ try {
 
     # ---------- дорога ВЗВЕДЕНА ----------
     Write-Host 'Ключ взведён - дорога должна ожить'
-    Set-Monitoring 'true' 'дорога взводится'
+    Set-Monitoring 'true' 'дорога взводится' | Out-Null
     Invoke-Codeunit $PlatformCodeunitId 'CheckRoad' 'проверка дороги при взведённом ключе' | Out-Null
     $aliveStatus = Scalar "SELECT [Platform Road Status] FROM $setup;"
     Check 'при взведённом ключе сессия мониторинга поднята платформой' `
@@ -319,13 +345,24 @@ finally {
         }
         Remove-Item $holdOut -Force
     }
-    & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q `
-        "DELETE FROM $mark WHERE [Server Instance Id] = -1; UPDATE $setup SET [Platform Names Enabled] = 0, [Alert Channel] = 1, [Deadlocks Enabled] = 1;$(if (-not $KeepJournal) { " DELETE FROM $episode;" })" 2>&1 | Out-Null
+    # Настройка возвращается в найденное состояние, а не в заводское: три её поля правит
+    # этот прогон, и все три принадлежат установке.
+    if ($setupWas -match '^\d\|\d\|\d$') {
+        $was = $setupWas -split '\|'
+        $setupBack = "UPDATE $setup SET [Platform Names Enabled] = $($was[0]), [Alert Channel] = $($was[1]), [Deadlocks Enabled] = $($was[2]);"
+    } else {
+        $setupBack = "UPDATE $setup SET [Platform Names Enabled] = 0, [Alert Channel] = 1, [Deadlocks Enabled] = 1;"
+        Warn-Cleanup 'прежние значения настройки прочитать не удалось - вернул заводские'
+    }
+    Invoke-CleanupSql ("DELETE FROM $mark WHERE [Server Instance Id] = -1; $setupBack" + $(if (-not $KeepJournal) { " DELETE FROM $episode;" })) 'уборка за прогоном'
     # Ключ возвращается в то состояние, в котором его нашли: включённый мониторинг живёт
     # серверной сессией XE, которая переживает снятие инструмента, и оставлять его
-    # взведённым по итогам прогона нельзя.
+    # взведённым по итогам прогона нельзя. Зовётся МЯГКО: Fail делает exit, а exit
+    # прекращает процесс сразу и до конца finally - catch его не ловит, и предупреждение
+    # о невозврате ключа с жёстким вызовом было бы мёртвым кодом.
     if ($wasMonitoring) {
-        try { Set-Monitoring $wasMonitoring 'ключ возвращается как был' } catch { Write-Host 'ВНИМАНИЕ: ключ мониторинга вернуть не удалось' -ForegroundColor Red }
+        try { Set-Monitoring $wasMonitoring 'ключ возвращается как был' -Soft | Out-Null }
+        catch { Warn-Cleanup "ключ мониторинга вернуть не удалось: $($_.Exception.Message)" }
     }
     if ($StopInstance) { Stop-Service $service -Force }
 }

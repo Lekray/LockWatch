@@ -53,8 +53,9 @@ if (-not $Instance) { Fail 'не задан экземпляр службы: п�
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
 
 $episode = "[$Company`$LockWatch Episode]"
-$setup   = "[$Company`$LockWatch Setup]"
-$state   = "[$Company`$LockWatch Watchdog]"
+# Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
+$setup   = '[LockWatch Setup]'
+$state   = '[LockWatch Watchdog]'
 $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 # Имена рабочих станций сторон. Логин у обоих соединений один - учётная запись, под которой
@@ -112,7 +113,10 @@ function Check([string]$what, [bool]$ok, [string]$detail) {
 $pa = $null; $pb = $null
 function Start-Sqlcmd([string]$name, [string]$sql, [string]$workstation = '') {
     $file = Join-Path $outDir $name
-    [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    # BOM обязателен, как и во всех .sql репозитория: файл читает sqlcmd, и без BOM он
+    # разбирает его как OEM. Кириллицы в этих запросах нет, но правило одно на весь
+    # репозиторий - иначе оно держится памятью того, кто писал файл.
+    [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
     # Ключ -H кладёт имя рабочей станции в host_name сеанса, а граф берёт его из узла
     # процесса. Без него обе стороны опыта на сервере выглядят одинаково.
     $sqlArgs = @('-S', $Server, '-d', $Database, '-E', '-l', '30', '-i', $file)
@@ -204,6 +208,9 @@ function CircleHold {
     return '00:00:10'
 }
 $staleRing = $false
+# Найденные значения настройки. Пусто значит "прочитать не удалось": тогда уборка вернёт
+# 0 и 1 и скажет об этом вслух.
+$enabledWas = ''; $deadlocksWas = ''
 # Кольцо, которое не отдаёт НИЧЕГО, - не то же самое, что кольцо, отдающее с запозданием.
 # Первое видно только по счётчику сервера, второе - по метке времени в самой выдаче.
 $blindRing = $false
@@ -346,6 +353,13 @@ try {
     # уже не открывает. В журнале тогда пусто, прогон краснеет, а инструмент ни при чём.
     # Измерено 11.09.2026: круг состоялся, граф в буфере лежал, журнал остался пустым.
     # Проходы здесь делаются РУКАМИ, и сторож прогону не нужен вовсе.
+    #
+    # Два поля настройки прогон трогает и потому помнит их НАЙДЕННЫМИ: выключатель сторожа и
+    # сбор взаимоблокировок принадлежат установке, и возврат "заводского" оставил бы чужой
+    # заведённый сторож погашенным - а заметили бы это не здесь, а на следующем прогоне,
+    # зелёном по неверной причине.
+    $enabledWas = Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"
+    $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
     Invoke-Sql @"
 UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 1, [Enabled] = 0;
 DELETE FROM [dbo].[Scheduled Task] WHERE [Run Codeunit] = $TaskCodeunitId;
@@ -522,6 +536,14 @@ finally {
     # и следующий же проход вычитал бы из кольца все графы разом - включая устроенные этим
     # опытом. Прогон убрал бы за собой в журнале и оставил мину в настройке.
     $cleanup += " UPDATE $state SET [Deadlocks Read Until] = GETUTCDATE(), [Deadlocks Read At] = $blankDate;"
+    # А два поля настройки возвращаются ТЕМИ, какими их застали: сторож гасился как условие
+    # опыта, а не потому, что установке так лучше.
+    $enabledBack = if ($enabledWas -match '^\d+$') { $enabledWas } else { 0 }
+    $deadlocksBack = if ($deadlocksWas -match '^\d+$') { $deadlocksWas } else { 1 }
+    if (($enabledWas -notmatch '^\d+$') -or ($deadlocksWas -notmatch '^\d+$')) {
+        Write-Host 'ВНИМАНИЕ: прежние значения настройки прочитать не удалось - вернул 0 и 1' -ForegroundColor Red
+    }
+    $cleanup += " UPDATE $setup SET [Enabled] = $enabledBack, [Deadlocks Enabled] = $deadlocksBack;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
     # Опытные логины сметаются по образцу имени и В ПОРЯДКЕ: сперва пользователь базы,
     # потом сам логин - иначе сервер не отдаст логин, у которого есть пользователь.
@@ -530,7 +552,12 @@ finally {
     $cleanup += " SELECT @drop = @drop + N'DROP USER [' + name + N'];' FROM sys.database_principals WHERE name LIKE 'LW Probe%' AND type = 'S';"
     $cleanup += " SELECT @drop = @drop + N'DROP LOGIN [' + name + N'];' FROM sys.server_principals WHERE name LIKE 'LW Probe%' AND type = 'S';"
     $cleanup += " IF @drop <> N'' EXEC sp_executesql @drop;"
-    & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
+    # -b и проверка кода возврата: без них уборка, не выполнившаяся вовсе, выглядела бы
+    # сделанной, а оставленный опытный логин - это чужая учётная запись на сервере.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $cleanup 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ВНИМАНИЕ: уборка за прогоном не прошла: $(($answer -join ' ') -replace '\s+', ' ')" -ForegroundColor Red
+    }
     if ($StopInstance) { Stop-Service $service -Force }
 }
 

@@ -39,13 +39,22 @@ $outDir = Join-Path $root 'out'
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
+function Warn-Cleanup([string]$message) { Write-Host "ВНИМАНИЕ: $message" -ForegroundColor Red }
+function Invoke-CleanupSql([string]$query, [string]$why) {
+    # -b обязателен: без него sqlcmd отдаёт НОЛЬ и на ошибке SQL, и уборка, не выполнившаяся
+    # вовсе, выглядела бы сделанной. Отказ уборки прогон не роняет - о нём говорят словами:
+    # к этому месту он либо уже отработал, либо отказал, и решает не она.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $query 2>&1
+    if ($LASTEXITCODE -ne 0) { Warn-Cleanup "$why не убралось: $(($answer -join ' ') -replace '\s+', ' ')" }
+}
 if (-not $Database) { Fail 'не задано имя базы: переменная LW_DATABASE' }
 if (-not $Instance) { Fail 'не задан экземпляр службы: переменная LW_INSTANCE' }
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
 
 $episode = "[$Company`$LockWatch Episode]"
-$setup   = "[$Company`$LockWatch Setup]"
-$state   = "[$Company`$LockWatch Watchdog]"
+# Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
+$setup   = '[LockWatch Setup]'
+$state   = '[LockWatch Watchdog]'
 $mark    = "[$Company`$LockWatch Context Mark]"
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
@@ -96,6 +105,8 @@ $loadFile = Join-Path $outDir 'load-waiters.ps1'
 $crowd = $null
 # Ноль значит "не успели снять": уборка тогда потолка не трогает вовсе, а не пишет ноль.
 $ceilingWas = 0
+# Пусто - "не прочиталось": тогда возвращается единица, но об этом говорится вслух.
+$deadlocksWas = ''
 
 # Один процесс на всю толпу. Сотня процессов sqlcmd съела бы память рабочей станции, а
 # память на этом стенде уже однажды уронила SQL Server: он перестал выдавать рабочие
@@ -165,6 +176,9 @@ try {
     # стоил бы дороже самой сцены.
     $ceilingWas = [int](Scalar "SELECT [Max Pass (ms)] FROM $setup;")
     if ($ceilingWas -le 0) { Fail 'потолок прохода в настройке не задан - сцену потолка мерить нечем' }
+    # Выключатель сбора взаимоблокировок гасится на время опыта и возвращается ТЕМ, каким
+    # его нашли: единица тут - догадка о чужой настройке, а не находка.
+    $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
     Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Max Pass (ms)] = $(CeilingProbeMs);" | Out-Null
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
@@ -288,11 +302,17 @@ exit 1
 finally {
     New-Item -ItemType File -Path $stopFile -Force -ErrorAction SilentlyContinue | Out-Null
     if ($crowd -and -not $crowd.HasExited) { Start-Sleep -Seconds 2; if (-not $crowd.HasExited) { $crowd.Kill() } }
-    # Потолок возвращается и здесь: прогон, умерший посреди сцены, оставил бы в настройке
-    # единицу, и следующий сказал бы "проход не уложился" на ровном месте.
-    $restore = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; UPDATE $setup SET [Deadlocks Enabled] = 1"
+    # Выключатель сбора и потолок возвращаются НАЙДЕННЫМИ: прогон гасит сбор и опускает
+    # потолок на время опыта, и вернуть им заводские значения значило бы судить о стенде по
+    # своей привычке. Потолок возвращается и здесь: прогон, умерший посреди сцены, оставил бы
+    # в настройке единицу, и следующий сказал бы "проход не уложился" на ровном месте.
+    $deadlocksSet = if ($deadlocksWas -match '^\d+$') { $deadlocksWas } else { 1 }
+    if ($deadlocksWas -notmatch '^\d+$') {
+        Warn-Cleanup 'прежнее значение [Deadlocks Enabled] прочитать не удалось - вернул 1'
+    }
+    $restore = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; UPDATE $setup SET [Deadlocks Enabled] = $deadlocksSet"
     if ($ceilingWas -gt 0) { $restore += ", [Max Pass (ms)] = $ceilingWas" }
-    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q "$restore;" 2>&1 | Out-Null
+    Invoke-CleanupSql "$restore;" 'уборка за прогоном'
     if (Test-Path $stopFile) { Remove-Item $stopFile -Force }
     if ($StopInstance) { Stop-Service $service -Force }
 }

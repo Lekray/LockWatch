@@ -27,9 +27,9 @@
     на чужой записи, и пока он есть, подписка срабатывает посреди разборки.
 
     **Свои объекты удаляются в обратном порядке сборки**: страницы, кодюниты, таблицы.
-    Вместе с таблицами уходят и ДАННЫЕ - журнал эпизодов, тревоги, охват и настройка.
-    Обратного хода у этого нет, поэтому без ключа -Yes скрипт только показывает, что снял
-    бы, и ничего не трогает.
+    Вместе с таблицами уходят и ДАННЫЕ - журнал эпизодов, история эпизодов (её таблица
+    отдельная и наполняется сама), тревоги, охват и настройка. Обратного хода у этого нет,
+    поэтому без ключа -Yes скрипт только показывает, что снял бы, и ничего не трогает.
 
     Вердикт снимается из базы, а не из лога finsql: удаление несуществующего объекта - не
     отказ, а пустое место, и различать эти два случая по тексту в логе значит гадать.
@@ -37,7 +37,14 @@
     **Чего снять нельзя**, перечислено отдельно и со снятым не смешивается. Источник
     событий Windows заводится администратором и живёт в реестре машины; серверная сессия
     Extended Events, если ключ мониторинга когда-нибудь включали, переживает снятие
-    инструмента и уходит только обратным выключением ключа.
+    инструмента и уходит только обратным выключением ключа. Опытные логины прогона
+    взаимоблокировок (scripts/Test-Deadlock.ps1) снятие ищет и убирает само, а если не
+    удалось - называет оставшиеся: это чужие учётные записи сервера, и сами они не уйдут.
+
+    **Номер объекта-меню не спрашивается ключом.** Врезка ищется по GUID своих узлов в
+    объектах-меню базы, и снимается там, где стоит: номер уровня меню выбирает установка,
+    и человек, снимающий инструмент, знать его не обязан. Ключ -MenuTargetId остался
+    возможностью сказать номер самому.
 
 .EXAMPLE
     pwsh scripts/Uninstall-LockWatch.ps1
@@ -97,15 +104,30 @@ function Scalar([string]$query) {
 }
 function Count-Sql([string]$query) { [int](Scalar $query) }
 
-function Invoke-Finsql([string]$argLine, [string]$logName) {
+function Invoke-Sql-Soft([string]$query) {
+    # Уборка, отказ которой снятие не отменяет: о ней говорят, а не падают. -b здесь так же
+    # обязателен - без него sqlcmd отдаёт НОЛЬ и на ошибке SQL, и невыполненная уборка
+    # выглядела бы сделанной. Возвращается текст отказа, чтобы его было чем назвать.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -w 500 -W -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
+    if ($LASTEXITCODE -ne 0) { return (($answer -join ' ') -replace '\s+', ' ').Trim() }
+    return ''
+}
+
+function Invoke-Finsql([string]$argLine, [string]$logName, [switch]$Soft) {
     # Лог здесь не вердикт, а заметка: finsql пишет в него и тогда, когда удалять было
     # нечего. Судит по базе сверка в конце, а текст лога просто показывается человеку.
+    # Зависание - другое дело, и мягкий отказ нужен тем, кто зовёт это только ради
+    # справки: поиск врезки в меню не вправе остановить снятие из-за чужого объекта.
     $log = Join-Path $outDir $logName
     if (Test-Path $log) { Remove-Item $log -Force }
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""
     $process = Start-Process -FilePath $finsql -PassThru -NoNewWindow -ArgumentList "$argLine,$navArgs"
     if (-not $process.WaitForExit($TimeoutMinutes * 60000)) {
         $process.Kill()
+        if ($Soft) {
+            Write-Host "  ВНИМАНИЕ: finsql завис дольше $TimeoutMinutes мин и снят ($logName)" -ForegroundColor Red
+            return $false
+        }
         Fail "finsql завис дольше $TimeoutMinutes мин и снят. Обычная причина - невидимое модальное окно"
     }
     if (Test-Path $log) {
@@ -115,6 +137,15 @@ function Invoke-Finsql([string]$argLine, [string]$logName) {
 }
 
 function Objects-In-Range { Count-Sql "SELECT COUNT(*) FROM [dbo].[Object] WHERE [ID] BETWEEN $rangeFrom AND $rangeTo;" }
+# Объекты диапазона, которые зовутся НЕ нашим именем. Диапазон объявлен за инструментом
+# целиком, и объект в нём - это чужая работа, которую снятие снесло бы молча: номер занят
+# соседом, а сверка в конце назвала бы это чистотой. Строки данных таблиц (тип 0) не
+# считаются: их заводит платформа по строке самой таблицы, и чужая таблица видна её же
+# строкой типа 1.
+function Foreign-In-Range {
+    $rows = Invoke-Sql "SELECT [Type], [ID], [Name] FROM [dbo].[Object] WHERE [ID] BETWEEN $rangeFrom AND $rangeTo AND [Type] <> 0 AND [Name] NOT LIKE 'LockWatch%' ORDER BY [ID];"
+    return @($rows | ForEach-Object { ("$_" -replace '\s*\|\s*', ' ').Trim() })
+}
 function Footprint {
     # У таблицы в Object ДВЕ строки: сам объект и отдельно её данные. Сложить их и назвать
     # сумму «объектами» значит соврать в описи - а читают её именно как опись.
@@ -166,6 +197,34 @@ function Episode-Rows {
     if ((Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] = N'$name';") -eq 0) { return -1 }
     Count-Sql "SELECT COUNT(*) FROM [$name];"
 }
+# История эпизодов - ОТДЕЛЬНАЯ таблица со своим номером (110238), и в описи её надо назвать
+# своей строкой: она наполняется сама и переживает чистку журнала, поэтому "журнал эпизодов"
+# её не считает, а снятие уносит её вместе со всеми.
+function History-Rows {
+    $name = "$Company`$LockWatch Episode History"
+    if ((Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] = N'$name';") -eq 0) { return -1 }
+    Count-Sql "SELECT COUNT(*) FROM [$name];"
+}
+# Опытные логины заводятся прогоном взаимоблокировок (scripts/Test-Deadlock.ps1) и им же
+# убираются - но прогон, оборванный на середине опыта, оставляет их на сервере. Это ЧУЖИЕ
+# учётные записи в списке безопасности, которых никто не заказывал, и снятие обязано
+# назвать их так же честно, как источник событий Windows: сами они не уйдут.
+$probeLike = 'LW Probe%'
+function Probe-Logins { Count-Sql "SELECT COUNT(*) FROM sys.server_principals WHERE [name] LIKE '$probeLike' AND [type] = 'S';" }
+function Probe-Users  { Count-Sql "SELECT COUNT(*) FROM sys.database_principals WHERE [name] LIKE '$probeLike' AND [type] = 'S';" }
+function Probe-Left {
+    $rows = Invoke-Sql "SELECT [name] FROM sys.server_principals WHERE [name] LIKE '$probeLike' AND [type] = 'S' ORDER BY [name];"
+    return ,@($rows | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+function Drop-Probes {
+    # Порядок тот же, что и в самом прогоне: сперва пользователь базы, потом логин - иначе
+    # сервер не отдаст логин, у которого есть пользователь.
+    $sql = "DECLARE @drop nvarchar(max) = N'';" +
+           " SELECT @drop = @drop + N'DROP USER [' + name + N'];' FROM sys.database_principals WHERE name LIKE '$probeLike' AND type = 'S';" +
+           " SELECT @drop = @drop + N'DROP LOGIN [' + name + N'];' FROM sys.server_principals WHERE name LIKE '$probeLike' AND type = 'S';" +
+           " IF @drop <> N'' EXEC sp_executesql @drop;"
+    return Invoke-Sql-Soft $sql
+}
 function Adapter-Rows {
     if ($AdapterObjectNo -le 0) { return 0 }
     Count-Sql "SELECT COUNT(*) FROM [dbo].[Object] WHERE [ID] = $AdapterObjectNo;"
@@ -179,26 +238,53 @@ function Adapter-Rows {
 # чужом объекте, и проверка "врезка снята" краснела бы ВСЕГДА. Ловилось на себе 08.09.2026,
 # и нашлось только тогда, когда снятие впервые погнали с врезкой на месте.
 function Our-Menu-Ids {
-    if (-not (Test-Path $nodesFile)) { return @() }
+    if (-not (Test-Path $nodesFile)) { return ,@() }
     $text = [IO.File]::ReadAllText($nodesFile, [Text.UTF8Encoding]::new($false))
     $ids = @()
     foreach ($m in [regex]::Matches($text, '(?m)^\s*\{\s*\S+\s*;\[\{([0-9A-Fa-f-]{36})\}\]')) {
         $ids += $m.Groups[1].Value.ToUpper()
     }
-    return $ids
+    # Запятая перед массивом обязательна: без неё пустой массив разворачивается в ничто, и
+    # "узлов нет" становится неотличимо от "вернулся $null" - а это разные ответы.
+    return ,@($ids)
 }
 # Ищутся ВСЕ наши узлы, а не одно меню: врезка, снятая наполовину, оставила бы пункты без
 # меню - и одиночная проверка по меню назвала бы это чистотой.
-function Menu-Ours-Left {
-    if ($MenuTargetId -le 0) { return @() }
+#
+# Выгрузка делается по КАЖДОМУ объекту-меню отдельно: узлы MenuSuite лежат в базе
+# упакованными, и текстом их не показать - а номер уровня меню выбирает установка, он не
+# константа. Отсюда и поиск: где врезка, спрашивается у самой базы, а не у человека.
+# $null на выходе означает "выгрузить не удалось" - это НЕ то же самое, что "узлов нет".
+function Menu-Ours-Left([int]$id, [switch]$Soft) {
     $ids = Our-Menu-Ids
     if ($ids.Count -eq 0) { Fail "не разобрать GUID наших узлов в $nodesFile" }
-    $dump = Join-Path $outDir 'uninstall-menu-check.txt'
+    $dump = Join-Path $outDir "uninstall-menu-$id.txt"
     if (Test-Path $dump) { Remove-Item $dump -Force }
-    Invoke-Finsql "Command=ExportObjects,File=`"$dump`",Filter=`"Type=MenuSuite;ID=$MenuTargetId`"" 'uninstall-menu-export.log'
-    if (-not (Test-Path $dump)) { Fail "не выгрузился MenuSuite $MenuTargetId - сверить снятие врезки нечем" }
+    Invoke-Finsql "Command=ExportObjects,File=`"$dump`",Filter=`"Type=MenuSuite;ID=$id`"" "uninstall-menu-$id.log" -Soft:$Soft
+    if (-not (Test-Path $dump)) { return $null }
     $up = ([System.Text.Encoding]::GetEncoding(866).GetString([IO.File]::ReadAllBytes($dump))).ToUpper()
-    return @($ids | Where-Object { $up.Contains($_) })
+    return ,@($ids | Where-Object { $up.Contains($_) })
+}
+# Номера объектов-меню в базе. Их единицы: уровень у меню - свойство объекта, а не строки.
+function Menu-Suites {
+    return ,@(Invoke-Sql "SELECT [ID] FROM [dbo].[Object] WHERE [Type] = 7 ORDER BY [ID];" |
+              ForEach-Object { [int]("$_".Trim()) })
+}
+# Врезка ищется ПО GUID УЗЛОВ из заготовки, а не по номеру объекта: номер уровня меню
+# выбирает установка, и снятие, знавшее только ключ -MenuTargetId, оставляло врезку в чужом
+# меню насовсем - вместе со сверкой, которая была за тем же ключом.
+function Find-MenuSuite-With-Ours {
+    foreach ($id in (Menu-Suites)) {
+        $left = Menu-Ours-Left $id -Soft
+        if ($null -eq $left) {
+            # Объект-меню, который не выгрузился, врезки не показывает - и останавливать
+            # из-за него снятие нечем: сверка ниже назовёт не снятое сама.
+            Write-Host "  MenuSuite $id не выгрузился - ищу дальше" -ForegroundColor Yellow
+            continue
+        }
+        if ($left.Count -gt 0) { return $id }
+    }
+    return 0
 }
 
 Write-Host "След инструмента в базе $Database"
@@ -206,6 +292,8 @@ Write-Host ("  в диапазоне {0}-{1}: {2}" -f $rangeFrom, $rangeTo, (Foo
 Write-Host ("  таблиц SQL с именем LockWatch: {0}" -f (Sql-Tables))
 $episodesBefore = Episode-Rows
 if ($episodesBefore -ge 0) { Write-Host ("  строк в журнале эпизодов: {0} - уйдут вместе с таблицей" -f $episodesBefore) }
+$historyBefore = History-Rows
+if ($historyBefore -ge 0) { Write-Host ("  строк в истории эпизодов: {0} - уйдёт вместе с таблицей" -f $historyBefore) }
 $rowsBefore = Our-Rows
 Write-Host ("  строк во всех наших таблицах: {0} - уйдут вместе с ними" -f $rowsBefore)
 Write-Host ("  строк в планировщике задач: {0}" -f (Task-Rows))
@@ -219,13 +307,20 @@ Write-Host ("  набор разрешений: строк прав {0}, наб�
 $objectsBefore = Objects-In-Range
 $tablesBefore  = Sql-Tables
 $namedBefore   = Named-Objects
+$foreignBefore = @(Foreign-In-Range)
+$probeBefore   = Probe-Logins
 # Источник событий берётся из настройки, пока она ещё есть: после удаления таблиц
 # спросить будет не у кого, а имя источника выбирает установка, а не мы.
 $eventSource = 'LockWatch'
-if ((Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] = N'$Company`$LockWatch Setup';") -gt 0) {
-    $fromSetup = Scalar "SELECT TOP 1 ISNULL([Alert Event Source],'') FROM [$Company`$LockWatch Setup];"
+if ((Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] = N'LockWatch Setup';") -gt 0) {
+    $fromSetup = Scalar "SELECT TOP 1 ISNULL([Alert Event Source],'') FROM [LockWatch Setup];"
     if ($fromSetup) { $eventSource = $fromSetup }
 }
+# Врезка в чужом меню ищется ПО GUID НАШИХ УЗЛОВ, а ключ -MenuTargetId остался только
+# возможностью назвать номер самому. Так снятие находит врезку и там, где номер уровня
+# меню никому не известен, - а знать его человек, снимающий инструмент, не обязан.
+$menuTarget = $MenuTargetId
+if ($menuTarget -le 0) { $menuTarget = Find-MenuSuite-With-Ours }
 $outside = Named-Outside
 if ($outside.Count -gt 0) {
     Write-Host '  ВНЕ ДИАПАЗОНА нашлись объекты с нашим именем:' -ForegroundColor Yellow
@@ -235,18 +330,32 @@ if ($outside.Count -gt 0) {
         Write-Host '    удалять объект, которого никто не называл, он не вправе. Сверка это заметит.' -ForegroundColor Yellow
     }
 }
-if ($AdapterObjectNo -gt 0) { Write-Host ("  собранный переходник {0}: {1}" -f $AdapterObjectNo, (Adapter-Rows)) }
-if ($MenuTargetId -gt 0) {
-    $ourNodes = @(Our-Menu-Ids)
-    $standing = @(Menu-Ours-Left)
-    Write-Host ("  врезка в MenuSuite {0}: наших узлов в объекте {1} из {2}" -f $MenuTargetId, $standing.Count, $ourNodes.Count)
+if ($foreignBefore.Count -gt 0) {
+    Write-Host '  В САМОМ ДИАПАЗОНЕ нашлись объекты ЧУЖОГО имени:' -ForegroundColor Yellow
+    $foreignBefore | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
+    Write-Host '    Диапазон снимается ЦЕЛИКОМ, и чужую работу снятие не тронет: с ключом -Yes оно откажет.' -ForegroundColor Yellow
 }
+if ($AdapterObjectNo -gt 0) { Write-Host ("  собранный переходник {0}: {1}" -f $AdapterObjectNo, (Adapter-Rows)) }
+if ($menuTarget -gt 0) {
+    $ourNodes = Our-Menu-Ids
+    $standing = Menu-Ours-Left $menuTarget
+    $note = if ($MenuTargetId -le 0) { ' (найдена по GUID узлов)' } else { '' }
+    if ($null -eq $standing) {
+        Write-Host ("  врезка в MenuSuite {0}{1}: выгрузить объект не удалось - узлов не счесть" -f $menuTarget, $note) -ForegroundColor Yellow
+    } else {
+        Write-Host ("  врезка в MenuSuite {0}{1}: наших узлов в объекте {2} из {3}" -f $menuTarget, $note, $standing.Count, $ourNodes.Count)
+    }
+} else {
+    Write-Host '  нашей врезки в меню не нашлось ни в одном объекте-меню'
+}
+Write-Host ("  опытных логинов LW Probe на сервере: {0}, пользователей в базе: {1}" -f $probeBefore, (Probe-Users))
 
 if (-not $Yes) {
     Write-Host ''
     Write-Host 'Ничего не удалено: это перечисление следа, а не снятие.' -ForegroundColor Yellow
     Write-Host 'Снять по-настоящему - тот же вызов с ключом -Yes. Вместе с таблицами уйдут' -ForegroundColor Yellow
-    Write-Host 'и данные: журнал эпизодов, тревоги, охват и настройка. Обратного хода нет.' -ForegroundColor Yellow
+    Write-Host 'и данные: журнал эпизодов, история эпизодов, тревоги, охват и настройка.' -ForegroundColor Yellow
+    Write-Host 'Обратного хода нет.' -ForegroundColor Yellow
     exit 0
 }
 
@@ -261,6 +370,17 @@ if ((-not $svc) -or ($svc.Status -ne 'Running')) {
     Fail ("экземпляр $Instance не запущен, а без него снимаются только страницы и кодюниты: " +
           "схему SQL меняет служба, и таблицы с данными остались бы в базе без кода. " +
           "Запустите экземпляр и повторите. Опись следа читается и без службы - тот же вызов без -Yes.")
+}
+
+# ---------- 0а. отказ, если в диапазоне стоит ЧУЖОЕ ----------
+# Диапазон снимается целиком, и объект чужого имени в нём - это чужая работа, которую
+# снятие снесло бы молча: сверка в конце судит по диапазону, а не по именам, и назвала бы
+# такое снятие чистотой. Поэтому здесь отказ: пусть лучше человек разберёт диапазон сам,
+# чем узнает о потере от того, кому она принадлежала.
+if ($foreignBefore.Count -gt 0) {
+    Fail ("в диапазоне $rangeFrom-$rangeTo стоят объекты ЧУЖОГО имени: $($foreignBefore -join '; '). " +
+          'Диапазон снимается целиком, и снести чужое снятие не вправе. Освободите эти номера ' +
+          'или разберите их вручную - потом повторите.')
 }
 
 # ---------- 1. сторож ----------
@@ -324,12 +444,25 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host '  свой путь не отработал - остаток назовёт сверка ниже' -ForegroundColor Yellow
 }
 
-# ---------- 2. врезка в меню ----------
-if ($MenuTargetId -gt 0) {
+# ---------- 1б. опытные логины ----------
+# Их заводит прогон взаимоблокировок (scripts/Test-Deadlock.ps1) и им же убирает. Прогон,
+# оборванный на середине опыта, оставил бы их на сервере, и снятие обязано искать их само:
+# это чужие учётные записи в списке безопасности, которых никто не заказывал, и сами они
+# не уйдут. Не снятое называется ниже, рядом с источником событий.
+if ($probeBefore -gt 0) {
     Write-Host ''
-    Write-Host "Снимаю врезку в MenuSuite $MenuTargetId"
+    Write-Host 'Снимаю опытные логины, оставшиеся от прогона взаимоблокировок'
+    $probeSaid = Drop-Probes
+    if ($probeSaid) { Write-Host "  снять удалось не всё: $probeSaid" -ForegroundColor Yellow }
+    Write-Host ("  опытных логинов было {0}, осталось {1}" -f $probeBefore, (Probe-Logins))
+}
+
+# ---------- 2. врезка в меню ----------
+if ($menuTarget -gt 0) {
+    Write-Host ''
+    Write-Host "Снимаю врезку в MenuSuite $menuTarget"
     & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'Merge-MenuSuite.ps1') `
-        -Remove -Import -Server $Server -Database $Database -TargetId $MenuTargetId -TimeoutMinutes $TimeoutMinutes
+        -Remove -Import -Server $Server -Database $Database -TargetId $menuTarget -TimeoutMinutes $TimeoutMinutes
     if ($LASTEXITCODE -ne 0) { Fail 'врезку снять не удалось - объекты не трогаю, иначе меню останется со ссылками в пустоту' }
 }
 
@@ -420,10 +553,13 @@ if ($AdapterObjectNo -gt 0) {
     $adapterLeft = Adapter-Rows
     Check 'собранный переходник удалён' ($adapterLeft -eq 0) "объектов с номером $AdapterObjectNo $adapterLeft"
 }
-if ($MenuTargetId -gt 0) {
-    $menuLeft = @(Menu-Ours-Left)
+if ($menuTarget -gt 0) {
+    $menuLeft = Menu-Ours-Left $menuTarget
+    # $null тут значит "объект не выгрузился", а не "узлов не осталось": сверить снятие
+    # нечем, и молчаливое согласие на это было бы тем же враньём, что и зелёная сверка.
+    if ($null -eq $menuLeft) { Fail "MenuSuite $menuTarget не выгрузился - сверить снятие врезки нечем" }
     Check 'врезки в чужом меню не осталось' ($menuLeft.Count -eq 0) `
-        "наших узлов в выгрузке MenuSuite $MenuTargetId $($menuLeft.Count) из $(@(Our-Menu-Ids).Count)"
+        "наших узлов в выгрузке MenuSuite $menuTarget $($menuLeft.Count) из $((Our-Menu-Ids).Count)"
 }
 
 Write-Host ''
@@ -458,6 +594,16 @@ if ($xeOurs -gt 0) {
 if ($xeAll -gt $xeOurs) {
     $leftovers += "Ещё сессий того же рода на сервере: $($xeAll - $xeOurs) - они носят имена ДРУГИХ"
     $leftovers += 'баз этого сервера. К инструменту они отношения не имеют, и трогать их нельзя.'
+}
+# Опытные логины снесены шагом 1б, и здесь называется ТОЛЬКО остаток - как остаток сессий
+# выше. Соврать тут дороже всего: читают это как ответ на "что от него осталось", и
+# пропущенный логин означает чужую учётную запись в списке безопасности сервера, о которой
+# никто не знает.
+$probeLeft = Probe-Left
+if ($probeLeft.Count -gt 0) {
+    $leftovers += "Опытные логины прогона: $($probeLeft -join ', ') - снять их отсюда не удалось."
+    $leftovers += 'Это учётные записи сервера, заведённые прогоном взаимоблокировок, а не установкой.'
+    $leftovers += 'Снимает администратор: DROP USER в своей базе (если он там завёл пользователя), затем DROP LOGIN.'
 }
 if ($leftovers.Count -gt 0) {
     Write-Host ''

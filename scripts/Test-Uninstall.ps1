@@ -38,8 +38,9 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 
 $ps51  = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $tasks = '[dbo].[Scheduled Task]'
-$setup = "[$Company`$LockWatch Setup]"
-$state = "[$Company`$LockWatch Watchdog]"
+# Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
+$setup = '[LockWatch Setup]'
+$state = '[LockWatch Watchdog]'
 
 function Scalar([string]$query) {
     # -b обязателен: без него sqlcmd возвращает НОЛЬ и на ошибке SQL, и проверка кода

@@ -36,10 +36,21 @@ $finsql = 'C:\Program Files (x86)\Microsoft Dynamics NAV\110\RoleTailored Client
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
+function Refuse([string]$message, [bool]$soft) {
+    # Мягкий отказ - предупреждение вместо завершения процесса. Нужен в УБОРКЕ: Fail делает
+    # exit, а exit прекращает процесс сразу и до конца блока finally - catch его не ловит
+    # вовсе, и слова "вернуть не удалось" не печатались бы никогда.
+    if ($soft) { Write-Host "ВНИМАНИЕ: $message" -ForegroundColor Red; return $false }
+    Fail $message
+}
 if (-not $Database) { Fail 'не задано имя базы: переменная LW_DATABASE или параметр -Database' }
 
 $cp866 = [System.Text.Encoding]::GetEncoding(866)
 $merge = Join-Path $PSScriptRoot 'Merge-MenuSuite.ps1'
+# Выгрузка "как есть" и выгрузка "каким объект был до нас" - РАЗНЫЕ файлы, и у слияния они
+# тоже разные: первая приходит из базы на каждом запуске и несёт прежнюю врезку, если та
+# стоит, а вторая пишется только выгрузкой без врезки.
+$exportFile   = Join-Path $outDir "menusuite-$TargetId-export.txt"
 $originalFile = Join-Path $outDir "menusuite-$TargetId-original.txt"
 $mergedFile   = Join-Path $outDir "menusuite-$TargetId-merged.txt"
 $keptFile     = Join-Path $outDir "menusuite-$TargetId-kept.txt"
@@ -62,16 +73,20 @@ function Invoke-Sql([string]$query) {
     if ($LASTEXITCODE -ne 0) { Fail "SQL не выполнился: $($answer -join ' ')" }
     return ,@($answer | Where-Object { $_ -and ($_ -notmatch '^\(') })
 }
-function Invoke-Finsql([string]$argLine, [string]$logName) {
+function Invoke-Finsql([string]$argLine, [string]$logName, [switch]$Soft) {
     $log = Join-Path $outDir $logName
     if (Test-Path $log) { Remove-Item $log -Force }
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""
     $process = Start-Process -FilePath $finsql -PassThru -NoNewWindow -ArgumentList "$argLine,$navArgs"
-    if (-not $process.WaitForExit($TimeoutMinutes * 60000)) { $process.Kill(); Fail 'finsql завис и снят' }
+    if (-not $process.WaitForExit($TimeoutMinutes * 60000)) {
+        $process.Kill()
+        return (Refuse 'finsql завис и снят' $Soft)
+    }
     if (Test-Path $log) {
         $text = ($cp866.GetString([IO.File]::ReadAllBytes($log))).Trim()
-        if ($text) { Fail "finsql ($logName):`n$text" }
+        if ($text) { return (Refuse "finsql ($logName):`n$text" $Soft) }
     }
+    return $true
 }
 
 function Run-Merge([string]$why, [string[]]$extra) {
@@ -105,8 +120,11 @@ function Line-Diff([string]$a, [string]$b) {
 try {
     Write-Host 'Слияние без импорта'
     $first = Run-Merge 'слияние' @()
-    if (-not (Test-Path $originalFile)) { Fail 'оригинал не выгрузился' }
-    Copy-Item $originalFile $keptFile -Force
+    # keptFile - то, что СТОИТ В БАЗЕ сейчас, вместе с прежней врезкой, если она там есть: в
+    # конце прогон вернёт объект именно в это состояние. Выгрузкой "оригинала" его называть
+    # нельзя: оригинал - это объект БЕЗ нашей врезки, и у слияния он теперь отдельный файл.
+    if (-not (Test-Path $exportFile)) { Fail 'объект меню из базы не выгрузился' }
+    Copy-Item $exportFile $keptFile -Force
 
     # Врезка могла стоять в меню ещё до прогона - её ставит показ и оставляет нарочно.
     # Тогда прогон снимает её СЕБЕ для замера и возвращает в конце вместе с оригиналом:
@@ -116,6 +134,7 @@ try {
         Run-Merge 'снятие прежней врезки' @('-Remove', '-Import') | Out-Null
         Run-Merge 'слияние на чистом меню' @() | Out-Null
     }
+    if (-not (Test-Path $originalFile)) { Fail 'оригинал - объект без нашей врезки - не выгрузился' }
     Copy-Item $originalFile $baseFile -Force
     $diff = Line-Diff $baseFile $mergedFile
     Check 'слияние правит ровно один чужой узел' `
@@ -161,17 +180,30 @@ try {
          "построчно: изменено $($backDiff.Changed), дописано $($backDiff.Added)")
 }
 finally {
-    # Чужой объект возвращается ИМПОРТОМ СОХРАНЁННОГО ОРИГИНАЛА, а не снятием врезки той
+    # Чужой объект возвращается ИМПОРТОМ СОХРАНЁННОЙ ВЫГРУЗКИ, а не снятием врезки той
     # же логикой, которая могла и сломаться. Ловилось на себе: поломка слияния оставила
     # объект в состоянии, которое сам скрипт потом отказался трогать, - и вернуть его было
-    # нечем. Файл оригинала от логики слияния не зависит вовсе.
+    # нечем. Файл выгрузки от логики слияния не зависит вовсе.
+    #
+    # Зовётся это МЯГКО, и вот почему. Fail делает exit, а exit прекращает процесс сразу и
+    # до конца блока finally - catch его не ловит (проверено прогоном). С прежним вызовом
+    # отказ импорта не доходил до предупреждения никогда: и строка "вернуть не удалось", и
+    # снятие файла выгрузки были мёртвым кодом.
     if (Test-Path $keptFile) {
         try {
-            Invoke-Finsql "Command=ImportObjects,File=`"$keptFile`",ImportAction=overwrite" "restore-menu-$TargetId.log"
-            Invoke-Finsql "Command=CompileObjects,Filter=`"Type=MenuSuite;ID=$TargetId`"" "restore-compile-$TargetId.log"
-            Write-Host 'Оригинал меню возвращён импортом сохранённой выгрузки'
-        } catch { Write-Host "ВНИМАНИЕ: оригинал меню вернуть не удалось, он лежит в $keptFile" -ForegroundColor Red }
-        Remove-Item $keptFile -Force
+            $restored = Invoke-Finsql "Command=ImportObjects,File=`"$keptFile`",ImportAction=overwrite" "restore-menu-$TargetId.log" -Soft
+            if ($restored) {
+                $restored = Invoke-Finsql "Command=CompileObjects,Filter=`"Type=MenuSuite;ID=$TargetId`"" "restore-compile-$TargetId.log" -Soft
+            }
+            if ($restored) {
+                Write-Host 'Оригинал меню возвращён импортом сохранённой выгрузки'
+                Remove-Item $keptFile -Force
+            } else {
+                Write-Host "ВНИМАНИЕ: оригинал меню вернуть не удалось - он лежит в $keptFile, верните его импортом руками" -ForegroundColor Red
+            }
+        } catch {
+            Write-Host "ВНИМАНИЕ: оригинал меню вернуть не удалось - он лежит в $keptFile, верните его импортом руками" -ForegroundColor Red
+        }
     }
     if (Test-Path $baseFile) { Remove-Item $baseFile -Force }
 }

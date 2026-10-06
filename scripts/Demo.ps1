@@ -73,6 +73,9 @@ $outDir = Join-Path $root 'out'
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 $liveFile   = Join-Path $outDir 'demo-live.txt'
 $targetFile = Join-Path $outDir 'demo-target.txt'
+# Записка о том, какой строка контекста была ДО показа. Файлом, а не в памяти: показ и
+# -Clean - РАЗНЫЕ запуски, и в памяти уборке не уцелеть.
+$contextFile = Join-Path $outDir 'demo-context.txt'
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
 function Say([string]$message)  { Write-Host "  $message" }
@@ -87,8 +90,9 @@ if ($TableNo -le 0) { Fail 'не задана таблица документа:
 if ($FieldNo -le 0) { Fail 'не задано поле документа: переменная LW_DOC_FIELD_NO' }
 
 $episode  = "[$Company`$LockWatch Episode]"
-$setup    = "[$Company`$LockWatch Setup]"
-$state    = "[$Company`$LockWatch Watchdog]"
+# Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
+$setup    = '[LockWatch Setup]'
+$state    = '[LockWatch Watchdog]'
 # Строку состояния сторожа заводит первый же проход, но здесь она нужна РАНЬШЕ: отметку
 # "прочитано до" надо поставить прежде, чем проход впервые откроет кольцевой буфер, иначе
 # в журнал приедут чужие круги. Умолчаний NAV в SQL не создаёт, а столбцы объявляет
@@ -202,7 +206,10 @@ function Start-Sqlcmd([string]$name, [string]$sql) {
     # Запрос уезжает ФАЙЛОМ, а не параметром -Q: Start-Process склеивает -ArgumentList
     # пробелом и кавычек вокруг элементов не ставит, а в имени таблицы NAV стоит доллар.
     $file = Join-Path $outDir $name
-    [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    # BOM обязателен единообразно со всеми прочими .sql: файл читает sqlcmd, и без BOM он
+    # разбирает его как OEM. Здесь в запросах кириллицы нет, но правило одно на весь
+    # репозиторий - иначе оно держится памятью того, кто писал файл.
+    [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
     return Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList @(
         '-S', $Server, '-d', $Database, '-E', '-b', '-l', '30', '-i', $file
     )
@@ -494,16 +501,49 @@ if ($Clean) {
     }
 
     $sqlTable = ''; $docColumn = ''
+    # Мишень берётся ФАЙЛОМ, но файл - только подсказка: показ мог оборваться до его записи,
+    # а строки в чужой таблице уже лежат. Второй путь - строка контекста: показ заводит её
+    # теми же номерами, и NAV кладёт в неё имена. Отбор всё равно идёт по префиксу номера
+    # показа в самой таблице, и без имени мишени его не сделать - тогда об этом говорится
+    # вслух, а не молчанием.
     if (Test-Path $targetFile) {
         $saved = @(Get-Content $targetFile)
         if ($saved.Count -ge 2) { $sqlTable = $saved[0].Trim(); $docColumn = $saved[1].Trim() }
+    }
+    if (-not $sqlTable -or -not $docColumn) {
+        $sqlTable = ''; $docColumn = ''
+        $nav = Fields "SELECT TOP 1 [Table Name] + '|' + [Document Field Name] FROM $context WHERE [Table No_] = $TableNo;"
+        if (($nav.Count -ge 2) -and ($nav[0] -ne '') -and ($nav[1] -ne '')) {
+            $sqlTable = Resolve-SqlTable $nav[0]
+            if ($sqlTable) { $docColumn = Resolve-SqlColumn $sqlTable $nav[1] }
+            if ($sqlTable -and $docColumn) { Say "мишень показа опознана по строке контекста: [$sqlTable], столбец [$docColumn]" }
+        }
     }
     if ($sqlTable -and $docColumn) {
         $left = Scalar "SELECT COUNT(*) FROM [$sqlTable] WHERE [$docColumn] LIKE N'$demoLike';"
         Invoke-Sql "DELETE FROM [$sqlTable] WHERE [$docColumn] LIKE N'$demoLike';" | Out-Null
         Say "убрал подложенные строки из [$sqlTable]: $left"
     } else {
-        Warn "цель показа не записана ($targetFile) - подложенные строки не трогаю"
+        Warn 'мишень показа не опознана - подложенные строки остаются в чужой таблице'
+        Warn "искать их так: SELECT ... WHERE [поле документа] LIKE N'$demoLike' - имя таблицы и столбца даст строка контекста"
+    }
+
+    # Строка контекста возвращается в то состояние, в каком её застал показ: он переписывает
+    # её своими номерами, и оставить её после себя значит оставить установке чужую
+    # настройку. Записка помнит ровно две вещи - была ли строка и с какой галкой.
+    if (Test-Path $contextFile) {
+        $savedCtx = @(Get-Content $contextFile)
+        if (($savedCtx.Count -ge 2) -and ($savedCtx[0].Trim() -eq '1')) {
+            Invoke-Sql "UPDATE $context SET [Enabled] = $([int]$savedCtx[1].Trim()) WHERE [Table No_] = $TableNo;" | Out-Null
+            Say 'строка контекста возвращена в прежнее состояние'
+        } else {
+            Invoke-Sql "DELETE FROM $context WHERE [Table No_] = $TableNo;" | Out-Null
+            Say 'строка контекста убрана - её завёл показ'
+        }
+        Remove-Item $contextFile -Force
+    } else {
+        Warn "записки о прежней строке контекста нет ($contextFile) - строку не трогаю"
+        Warn 'её заводит сам показ, и без записки неизвестно, была ли она до него'
     }
 
     Invoke-Sql @"
@@ -511,13 +551,12 @@ DELETE FROM $episode;
 DELETE FROM $alert;
 DELETE FROM $coverage;
 DELETE FROM $mark WHERE [Server Instance Id] < 0;
-DELETE FROM $context WHERE [Table No_] = $TableNo;
 DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId;
 UPDATE $setup SET [Enabled] = 0, [Collect Statement Values] = 0, [Alert Threshold (ms)] = 5000,
                   [Alert Channel] = 1;
 DELETE FROM $state;
 "@ | Out-Null
-    Say 'журнал, тревоги, охват, отметки и строка контекста очищены; настройка - заводская'
+    Say 'журнал, тревоги, охват, отметки очищены; настройка - заводская'
 
     if (-not $NoMenu) {
         $merge = Join-Path $PSScriptRoot 'Merge-MenuSuite.ps1'
@@ -555,6 +594,13 @@ try {
     # Правка настройки мимо NAV в кэш работающей службы не доходит, поэтому всё, что
     # инструмент должен УВИДЕТЬ, пишется ДО перезапуска. Это касается и строки контекста:
     # список таблиц документа служба тоже держит в кэше.
+    #
+    # Прежнее состояние строки контекста запоминается ЗДЕСЬ и записывается ФАЙЛОМ: показ
+    # переписывает её своими номерами, а возвращает -Clean, то есть ДРУГОЙ запуск. Помнится
+    # ровно то, чего хватает для возврата: была ли строка и с какой галкой.
+    $hadRow = [int](Scalar "SELECT COUNT(*) FROM $context WHERE [Table No_] = $TableNo;")
+    $hadEnabled = if ($hadRow -gt 0) { Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $context WHERE [Table No_] = $TableNo;" } else { '' }
+    [IO.File]::WriteAllText($contextFile, "$hadRow`r`n$hadEnabled`r`n", (New-Object System.Text.UTF8Encoding($false)))
     Invoke-Sql @"
 UPDATE $setup SET [SQL Server] = N'$Server',
                   [Collect Statement Values] = 1, [Deadlocks Enabled] = 1,
@@ -601,7 +647,7 @@ VALUES ($TableNo,N'',$FieldNo,N'',N'',1);
         Head 'Врезаю пункты в меню установки'
         $merge = Join-Path $PSScriptRoot 'Merge-MenuSuite.ps1'
         & pwsh -NoProfile -File $merge -Server $Server -Database $Database -Import | Out-Null
-        if ($LASTEXITCODE -eq 0) { Good 'меню слито: оригинал сохранён в out/menusuite-1090-original.txt' }
+        if ($LASTEXITCODE -eq 0) { Good 'меню слито: пункты появятся в навигации после перезапуска клиента' }
         else { Warn 'слить меню не удалось - страницы открываются и без него' }
     }
 
@@ -778,7 +824,11 @@ VALUES $($rows -join ', ');
 SELECT TOP 1 CONVERT(varchar(11),[Head SPID]) + '|' + [NAV Table Name] + '|' +
   CONVERT(varchar(11),[Episodes]) + '|' + CONVERT(varchar(11),[Max Wait (ms)]) + '|' +
   CONVERT(varchar(11),[Threshold (ms)]) + '|' +
-  CASE [Channel] WHEN 0 THEN 'только журнал' ELSE 'журнал событий Windows' END + '|' +
+  -- Канал разбирается ПО OptionString таблицы: 0 - Выключена, 1 - Только журнал,
+  -- 2 - Журнал событий Windows. Прежний разбор сдвигал слова на единицу: канал "только
+  -- журнал" показывался как выключенный, а "журнал событий" - как "только журнал".
+  CASE [Channel] WHEN 0 THEN 'выключена' WHEN 1 THEN 'только журнал'
+                 WHEN 2 THEN 'журнал событий Windows' ELSE '?' END + '|' +
   CASE WHEN [Channel Note] = '' THEN '-' ELSE [Channel Note] END
 FROM $alert ORDER BY [Entry No_] DESC;
 "@

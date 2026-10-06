@@ -33,8 +33,11 @@
     Две отметки лежат рядом, и перепутать их дороже, чем не найти ни одной.
 
     Прогон ставит подписчика на ЧУЖУЮ таблицу и потому убирает его за собой обязательно -
-    и объект, и подложенные строки. Служба перезапускается дважды: подписку платформа
-    замечает при старте и забывает тоже при нём.
+    и объект, и подложенные строки. Настройку и строки контекста он возвращает ТАКИМИ,
+    какими их застал: держатель берёт первую включённую таблицу, и чужие строки на время
+    опыта гасятся - а погашенная чужая таблица документа осталась бы выключенной навсегда.
+    Служба перезапускается дважды: подписку платформа замечает при старте и забывает тоже
+    при нём.
 
 .EXAMPLE
     $env:LW_DOC_TABLE_NO = 37; $env:LW_DOC_FIELD_NO = 3
@@ -62,6 +65,20 @@ $outDir = Join-Path $root 'out'
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
+function Warn-Cleanup([string]$message) { Write-Host "ВНИМАНИЕ: $message" -ForegroundColor Red }
+function Refuse([string]$message, [bool]$soft) {
+    # Мягкий отказ - предупреждение вместо завершения процесса. Он нужен УБОРКЕ: Fail делает
+    # exit, а exit прекращает процесс сразу и до конца блока finally - catch его не ловит
+    # вовсе (проверено прогоном), и уборка обрывалась бы на полуслове.
+    if ($soft) { Warn-Cleanup $message; return $false }
+    Fail $message
+}
+function Invoke-CleanupSql([string]$query, [string]$why) {
+    # -b обязателен: без него sqlcmd отдаёт НОЛЬ и на ошибке SQL, и уборка, не выполнившаяся
+    # вовсе, выглядела бы сделанной. Отказ уборки прогон не роняет - о нём говорят словами.
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -h -1 -Q $query 2>&1
+    if ($LASTEXITCODE -ne 0) { Warn-Cleanup "$why не убралось: $(($answer -join ' ') -replace '\s+', ' ')" }
+}
 if (-not $Database) { Fail 'не задано имя базы: переменная LW_DATABASE или параметр -Database' }
 if (-not $Instance) { Fail 'не задан экземпляр службы: переменная LW_INSTANCE' }
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
@@ -79,8 +96,9 @@ $context  = "[$Company`$LockWatch Context Table]"
 $mark     = "[$Company`$LockWatch Context Mark]"
 $markRead = "[$Company`$LockWatch Context Mark] WITH (READUNCOMMITTED)"
 $episode  = "[$Company`$LockWatch Episode]"
-$setup    = "[$Company`$LockWatch Setup]"
-$state    = "[$Company`$LockWatch Watchdog]"
+# Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
+$setup    = '[LockWatch Setup]'
+$state    = '[LockWatch Watchdog]'
 $service  = "MicrosoftDynamicsNavServer`$$Instance"
 
 # Номера строк-мишеней заданы не здесь: их знает Codeunit 110243, и повторены они тут
@@ -104,16 +122,20 @@ function Invoke-Sql([string]$query) {
 }
 function Scalar([string]$query) { $rows = Invoke-Sql $query; if ($rows.Count -eq 0) { return '' }; return "$($rows[0])".Trim() }
 
-function Invoke-Finsql([string]$argLine, [string]$logName) {
+function Invoke-Finsql([string]$argLine, [string]$logName, [switch]$Soft) {
     $log = Join-Path $outDir $logName
     if (Test-Path $log) { Remove-Item $log -Force }
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""
     $process = Start-Process -FilePath $finsql -PassThru -NoNewWindow -ArgumentList "$argLine,$navArgs"
-    if (-not $process.WaitForExit($TimeoutMinutes * 60000)) { $process.Kill(); Fail "finsql завис дольше $TimeoutMinutes мин" }
+    if (-not $process.WaitForExit($TimeoutMinutes * 60000)) {
+        $process.Kill()
+        return (Refuse "finsql завис дольше $TimeoutMinutes мин" $Soft)
+    }
     if (Test-Path $log) {
         $text = ([System.Text.Encoding]::GetEncoding(866).GetString([IO.File]::ReadAllBytes($log))).Trim()
-        if ($text) { Fail "finsql ($logName):`n$text" }
+        if ($text) { return (Refuse "finsql ($logName):`n$text" $Soft) }
     }
+    return $true
 }
 function Import-Object([string]$sourceFile, [string]$tag) {
     # Импорт в C/SIDE идёт в cp866: cp1251 и UTF-8 ломают кириллицу молча.
@@ -123,13 +145,15 @@ function Import-Object([string]$sourceFile, [string]$tag) {
     if ($cp866.GetString($cp866.GetBytes($text)) -ne $text) { Fail "cp866 теряет символы в $sourceFile" }
     $pack = Join-Path $outDir "$tag.cp866.txt"
     [IO.File]::WriteAllBytes($pack, $cp866.GetBytes($text))
-    Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "import-$tag.log"
+    # Свой ответ (истина) глушится: он нужен уборке, а в прогоне это был бы лишний шум.
+    Invoke-Finsql "Command=ImportObjects,File=`"$pack`",ImportAction=overwrite,SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "import-$tag.log" | Out-Null
 }
 function Compile-Codeunit([int]$id, [string]$tag) {
-    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=Codeunit;ID=$id`",SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "compile-$tag.log"
+    Invoke-Finsql "Command=CompileObjects,Filter=`"Type=Codeunit;ID=$id`",SynchronizeSchemaChanges=Force,NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort" "compile-$tag.log" | Out-Null
 }
-function Delete-Codeunit([int]$id, [string]$tag) {
-    Invoke-Finsql "Command=DeleteObjects,Filter=`"Type=Codeunit;ID=$id`"" "delete-$tag.log"
+function Delete-Codeunit([int]$id, [string]$tag, [switch]$Soft) {
+    # Ответ вызова возвращается, а не глушится: уборке он и нужен - она говорит, что снялось.
+    return (Invoke-Finsql "Command=DeleteObjects,Filter=`"Type=Codeunit;ID=$id`"" "delete-$tag.log" -Soft:$Soft)
 }
 
 $ps51 = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -146,11 +170,12 @@ while ((Get-Date) -lt `$deadline) {
 }
 exit 1
 "@
-function Restart-Nav([string]$why) {
+function Restart-Nav([string]$why, [switch]$Soft) {
     Write-Host "  перезапускаю службу $Instance ($why)"
     Restart-Service $service -Force
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
+    if ($LASTEXITCODE -ne 0) { return (Refuse "экземпляр $Instance не ответил по порту управления" $Soft) }
+    return $true
 }
 function Invoke-Codeunit([int]$id, [string]$method, [string]$why) {
     $runFile = Join-Path $outDir "names-invoke-$id-$method.ps1"
@@ -227,7 +252,15 @@ Write-Host "Дорога к имени целиком: таблица $TableNo, 
 
 $sqlTableName = ''; $docColumn = ''; $adapterUp = $false; $holdProc = $null; $waitProc = $null
 $muteHold = $null; $muteWait = $null
+# Что стоит в базе ДО прогона. Прогон правит настройку и гасит чужие строки контекста - и то
+# и другое обязано вернуться таким, каким было найдено: чужой включённый сторож, погашенный
+# этим прогоном, остался бы погашенным навсегда, а погашенная чужая таблица документа -
+# выключенной навсегда. Спрашивается первым же делом, до всякой правки.
 $hadContext = [int](Scalar "SELECT COUNT(*) FROM $context WHERE [Table No_] = $TableNo;")
+$hadEnabled = if ($hadContext -gt 0) { Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $context WHERE [Table No_] = $TableNo;" } else { '' }
+$setupWas = Scalar "SELECT CONVERT(varchar(2),[Enabled]) + '|' + CONVERT(varchar(2),[Deadlocks Enabled]) + '|' + CONVERT(varchar(2),[Coverage Enabled]) FROM $setup;"
+$mutedRows = @(Invoke-Sql "SELECT [Table No_] FROM $context WHERE [Table No_] <> $TableNo AND [Enabled] <> 0 ORDER BY [Table No_];" |
+               ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^\d+$' })
 
 try {
     # ---------- 1. настройка и таблица контекста ----------
@@ -242,10 +275,12 @@ UPDATE $context SET [Enabled] = 1, [Document Field No_] = $FieldNo WHERE [Table 
 -- Чужие строки контекста ГАСЯТСЯ. Держатель берёт первую включённую таблицу, и оставленная
 -- кем-то включённой чужая строка уводит его в другую таблицу - а говорит он при этом «строки
 -- LOCKWATCH-LIVE нет в таблице Sales Line», то есть указывает на подкладку, а не на настройку.
+-- Список погашенных помнится, и уборка вернёт им галку: погасить чужую строку навсегда -
+-- то же самое, что выключить установке вторую таблицу документа, только молча.
 UPDATE $context SET [Enabled] = 0 WHERE [Table No_] <> $TableNo;
 UPDATE $state SET [Watchdog Message] = N'';
 "@ | Out-Null
-    Restart-Nav 'настройка правится мимо NAV, и в кэше службы лежит прежняя'
+    Restart-Nav 'настройка правится мимо NAV, и в кэше службы лежит прежняя' | Out-Null
     Invoke-Codeunit $TaskCodeunitId 'RefreshContextNames' 'перечитывание имён' | Out-Null
 
     $names = Scalar "SELECT [Table Name] + '|' + [Document Field Name] FROM $context WHERE [Table No_] = $TableNo;"
@@ -303,7 +338,7 @@ UPDATE $state SET [Watchdog Message] = N'';
     Import-Object $generated 'names-adapter'
     Compile-Codeunit $AdapterObjectNo 'names-adapter'
     $adapterUp = $true
-    Restart-Nav 'подписку платформа замечает при старте'
+    Restart-Nav 'подписку платформа замечает при старте' | Out-Null
 
     # Сторож заводится ДО опыта, и ловит эпизод он, а не прогон. Ждущая сессия NAV живёт
     # ровно предел ожидания - 10 000 мс, - а один вызов через Windows PowerShell 5.1
@@ -582,19 +617,46 @@ finally {
     }
     if ($holdProc -and -not $holdProc.HasExited) { $holdProc.WaitForExit(120000) | Out-Null }
     if ($waitProc -and -not $waitProc.HasExited) { $waitProc.WaitForExit(60000) | Out-Null }
+
+    # Порядок уборки - от ЦЕНЫ ОШИБКИ, а не от удобства. Первым снимается то, что прогон
+    # положил в ЧУЖИЕ данные: подложенные строки и погашенные чужие строки контекста. Только
+    # потом идёт то, что может отказать, - удаление кодюнита и перезапуск службы.
+    #
+    # На прежнем порядке отказ finsql оставлял подложенные строки в чужой таблице: уборка до
+    # них не доходила, потому что Fail делает exit, а exit прекращает процесс сразу и до
+    # конца finally - catch его не ловит вовсе.
+    if ($sqlTableName -and $docColumn) {
+        Invoke-CleanupSql "DELETE FROM [$sqlTableName] WHERE [$docColumn] LIKE N'LOCKWATCH-LIVE%';" 'подложенные строки'
+    }
+
+    $cleanup = "DELETE FROM $mark;"
+    # Настройка возвращается НАЙДЕННОЙ, а не заводской: выключатель сторожа, сбора кругов и
+    # охвата принадлежит установке, и прогон гасил его только на время опыта.
+    if ($setupWas -match '^\d\|\d\|\d$') {
+        $was = $setupWas -split '\|'
+        $cleanup += " UPDATE $setup SET [Enabled] = $($was[0]), [Deadlocks Enabled] = $($was[1]), [Coverage Enabled] = $($was[2]);"
+    } else {
+        $cleanup += " UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1, [Coverage Enabled] = 1;"
+        Warn-Cleanup 'прежние значения настройки прочитать не удалось - вернул заводские'
+    }
+    if ($mutedRows.Count -gt 0) {
+        $cleanup += " UPDATE $context SET [Enabled] = 1 WHERE [Table No_] IN ($($mutedRows -join ','));"
+    }
+    if ($hadContext -eq 0) { $cleanup += " DELETE FROM $context WHERE [Table No_] = $TableNo;" }
+    elseif ($hadEnabled -match '^[01]$') { $cleanup += " UPDATE $context SET [Enabled] = $hadEnabled WHERE [Table No_] = $TableNo;" }
+    $cleanup += " DELETE FROM [dbo].[Scheduled Task] WHERE [Run Codeunit] = $TaskCodeunitId;"
+    Invoke-CleanupSql $cleanup 'уборка за прогоном'
+
     if ($adapterUp) {
         # Объект убирается ДО перезапуска, а подписку платформа забывает при старте. Оставить
         # подписку на удалённый кодюнит значило бы уронить чужую таблицу на каждой записи.
-        Delete-Codeunit $AdapterObjectNo 'names-adapter'
-        Restart-Nav 'подписчика на чужой таблице не оставляем'
+        # Отказ в этом хвосте виден предупреждением и прогон не роняет: чужие данные к нему
+        # уже подметены, а если кодюнит не снялся - он и на стенде остаётся живым, не мёртвым.
+        try { Delete-Codeunit $AdapterObjectNo 'names-adapter' -Soft | Out-Null }
+        catch { Warn-Cleanup "кодюнит $AdapterObjectNo снять не удалось: $($_.Exception.Message)" }
+        try { Restart-Nav 'подписчика на чужой таблице не оставляем' -Soft | Out-Null }
+        catch { Warn-Cleanup "служба $Instance не перезапустилась: $($_.Exception.Message)" }
     }
-    if ($sqlTableName -and $docColumn) {
-        Invoke-Sql "DELETE FROM [$sqlTableName] WHERE [$docColumn] LIKE N'LOCKWATCH-LIVE%';" | Out-Null
-    }
-    $cleanup = "DELETE FROM $mark; UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1, [Coverage Enabled] = 1;" +
-               " DELETE FROM [dbo].[Scheduled Task] WHERE [Run Codeunit] = $TaskCodeunitId;"
-    if ($hadContext -eq 0) { $cleanup += " DELETE FROM $context WHERE [Table No_] = $TableNo;" }
-    Invoke-Sql $cleanup | Out-Null
     Write-Host '  переходник снят, строки убраны, отметки очищены'
 }
 

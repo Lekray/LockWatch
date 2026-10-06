@@ -12,7 +12,8 @@
     Поэтому объект не выкладывается, а СЛИВАЕТСЯ. Скрипт выгружает существующий MenuSuite
     из базы, дописывает в него узлы из templates/menu-nodes.txt и кладёт результат в out/.
     Выгруженный оригинал сохраняется рядом - это единственный способ вернуть всё как было,
-    если слияние не понравится.
+    если слияние не понравится. Обновляется он ТОЛЬКО выгрузкой без нашей врезки: выгрузка
+    со врезкой - уже наша работа, и оригиналом она не становится.
 
     Правится при этом РОВНО ОДИН чужой узел: последнее меню в цепочке верхнего уровня
     получает ссылку на наше меню. Всё остальное дописывается новыми записями. Меньше одного
@@ -71,14 +72,18 @@ function Invoke-Finsql([string]$argLine, [string]$logName) {
     }
 }
 
-# ---------- выгрузка оригинала ----------
+# ---------- выгрузка ----------
+# Выгрузка идёт в СВОЙ файл, а не прямо в "оригинал". Слияние в уже слитый объект выгрузит
+# нашу же врезку, и, перепиши она файл оригинала, единственная копия того, каким чужой
+# объект был ДО нас, пропала бы - вместе с возможностью вернуть его байт в байт.
+$exportFile   = Join-Path $outDir "menusuite-$TargetId-export.txt"
 $originalFile = Join-Path $outDir "menusuite-$TargetId-original.txt"
-if (Test-Path $originalFile) { Remove-Item $originalFile -Force }
-Invoke-Finsql "Command=ExportObjects,File=`"$originalFile`",Filter=`"Type=MenuSuite;ID=$TargetId`"" "export-menu-$TargetId.log"
-if (-not (Test-Path $originalFile)) { Fail "MenuSuite $TargetId из базы не выгрузился" }
-$text = $cp866.GetString([IO.File]::ReadAllBytes($originalFile))
+if (Test-Path $exportFile) { Remove-Item $exportFile -Force }
+Invoke-Finsql "Command=ExportObjects,File=`"$exportFile`",Filter=`"Type=MenuSuite;ID=$TargetId`"" "export-menu-$TargetId.log"
+if (-not (Test-Path $exportFile)) { Fail "MenuSuite $TargetId из базы не выгрузился" }
+$text = $cp866.GetString([IO.File]::ReadAllBytes($exportFile))
 if ($text.Trim().Length -eq 0) { Fail "MenuSuite $TargetId пуст - в базе такого объекта нет" }
-Write-Host "Выгружен MenuSuite $TargetId, $((Get-Item $originalFile).Length) байт"
+Write-Host "Выгружен MenuSuite $TargetId, $((Get-Item $exportFile).Length) байт"
 
 # ---------- разбор ----------
 $openMarker = "  MENUNODES`r`n  {`r`n"
@@ -155,6 +160,20 @@ foreach ($record in $records) {
 if ($hadOurs) { Write-Host '  прежняя врезка найдена и убрана' }
 $records = $cleaned
 
+# Файл оригинала обновляется ТОЛЬКО тогда, когда выгрузка врезки не несёт: только такая
+# выгрузка и есть чужой объект. Выгрузка со врезкой - уже наша работа, и класть её на место
+# оригинала значило бы потерять то, каким объект был до нас, - а это единственная копия,
+# по которой его возвращают байт в байт.
+if (-not $hadOurs) {
+    Copy-Item $exportFile $originalFile -Force
+    Write-Host "  оригинал чужого объекта сохранён: $originalFile"
+} elseif (-not (Test-Path $originalFile)) {
+    Write-Host '  объект уже со врезкой, а сохранённого оригинала нет: каким он был до нас - неизвестно' -ForegroundColor Yellow
+    Write-Host '  снять врезку и выгрузить заново: pwsh scripts/Merge-MenuSuite.ps1 -Remove -Import' -ForegroundColor Yellow
+} else {
+    Write-Host "  объект со врезкой - оригинала не трогаю, он лежит: $originalFile"
+}
+
 if ($Remove) {
     if (-not $hadOurs) { Write-Host 'Врезки в объекте не было - убирать нечего' }
 } else {
@@ -191,15 +210,14 @@ if ($Remove) {
                 $record = $record.Replace("NextNodeID=[{$zeroGuid}]", "NextNodeID=[{$ourMenuId}]")
                 $done = $true
             } else {
-                $indent = ' ' * 64
-                $m = [regex]::Match($record, '(?m)^(\s+)\S+=')
-                if ($m.Success) { $indent = $m.Groups[1].Value }
-                $trimmed = $record.TrimEnd()
-                if ($trimmed.EndsWith('}')) {
-                    $trimmed = $trimmed.Substring(0, $trimmed.Length - 1).TrimEnd()
-                    $record = "$trimmed;`r`n$indent" + "NextNodeID=[{$ourMenuId}] }`r`n"
-                    $done = $true
-                }
+                # Дописать свойство в запись, где его нет, значило бы сделать врезку
+                # НЕОБРАТИМОЙ: снятие вернуло бы узел с ЛИШНИМ свойством, а не байт в байт,
+                # и обещание "чужой объект возвращается нетронутым" было бы нарушено молча.
+                # Отказ честнее догадки: врезаться в такой объект скрипт не станет.
+                Fail ("у хвостового меню [{$lastMenuId}] нет свойства NextNodeID, и дописать " +
+                      'его нечем: снятие врезки вернуло бы узел с лишним свойством, а не байт в ' +
+                      'байт. Врезаться в этот объект скрипт не станет - врезаются в тот, где ' +
+                      'хвост помечен нулевым GUID.')
             }
         }
         $patched += $record
@@ -226,5 +244,7 @@ if ($Import) {
     Write-Host ''
     Write-Host 'Импорт скрипт сам не делает: это правка ЧУЖОГО объекта, и решение о ней отдельное.'
     Write-Host "  импортировать:  pwsh scripts/Merge-MenuSuite.ps1 -Import"
-    Write-Host "  оригинал лежит: $originalFile"
+    # Оригинал называется только тогда, когда он есть: у объекта, выгруженного со врезкой,
+    # файла оригинала может не быть вовсе, и "лежит" про него было бы неправдой.
+    if (Test-Path $originalFile) { Write-Host "  оригинал лежит: $originalFile" }
 }
