@@ -18,9 +18,16 @@ OBJECT Codeunit 110234 LockWatch Sql
       NoServerErr@1000000002 : TextConst 'ENU=The SQL server name is not filled in the LockWatch setup. The platform does not tell it to C/AL: Active Session carries the NAV server, not the database one.;RUS=В настройке сторожа блокировок не заполнено имя сервера SQL. Платформа его коду не отдаёт: в Active Session записан сервер NAV, а не сервер базы.';
       NoClockErr@1000000004 : TextConst 'ENU=The server did not return the observation moment. Substituting the NAV clock here would silently shift every episode start.;RUS=Сервер не отдал момент наблюдения. Подставить сюда часы NAV значило бы молча сдвинуть начало каждого эпизода.';
       NoDatabaseErr@1000000003 : TextConst 'ENU=The database name is not known: the current session is missing from Active Session.;RUS=Имя базы неизвестно: текущего сеанса нет в Active Session.';
+      SqlConn@1000000005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
+      SqlReader@1000000006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
+      LocksTruncated@1000000007 : Boolean;
+      MarkSuffix@1000000009 : Text;
+      LockListCutTxt@1000000008 : TextConst 'ENU=The list of interesting locks was cut at %1: the episodes left out of it are not named, and that is a cut, not silence.;RUS=Список интересных блокировок обрезан на %1: у эпизодов, что в него не влезли, документ и имя не названы - это обрезка, а не молчание.';
 
     [External]
     PROCEDURE ReadQueue@1(MaxRows@1000000000 : Integer;WantStatements@1000000008 : Boolean;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer) : Boolean;
+    VAR
+      Done@1000000023 : Boolean;
     BEGIN
       // Один запрос на проход, и он же приносит ЧАСЫ. Часы нужны серверные: NAV и SQL
       // могут стоять на разных машинах, а в журнале рядом лежат начало эпизода (считанное
@@ -34,31 +41,58 @@ OBJECT Codeunit 110234 LockWatch Sql
       CLEAR(BlockerIsNav);
       Observed.RESET;
       Observed.DELETEALL;
-      IF MaxRows <= 0 THEN
-        MaxRows := Parse.MaxWaitersPerPass;
-      IF MaxRows > Parse.MaxWaitersPerPass THEN
-        MaxRows := Parse.MaxWaitersPerPass;
-      IF TryReadQueue(MaxRows,WantStatements,Observed,Waiter,Blocker,BlockerIsNav,RowCount,ObservedAt,OtherDatabase) THEN
-        EXIT(TRUE);
-      // Отказ съёма не роняет фоновую задачу: прав может не быть, сервер может быть занят,
-      // и в обоих случаях правильный ответ - записать причину и жить дальше. Молча
-      // проглоченная ошибка тут страшнее отказа: журнал выглядел бы просто пустым.
-      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
-      EXIT(FALSE);
+      // Потолок спрашивается у разбора, и он же решает признак "усечено" в проходе:
+      // пределов два (настройка и пятьсот строк разбора), и фактический - меньший.
+      MaxRows := Parse.QueueRowLimit(MaxRows);
+      Done := TryReadQueue(MaxRows,WantStatements,Observed,Waiter,Blocker,BlockerIsNav,RowCount,ObservedAt,OtherDatabase);
+      IF NOT Done THEN
+        // Отказ съёма не роняет фоновую задачу: прав может не быть, сервер может быть занят,
+        // и в обоих случаях правильный ответ - записать причину и жить дальше. Молча
+        // проглоченная ошибка тут страшнее отказа: журнал выглядел бы просто пустым.
+        LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      // Соединение закрывается на ОБОИХ путях, и текст ошибки берётся ДО закрытия: CloseSession
+      // идёт через TryFunction, глотает собственный отказ, и он переписал бы GETLASTERRORTEXT.
+      CloseSession;
+      EXIT(Done);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE CloseSession@65();
+    BEGIN
+      // Закрывается всё, что открывал съём, и на ОБОИХ путях - и на удачном, и на ошибочном.
+      // try/finally в C/AL нет: отказ внутри съёма выбрасывает из функции МИМО обеих строк
+      // Close, и незакрытая сессия SQL остаётся висеть на сервере - по одной на каждый отказ,
+      // то есть на каждый проход, пока беда не кончится. Поэтому сессия и чтение живут не в
+      // теле съёма, а у объекта: закрывать их обязан тот, кто отказ пережил.
+      //
+      // Сам Close - в TryFunction нарочно. У отказавшего съёма чтение открыть не успевало
+      // вовсе (отказ пришёл на Open или на ExecuteReader), и закрывать там нечего; молчать
+      // про это честно, а второй отказ поверх первого ничего бы не добавил.
+      IF NOT ISNULL(SqlReader) THEN
+        SqlReader.Close;
+      IF NOT ISNULL(SqlConn) THEN
+        SqlConn.Close;
     END;
 
     [External]
     PROCEDURE ResolveNames@2(VAR Observed@1000000000 : TEMPORARY Record 110231) : Boolean;
+    VAR
+      Done@1000000024 : Boolean;
     BEGIN
       LastError := '';
-      IF TryResolveNames(Observed) THEN
-        EXIT(TRUE);
-      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
-      EXIT(FALSE);
+      Done := TryResolveNames(Observed);
+      IF NOT Done THEN
+        LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      // Пустой список имён не открывает соединения вовсе - и закрывать тогда нечего;
+      // строка эта на обоих путях и одинаково безвредна (см. CloseSession).
+      CloseSession;
+      EXIT(Done);
     END;
 
     [External]
     PROCEDURE ReadCounters@58(MaxRows@1000000000 : Integer;VAR Reading@1000000001 : TEMPORARY Record 110235;VAR Rows@1000000002 : Integer) : Boolean;
+    VAR
+      Done@1000000025 : Boolean;
     BEGIN
       LastError := '';
       Rows := 0;
@@ -66,24 +100,28 @@ OBJECT Codeunit 110234 LockWatch Sql
       Reading.DELETEALL;
       IF (MaxRows <= 0) OR (MaxRows > Parse.MaxCoverageRows) THEN
         MaxRows := Parse.MaxCoverageRows;
-      IF TryReadCounters(MaxRows,Reading,Rows) THEN
-        EXIT(TRUE);
-      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
-      EXIT(FALSE);
+      Done := TryReadCounters(MaxRows,Reading,Rows);
+      IF NOT Done THEN
+        LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      CloseSession;
+      EXIT(Done);
     END;
 
     [External]
     PROCEDURE PlatformRoad@61(VAR ViewServerState@1000000000 : Boolean;VAR AlterEventSession@1000000001 : Boolean;VAR MonitorRunning@1000000002 : Boolean;VAR LockWaits@1000000003 : Integer) : Boolean;
+    VAR
+      Done@1000000026 : Boolean;
     BEGIN
       LastError := '';
       ViewServerState := FALSE;
       AlterEventSession := FALSE;
       MonitorRunning := FALSE;
       LockWaits := 0;
-      IF TryPlatformRoad(ViewServerState,AlterEventSession,MonitorRunning,LockWaits) THEN
-        EXIT(TRUE);
-      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
-      EXIT(FALSE);
+      Done := TryPlatformRoad(ViewServerState,AlterEventSession,MonitorRunning,LockWaits);
+      IF NOT Done THEN
+        LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      CloseSession;
+      EXIT(Done);
     END;
 
     [External]
@@ -92,12 +130,22 @@ OBJECT Codeunit 110234 LockWatch Sql
       EXIT(LastError);
     END;
 
+    [External]
+    PROCEDURE LocksTruncatedNote@66() : Text;
+    BEGIN
+      // Слово об обрезке списка интересных блокировок. Уходит наружу тем же путём, что и
+      // причина неотвеченного документа: словом прохода в строке сторожа (c110235).
+      // Пустая колонка без этого слова читается как "документа не было" - а список в тот
+      // миг был обрезан, и разбирать его было нечем.
+      IF NOT LocksTruncated THEN
+        EXIT('');
+      EXIT(' ' + STRSUBSTNO(LockListCutTxt,MaxLocks));
+    END;
+
     [TryFunction]
     LOCAL PROCEDURE TryReadQueue@4(MaxRows@1000000000 : Integer;WantStatements@1000000019 : Boolean;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer);
     VAR
-      SqlConn@1000000008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000009 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
-      SqlReader@1000000010 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
       OurDatabaseId@1000000011 : Integer;
       Kind@1000000012 : Text;
       HobtId@1000000013 : BigInteger;
@@ -106,6 +154,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       HeldMode@1000000016 : Text;
       ResourceText@1000000017 : Text;
       Parsed@1000000018 : Boolean;
+      Nameless@1000000029 : Boolean;
       OutStr@1000000020 : OutStream;
       VictimBody@1000000021 : Text;
       BlockerBody@1000000022 : Text;
@@ -183,8 +232,17 @@ OBJECT Codeunit 110234 LockWatch Sql
           Observed."Database Id" := DatabaseId;
           Observed."SQL Object Id" := ObjectId;
           Observed."NAV Key No." := Parse.UnknownKeyNo;
-          Observed."Resource Unresolved" := NOT Parsed;
-          IF NOT Parsed THEN
+          // У ресурса, за которым нет НИ hobt, НИ номера объекта (pagelock, ridlock), назвать
+          // таблицу NAV нечем: в каталог за таким ресурсом не сходить вовсе. Помечается он
+          // неопознанным, и рядом ложится его СЫРОЕ описание: пустая колонка без пометки
+          // читалась бы как "сервер таблицы не назвал", хотя сервер назвал ровно то, что
+          // сказал. Сырое описание тут ещё и РАЗЛИЧИТЕЛЬ: у двух таких ожиданий одной жертвы
+          // (разные страницы, разные файлы) различающего имени, кроме него, нет, а ключ
+          // эпизода его спрашивает (SQL Object Name в FindOpen журнала) - иначе оба ожидания
+          // слились бы в один эпизод, правдоподобно и молча.
+          Nameless := Parsed AND (HobtId = 0) AND (ObjectId = 0);
+          Observed."Resource Unresolved" := (NOT Parsed) OR Nameless;
+          IF (NOT Parsed) OR Nameless THEN
             // Ресурс, который мы не поняли, показывается СЫРЫМ. Выбросить строку значило
             // бы соврать тишиной, а показать пустую - соврать дважды.
             Observed."SQL Object Name" := COPYSTR(ResourceText,1,MAXSTRLEN(Observed."SQL Object Name"));
@@ -228,9 +286,7 @@ OBJECT Codeunit 110234 LockWatch Sql
     [TryFunction]
     LOCAL PROCEDURE TryResolveNames@5(VAR Observed@1000000000 : TEMPORARY Record 110231);
     VAR
-      SqlConn@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
-      SqlReader@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
       HobtList@1000000004 : Text;
       ObjectList@1000000005 : Text;
       Source@1000000006 : Integer;
@@ -264,20 +320,21 @@ OBJECT Codeunit 110234 LockWatch Sql
 
     [External]
     PROCEDURE ResolveDocuments@30(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR Context@1000000013 : TEMPORARY Record 110232) : Boolean;
+    VAR
+      Done@1000000027 : Boolean;
     BEGIN
       LastError := '';
-      IF TryResolveDocuments(Buffer,Context) THEN
-        EXIT(TRUE);
-      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
-      EXIT(FALSE);
+      Done := TryResolveDocuments(Buffer,Context);
+      IF NOT Done THEN
+        LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      CloseSession;
+      EXIT(Done);
     END;
 
     [TryFunction]
     LOCAL PROCEDURE TryResolveDocuments@31(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR Context@1000000014 : TEMPORARY Record 110232);
     VAR
-      SqlConn@1000000001 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
-      SqlReader@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
       LockTran@1000000004 : ARRAY [40] OF BigInteger;
       LockHobt@1000000005 : ARRAY [40] OF BigInteger;
       LockObject@1000000006 : ARRAY [40] OF Text;
@@ -300,6 +357,9 @@ OBJECT Codeunit 110234 LockWatch Sql
       // скан, а он дорог: 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не
       // помогает вовсе.
       BuildLockLists(Buffer,TranList,HobtList,SpidList,MarkSpidList);
+      // Отметка обрезки - своя у каждого разбора, и обнуляется она ДО решения "разбирать
+      // нечего": разбирать и вправду нечего, а вчерашнее "обрезано" осталось бы стоять.
+      LocksTruncated := FALSE;
       IF (TranList = '') AND (SpidList = '') AND (MarkSpidList = '') THEN
         EXIT;
 
@@ -309,16 +369,27 @@ OBJECT Codeunit 110234 LockWatch Sql
       SqlCmd.CommandTimeout := ReadTimeoutSec;
       SqlCmd.CommandText := LocksOfInterestSql(TranList,HobtList,SpidList,MarkSpidList);
       SqlReader := SqlCmd.ExecuteReader;
-      WHILE SqlReader.Read AND (Locks < MaxLocks) DO BEGIN
+      // Читается на одну строку БОЛЬШЕ потолка нарочно: лишняя строка и есть улика обрезки
+      // (см. MaxLocks). Оборвать чтение на потолке и промолчать значило бы выдать неполный
+      // список за полный: у эпизодов, чьи блокировки в него не влезли, и документ, и имя
+      // остались бы пустыми без единого слова о причине.
+      WHILE SqlReader.Read AND (Locks <= MaxLocks) DO BEGIN
         Locks := Locks + 1;
-        LockKind[Locks] := ReaderInt(SqlReader,0);
-        LockSpid[Locks] := ReaderInt(SqlReader,1);
-        LockTran[Locks] := SqlReader.GetInt64(2);
-        LockHobt[Locks] := SqlReader.GetInt64(3);
-        LockObject[Locks] := ReaderText(SqlReader,4);
-        LockIndex[Locks] := ReaderText(SqlReader,5);
-        LockHash[Locks] := Parse.TrimLockHash(ReaderText(SqlReader,6));
+        IF Locks <= MaxLocks THEN BEGIN
+          LockKind[Locks] := ReaderInt(SqlReader,0);
+          LockSpid[Locks] := ReaderInt(SqlReader,1);
+          LockTran[Locks] := SqlReader.GetInt64(2);
+          LockHobt[Locks] := SqlReader.GetInt64(3);
+          LockObject[Locks] := ReaderText(SqlReader,4);
+          LockIndex[Locks] := ReaderText(SqlReader,5);
+          LockHash[Locks] := Parse.TrimLockHash(ReaderText(SqlReader,6));
+        END;
       END;
+      LocksTruncated := Locks > MaxLocks;
+      // Лишняя строка - улика, а не строка ответа: в массивах её нет, и в дороги разбора
+      // она ехать не должна вовсе - там цикл идёт до этого числа.
+      IF LocksTruncated THEN
+        Locks := MaxLocks;
       SqlReader.Close;
 
       Buffer.RESET;
@@ -708,8 +779,24 @@ OBJECT Codeunit 110234 LockWatch Sql
     END;
 
     LOCAL PROCEDURE MarkTableSuffix@44() : Text;
+    VAR
+      MarkTable@1000000030 : RecordRef;
     BEGIN
-      EXIT('LockWatch Context Mark');
+      // Имя таблицы отметок нужно здесь СУФФИКСОМ, а не номером: в SQL у каждой компании
+      // своя таблица отметок, и различаются они префиксом компании, а хвост имени у всех
+      // один. Литералом оно стояло бы молчаливым двойником имени объекта: таблицу
+      // переименуй - и дорога к отметке отвалится, ничего об этом не сказав. Номер объекта
+      // в C/AL пишется именем (DATABASE::"..." - и он же ниже), а вот ИМЯ объекта иначе
+      // как литералом не напишешь; обойти это можно одним способом - открыть таблицу и
+      // прочитать её имя.
+      //
+      // Спрашивается имя ОДИН раз за жизнь экземпляра: зовут это на каждую интересную
+      // блокировку (до сорока на эпизод), а открытие объекта не бесплатное.
+      IF MarkSuffix = '' THEN BEGIN
+        MarkTable.OPEN(DATABASE::"LockWatch Context Mark");
+        MarkSuffix := MarkTable.NAME;
+      END;
+      EXIT(MarkSuffix);
     END;
 
     LOCAL PROCEDURE KindWaited@47() : Integer;
@@ -743,6 +830,8 @@ OBJECT Codeunit 110234 LockWatch Sql
 
     [External]
     PROCEDURE ReadDeadlocks@50(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer;VAR Counted@1000000007 : BigInteger) : Boolean;
+    VAR
+      Done@1000000028 : Boolean;
     BEGIN
       LastError := '';
       Rows := 0;
@@ -751,18 +840,17 @@ OBJECT Codeunit 110234 LockWatch Sql
       Counted := 0;
       Found.RESET;
       Found.DELETEALL;
-      IF TryReadDeadlocks(SinceAt,MaxRows,WantStatements,Found,BufferPresent,OldestAt,Rows,Counted) THEN
-        EXIT(TRUE);
-      LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
-      EXIT(FALSE);
+      Done := TryReadDeadlocks(SinceAt,MaxRows,WantStatements,Found,BufferPresent,OldestAt,Rows,Counted);
+      IF NOT Done THEN
+        LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+      CloseSession;
+      EXIT(Done);
     END;
 
     [TryFunction]
     LOCAL PROCEDURE TryReadDeadlocks@51(SinceAt@1000000000 : DateTime;MaxRows@1000000001 : Integer;WantStatements@1000000002 : Boolean;VAR Found@1000000003 : TEMPORARY Record 110231;VAR BufferPresent@1000000004 : Boolean;VAR OldestAt@1000000005 : DateTime;VAR Rows@1000000006 : Integer;VAR Counted@1000000019 : BigInteger);
     VAR
-      SqlConn@1000000007 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000008 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
-      SqlReader@1000000009 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
       EventAt@1000000010 : DateTime;
       ObjectName@1000000011 : Text;
       IndexName@1000000012 : Text;
@@ -1357,9 +1445,7 @@ OBJECT Codeunit 110234 LockWatch Sql
     [TryFunction]
     LOCAL PROCEDURE TryReadCounters@59(MaxRows@1000000000 : Integer;VAR Reading@1000000001 : TEMPORARY Record 110235;VAR Rows@1000000002 : Integer);
     VAR
-      SqlConn@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
-      SqlReader@1000000005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
       ObjectName@1000000006 : Text;
       IndexName@1000000007 : Text;
       CompanyName@1000000008 : Text;
@@ -1448,9 +1534,7 @@ OBJECT Codeunit 110234 LockWatch Sql
     [TryFunction]
     LOCAL PROCEDURE TryPlatformRoad@62(VAR ViewServerState@1000000000 : Boolean;VAR AlterEventSession@1000000001 : Boolean;VAR MonitorRunning@1000000002 : Boolean;VAR LockWaits@1000000003 : Integer);
     VAR
-      SqlConn@1000000004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlCmd@1000000005 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
-      SqlReader@1000000006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
     BEGIN
       // Четыре ответа одним запросом, и все четыре нужны вместе. Права проверяются ТЕМ ЖЕ
       // способом, каким их проверяет сама платформа: отказ в праве она не показывает

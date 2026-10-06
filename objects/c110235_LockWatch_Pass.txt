@@ -35,6 +35,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       DeadlockFailedTxt@1000000032 : TextConst 'ENU=Deadlocks are not read: %1;RUS=Взаимоблокировки не прочитаны: %1';
       DeadlocksTxt@1000000033 : TextConst 'ENU=Deadlocks added %1.;RUS=Взаимоблокировок добавлено %1.';
       MovedTxt@1000000042 : TextConst 'ENU=Moved to history %1, deleted %2.;RUS=Уехало в историю %1, удалено %2.';
+      MergedTxt@1000000045 : TextConst 'ENU=Several tasks of one victim waited on the same resource: %1 of those waits went into the same journal row (the journal table tells them apart by nothing else).;RUS=Несколько задач одной жертвы ждали на том же ресурсе: %1 таких ожиданий ушло в ту же строку журнала (больше их в таблице журнала ничем не различить).';
       SweptTxt@1000000044 : TextConst 'ENU=Swept marks of dead sessions %1.;RUS=Убрано отметок мёртвых сеансов %1.';
       DeadlockLostTxt@1000000034 : TextConst 'ENU=The ring buffer evicted events newer than the mark, some deadlocks are lost.;RUS=Буфер вытеснил события новее отметки, часть взаимоблокировок потеряна.';
       NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
@@ -75,6 +76,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       Dropped@1000000035 : Integer;
       DroppedSeen@1000000036 : Integer;
       DroppedSeenMs@1000000037 : BigInteger;
+      RowLimit@1000000046 : Integer;
     BEGIN
       // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
       // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
@@ -87,6 +89,10 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Язык, на котором проход пишет слова: подсказку, причину, сообщение сторожа и текст
       // тревоги наружу. В сессии с окном язык не трогается вовсе - разбирается это внутри.
       Parse.UseJournalLanguage(Setup."Journal Language ID");
+      // Часы клиента, и это НАЗВАНО нарочно: длительность прохода мерится ими от начала до
+      // конца, а значит разницы поясов в ней нет - обе половины взяты одними часами.
+      // Всё, что кладётся в колонку DateTime, идёт другим путём - моментом прохода от SQL
+      // (ObservedAt), и смешивать эти две шкалы нельзя (FINDINGS, раздел 56).
       StartedAt := CURRENTDATETIME;
 
       // Отметки контекста не убирает никто, а ключ у них - экземпляр службы плюс номер
@@ -96,6 +102,11 @@ OBJECT Codeunit 110235 LockWatch Pass
       // будет в конце, вместе с остальными словами прохода.
       Swept := Mark.SweepDead(MarkSweepPerPass);
 
+      // Потолок строк за проход - ФАКТИЧЕСКИЙ, тот же, по которому съём и обрезает
+      // (см. Parse.QueueRowLimit). Настройка, поднятая выше пятисот, ничего не поднимает,
+      // и признак "усечено", сверенный с настройкой, промолчал бы об обрезке - а проход,
+      // обрезанный молча, читается как "вся очередь в журнале".
+      RowLimit := Parse.QueueRowLimit(Setup."Max Rows per Pass");
       IF NOT Sql.ReadQueue(Setup."Max Rows per Pass",Setup."Collect Statement Values",
                            Observed,Waiter,Blocker,BlockerIsNav,
                            RowCount,ObservedAt,OtherDatabase)
@@ -104,6 +115,12 @@ OBJECT Codeunit 110235 LockWatch Pass
         // значило бы объявить их законченными, ничего об этом не выяснив.
         // Нули на месте выброшенного - не заглушка: до переезда проход здесь не доходит
         // вовсе, и прибавлять ему нечего.
+        //
+        // Момент отказа берётся ЧАСАМИ СЕССИИ, и это единственный такой случай в проходе:
+        // момента от SQL нет - он и не приехал, в этом весь отказ. Шкала тут одна и та же
+        // на обоих концах (человек читает разницу с CURRENTDATETIME той же сессии), но у
+        // читателя из чужого пояса она сдвинется - как и у всякой отметки, положенной
+        // часами клиента (FINDINGS, раздел 56).
         SaveWatchdog(State,STRSUBSTNO(ReadFailedTxt,Sql.LastErrorText),StartedAt,NoTime,0,FALSE,0,0);
         EXIT(FALSE);
       END;
@@ -130,6 +147,7 @@ OBJECT Codeunit 110235 LockWatch Pass
         UNTIL Observed.NEXT = 0;
       Journal.FinishPass;
       Journal.PassCounts(Opened,Updated,Closed,Restarted);
+      Note := Note + MergedNote(Journal.MergedWaitCount);
 
       // Документ и имена разбираются ПОСЛЕ записи и только для идущих эпизодов: мост к
       // ним - блокировка, которую держат прямо сейчас. На закрытом эпизоде разбирать
@@ -144,13 +162,13 @@ OBJECT Codeunit 110235 LockWatch Pass
 
       // Взаимоблокировки собираются ПОСЛЕ очереди и не каждым проходом. Они приходят
       // готовыми эпизодами и ведению не подлежат: сервер уже разорвал круг.
-      Note := Note + CollectDeadlocks(Setup,State);
+      Note := Note + CollectDeadlocks(Setup,State,ObservedAt);
 
       // Накопительный слой снимается каждым проходом: он дёшев (доли миллисекунды на всю
       // базу) и, в отличие от очереди, видит ожидания короче периода опроса. Сторожем ему
       // не быть - счётчик прирастает только в момент конца ожидания, - зато он единственный,
       // кто может сказать, какую долю происходящего журнал вообще видит.
-      Note := Note + CollectCoverage(Setup,State);
+      Note := Note + CollectCoverage(Setup,State,ObservedAt);
 
       // Переезд порционный и внутри того же прохода: отдельное задание уборки - это ещё
       // один объект, который забудут включить, и горячая таблица будет расти молча.
@@ -168,7 +186,7 @@ OBJECT Codeunit 110235 LockWatch Pass
 
       Note := Note + SweptNote(Swept);
 
-      Truncated := (Setup."Max Rows per Pass" > 0) AND (RowCount >= Setup."Max Rows per Pass");
+      Truncated := (RowLimit > 0) AND (RowCount >= RowLimit);
       Elapsed := CURRENTDATETIME - StartedAt;
       Note := STRSUBSTNO(CountsTxt,Opened,Updated,Closed,Restarted) + Note;
       // Превышение потолка идёт ПЕРВЫМ словом, а не последним: строка сторожа - Text250,
@@ -178,7 +196,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       Overrun := Parse.PassOverrunNote(PassMs,Setup."Max Pass (ms)");
       IF Overrun <> '' THEN
         Overrun := Overrun + ' ';
-      SaveWatchdog(State,Overrun + PassNote(RowCount,OtherDatabase,Truncated,Setup."Max Rows per Pass",Note),
+      SaveWatchdog(State,Overrun + PassNote(RowCount,OtherDatabase,Truncated,RowLimit,Note),
              ObservedAt,Elapsed,RowCount,Truncated,DroppedSeen,DroppedSeenMs);
       EXIT(TRUE);
     END;
@@ -212,10 +230,16 @@ OBJECT Codeunit 110235 LockWatch Pass
             Journal.SetDocument(Pending."Entry No.",'','',Parse.DocSourceNone,NoMarkTxt,
                                 Pending."Victim User Name",'');
         UNTIL Pending.NEXT = 0;
-      EXIT('');
+      // Обрезка списка интересных блокировок (MaxLocks в Codeunit 110234) называется вслух
+      // тем же словом прохода. У эпизодов, чьи блокировки в список не влезли, документ и
+      // имя остались пустыми, и пустая колонка без этого слова читается как "ответа не
+      // было", хотя ответ просто не искали.
+      EXIT(Sql.LocksTruncatedNote);
     END;
 
-    LOCAL PROCEDURE CollectDeadlocks@9(VAR Setup@1000000000 : Record 110230;VAR State@1000000011 : Record 110237) : Text;
+    LOCAL PROCEDURE CollectDeadlocks@9(VAR Setup@1000000000 : Record 110230;
+                                       VAR State@1000000011 : Record 110237;
+                                       PassAt@1000000017 : DateTime) : Text;
     VAR
       Found@1000000001 : TEMPORARY Record 110231;
       WasReadUntil@1000000002 : DateTime;
@@ -238,15 +262,20 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Буфер читается НЕ каждым проходом. Он растёт не от наших блокировок, а от чужих
       // взаимоблокировок, и на тихом сервере не меняется вовсе; разбор всего буфера в XML
       // дороже опроса очереди, ради которого проход и заведён.
+      // Обе отметки берутся МОМЕНТОМ ПРОХОДА, а не часами сессии: он приехал от SQL тем же
+      // запросом, что и очередь, и лежит в той же шкале, что отметки журнала - UTC
+      // (FINDINGS, раздел 56). Часы сессии хороши ровно в серверной сессии: у клиента в
+      // другом поясе ручной проход положил бы сюда свой пояс, и отметка "читали в" уехала
+      // бы на часы - вместе с решением, читать кольцо или пропустить его.
       Period := Parse.DeadlockReadPeriodMs;
       IF State."Deadlocks Read At" <> 0DT THEN BEGIN
-        Elapsed := CURRENTDATETIME - State."Deadlocks Read At";
+        Elapsed := PassAt - State."Deadlocks Read At";
         IF Elapsed < Period THEN
           EXIT('');
       END;
       // Отметка "читали в" ставится ДО чтения и остаётся стоять при отказе: сервер,
       // который не отвечает, нельзя спрашивать каждые три секунды.
-      State."Deadlocks Read At" := CURRENTDATETIME;
+      State."Deadlocks Read At" := PassAt;
       WasReadUntil := State."Deadlocks Read Until";
 
       WasCounted := State."Deadlocks Counted";
@@ -327,7 +356,9 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT('');
     END;
 
-    LOCAL PROCEDURE CollectCoverage@11(VAR Setup@1000000000 : Record 110230;VAR State@1000000006 : Record 110237) : Text;
+    LOCAL PROCEDURE CollectCoverage@11(VAR Setup@1000000000 : Record 110230;
+                                       VAR State@1000000006 : Record 110237;
+                                       PassAt@1000000007 : DateTime) : Text;
     VAR
       Reading@1000000001 : TEMPORARY Record 110235;
       Rows@1000000002 : Integer;
@@ -343,8 +374,13 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Отметка "охват считается с" ставится в тот же проход, что и первое чтение. Без
       // неё журнальная половина охвата считалась бы за всё время, а счётчики - с этого
       // мига, и доля вышла бы больше сотни процентов.
+      //
+      // И ставится она МОМЕНТОМ ПРОХОДА, а не часами сессии: с этой отметкой сравнивается
+      // "Started At" строк журнала, а он приехал от SQL по UTC (FINDINGS, раздел 56).
+      // Часы клиента в другом поясе сдвинули бы сравнение на разницу поясов - то есть
+      // доля охвата поехала бы молча, а это ответ на "видит ли инструмент всё".
       IF State."Coverage Since" = 0DT THEN
-        State."Coverage Since" := CURRENTDATETIME;
+        State."Coverage Since" := PassAt;
 
       Coverage.Accumulate(Reading);
       Coverage.PassCounts(Added,Changed,Resets);
@@ -519,6 +555,17 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF (Moved = 0) AND (Dropped = 0) THEN
         EXIT('');
       EXIT(' ' + STRSUBSTNO(MovedTxt,Moved,Dropped));
+    END;
+
+    LOCAL PROCEDURE MergedNote@17(Merged@1000000000 : Integer) : Text;
+    BEGIN
+      // Сведённые ожидания называются вслух. Строка журнала у них одна на всех, и без
+      // этого слова картина читается как одна жертва, тогда как задач у неё было
+      // несколько: у работника, разбирающего журнал, это разные ответы на "кого чинить".
+      // Ноль не пишется по той же причине, что и у соседей: строку читают каждым проходом.
+      IF Merged = 0 THEN
+        EXIT('');
+      EXIT(' ' + STRSUBSTNO(MergedTxt,Merged));
     END;
 
     BEGIN
