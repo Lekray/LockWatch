@@ -1,16 +1,16 @@
-# Узлы меню LockWatch для врезки в MenuSuite установки.
+# LockWatch menu nodes, to be merged into the setup's MenuSuite.
 #
-# Своего уровня MenuSuite инструменту не досталось: лицензия стенда отказала во ВСЕХ
-# партнёрских уровнях - 1020, 1040, 1050, 1060, 1070, 1080 (измерено 08.09.2026, отказ
-# "You do not have permission to create the ... MenuSuite"). Остаётся уровень Company,
-# 1090, а он на установке уже есть и принадлежит заказчику.
+# No MenuSuite level of its own was available: the stand license refused EVERY partner
+# level - 1020, 1040, 1050, 1060, 1070, 1080 (measured 08.09.2026, refusal text
+# "You do not have permission to create the ... MenuSuite"). Only the Company level,
+# 1090, is left, and the setup already has it: it belongs to the customer.
 #
-# Поэтому объект не выкладывается, а СЛИВАЕТСЯ: scripts/Merge-MenuSuite.ps1 выгружает
-# существующий MenuSuite, дописывает в него эти узлы и кладёт результат в out/. Слитый
-# объект в git не попадает: там чужое меню.
+# That is why the object is not deployed but MERGED: scripts/Merge-MenuSuite.ps1 exports
+# the existing MenuSuite, appends these nodes to it and puts the result into out/. The
+# merged object never gets into git: the menu there is someone else's.
 #
-# GUID узлов постоянны нарочно. Смена GUID при повторном слиянии дала бы ВТОРОЙ комплект
-# пунктов рядом с первым, и убрать его можно было бы только руками.
+# Node GUIDs are constant on purpose. A GUID changed on a repeated merge would give a
+# SECOND set of items next to the first one, and it could only be removed by hand.
     { Menu           ;[{E7B801BA-33D6-4F3A-B984-0937536E2F21}] ;Name=LockWatch;
                                                                 CaptionML=[ENU=LockWatch;
                                                                            RUS=Сторож блокировок];
