@@ -139,14 +139,14 @@ OBJECT Page 110234 LockWatch Coverage
                 SourceExpr=JournalMs }
 
     { 6   ;2   ;Field     ;
-                Name=SharePct;
+                Name=ShareShown;
                 CaptionML=[ENU=Share Named (%);
                            RUS=Доля названного, %];
-                ToolTipML=[ENU=Specifies what share of the waiting the journal can put a name to. A low share is not a fault: waits shorter than the poll period are invisible by design, and this number says so out loud instead of the summary silently promising that everything is visible.;
-                           RUS=Определяет, какой доле ожидания журнал может дать имя. Низкая доля - не поломка: ожидания короче периода опроса не видны по устройству, и это число говорит об этом вслух вместо молчаливого обещания сводки, что видно всё.];
+                ToolTipML=[ENU=Specifies what share of the waiting the journal can put a name to. A low share is not a fault: waits shorter than the poll period are invisible by design. While the counters have counted nothing, the cell says so in words rather than showing a zero.;
+                           RUS=Определяет, какой доле ожидания журнал может дать имя. Низкая доля - не поломка: ожидания короче периода опроса не видны по устройству. Пока счётчики не насчитали ничего, в клетке стоит слово, а не ноль.];
                 ApplicationArea=#All;
                 StyleExpr=ShareStyle;
-                SourceExpr=SharePct }
+                SourceExpr=ShareShown }
 
     { 7   ;2   ;Field     ;
                 Name=JournalEpisodes;
@@ -161,8 +161,8 @@ OBJECT Page 110234 LockWatch Coverage
                 Name=DroppedEpisodes;
                 CaptionML=[ENU=Of them dropped as too short;
                            RUS=Из них выброшено как короткое];
-                ToolTipML=[ENU=Specifies how many of the named episodes are no longer anywhere: they left the journal and were deleted instead of moving to history, because they waited less than the threshold in the setup. They are counted in anyway - an episode seen and then deliberately dropped was still seen, and leaving it out would call the tool own cleanup a miss.;
-                           RUS=Определяет, скольких из названных эпизодов уже нет нигде: они ушли из журнала и были удалены вместо переезда в историю, потому что ждали меньше порога из настройки. Считаются они всё равно - эпизод, увиденный и потом выброшенный нарочно, увиден БЫЛ, и не считать его значило бы объявить пропуском собственную уборку.];
+                ToolTipML=[ENU=Specifies how many of the named episodes are already gone: dropped from the journal instead of moving to history, because they waited less than the threshold in the setup. They are counted all the same - an episode seen and then dropped deliberately was still seen.;
+                           RUS=Определяет, скольких из названных эпизодов уже нет: они выброшены из журнала вместо переезда в историю, потому что ждали меньше порога из настройки. Считаются они всё равно - эпизод, увиденный и потом выброшенный нарочно, увиден БЫЛ.];
                 ApplicationArea=#All;
                 SourceExpr=DroppedEpisodes }
 
@@ -275,6 +275,8 @@ OBJECT Page 110234 LockWatch Coverage
       SharePct@1000000007 : Decimal;
       ShareStyle@1000000008 : Text[30];
       StartOverQst@1000000009 : TextConst 'ENU=Drop the coverage counted so far and start over from now?;RUS=Сбросить насчитанный охват и начать счёт заново с этого мига?';
+      ShareShown@1000000012 : Text[40];
+      ShareUnknownTxt@1000000013 : TextConst 'ENU=unknown - the server counters are empty;RUS=неизвестна - счётчики сервера пусты';
 
     LOCAL PROCEDURE ReadTotals@1();
     VAR
@@ -285,7 +287,27 @@ OBJECT Page 110234 LockWatch Coverage
       Coverage.JournalTotal(CoverageSince,JournalEpisodes,JournalMs);
       State.Dropped(DroppedEpisodes,DroppedMs);
       SharePct := Coverage.Share(CounterMs,JournalMs);
+      SetShareShown;
       SetShareStyle;
+    END;
+
+    LOCAL PROCEDURE SetShareShown@9();
+    BEGIN
+      // Ноль в знаменателе - это не "не видно ничего", а "делить нечем": счётчики сервера
+      // ещё ничего не насчитали. Показанный ноль читался бы как полная слепота инструмента
+      // там, где он просто ещё не начал смотреть, и потому вместо числа стоит слово.
+      // Пустой клетке здесь тоже не место: на этом экране пустая клетка - это "строк нет".
+      IF CounterMs <= 0 THEN
+        ShareShown := ShareUnknownTxt
+      ELSE
+        ShareShown := FORMAT(SharePct,0,ShareFormat);
+    END;
+
+    LOCAL PROCEDURE ShareFormat@10() : Text;
+    BEGIN
+      // Один знак после запятой - ровно столько, сколько показывала прежняя десятичная
+      // колонка: сама доля берётся округлением до десятых, и второй знак был бы вымыслом.
+      EXIT('<Precision,1:1>');
     END;
 
     LOCAL PROCEDURE SetShareStyle@2();
@@ -380,6 +402,13 @@ OBJECT Page 110234 LockWatch Coverage
       Сторожем этот слой быть не может: счётчик прирастает только в момент КОНЦА ожидания
       ([FINDINGS.md], раздел 12), и триггер по нему сработал бы тогда, когда в очереди
       уже никого нет.
+
+      Доля показывается СЛОВОМ, а не нулём, пока счётчики сервера пусты, и это не мелочь
+      оформления. Ноль в знаменателе - это "делить нечем", а не "не видно ничего": свежая
+      установка не успела насчитать ни миллисекунды, и нулевая доля читалась бы как полная
+      слепота инструмента там, где он ещё просто не начал смотреть. Довод тот же, по
+      которому пустая клетка документа объясняется словами, - и он записан в самом
+      делении: Share в кодюните охвата отвечает нулём именно на "нечего делить".
     }
     END.
   }

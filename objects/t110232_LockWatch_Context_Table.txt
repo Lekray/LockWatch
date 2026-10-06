@@ -75,6 +75,9 @@ OBJECT Table 110232 LockWatch Context Table
         EXIT;
       // Берётся ИМЯ объекта, а не подпись. Подпись переведена на язык пользователя, а
       // сверять её придётся с именем таблицы в SQL - там лежит имя, и только оно.
+      // 2000000058 - штатная "AllObjWithCaption": таблица ПЛАТФОРМЫ, по роду и номеру
+      // объекта отдающая его имя. Стоит здесь номером, как и всякий чужой объект: имени
+      // этой таблицы в наших именах нет и быть не может.
       IF AllObjWithCaption.GET(AllObjWithCaption."Object Type"::Table,"Table No.") THEN
         "Table Name" := COPYSTR(AllObjWithCaption."Object Name",1,MAXSTRLEN("Table Name"));
       SetFieldName;
@@ -86,6 +89,8 @@ OBJECT Table 110232 LockWatch Context Table
     BEGIN
       // Имя поля нужно съёму: по нему строится образец имени столбца SQL. Номер поля для
       // этого не годится вовсе - в SQL номеров полей NAV нет.
+      // 2000000041 - штатная "Field": та же дорога от номера к имени, что и у соседней
+      // процедуры, только для полей таблицы, и так же таблица платформы.
       "Document Field Name" := '';
       IF ("Table No." = 0) OR ("Document Field No." = 0) THEN
         EXIT;

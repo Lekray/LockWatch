@@ -19,6 +19,7 @@ OBJECT Page 110231 LockWatch Episodes
     SourceTableView=SORTING(Started At)
                     ORDER(Descending);
     PageType=List;
+    RefreshOnActivate=Yes;
     OnOpenPage=BEGIN
                  ReadAlertThreshold;
                END;
@@ -32,6 +33,21 @@ OBJECT Page 110231 LockWatch Episodes
       { 40      ;    ;ActionContainer;
                       Name=EpisodeActions;
                       ActionContainerType=ActionItems }
+      { 53      ;1   ;Action    ;
+                      Name=Refresh;
+                      CaptionML=[ENU=Refresh;
+                                 RUS=Обновить];
+                      ToolTipML=[ENU=Read the journal again and recount what is shown. The background watch writes rows and moves them on its own, and this page notices none of that by itself.;
+                                 RUS=Перечитать журнал и пересчитать показанное. Фоновое наблюдение само пишет строки и само увозит их, и сама страница об этом не узнаёт.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Refresh;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
       { 41      ;1   ;Action    ;
                       Name=OpenOnly;
                       CaptionML=[ENU=Open Only;
@@ -257,19 +273,19 @@ OBJECT Page 110231 LockWatch Episodes
                 ApplicationArea=#All;
                 SourceExpr=Advice }
 
-    { 48  ;2   ;Field     ;
-                Name=BlockerALScope;
-                ToolTipML=[ENU=Specifies where the culprit is running RIGHT NOW - not where it took the lock. The platform reads it from the live stack at the moment of the read, so two consecutive reads of one episode can name different objects. The column is titled honestly for that reason.;
-                           RUS=Определяет, где виновник исполняется ПРЯМО СЕЙЧАС, а не где взял блокировку. Платформа берёт это из живого стека в момент чтения, поэтому два соседних чтения одного эпизода могут назвать разные объекты. Колонка потому и подписана честно.];
-                ApplicationArea=#All;
-                SourceExpr="Blocker AL Scope" }
-
     { 30  ;2   ;Field     ;
                 Name=AdviceEvidence;
                 ToolTipML=[ENU=Specifies the number the advice was given for. It stands next to the advice on purpose: advice without the number behind it is an opinion, and there is nothing to argue with.;
                            RUS=Определяет число, по которому совет выдан. Стоит рядом с советом нарочно: совет без числа за ним - это мнение, и спорить с ним нечем.];
                 ApplicationArea=#All;
                 SourceExpr="Advice Evidence" }
+
+    { 48  ;2   ;Field     ;
+                Name=BlockerALScope;
+                ToolTipML=[ENU=Specifies where the culprit is running RIGHT NOW - not where it took the lock. The platform reads it from the live stack at the moment of the read, so two consecutive reads of one episode can name different objects. The column is titled honestly for that reason.;
+                           RUS=Определяет, где виновник исполняется ПРЯМО СЕЙЧАС, а не где взял блокировку. Платформа берёт это из живого стека в момент чтения, поэтому два соседних чтения одного эпизода могут назвать разные объекты. Колонка потому и подписана честно.];
+                ApplicationArea=#All;
+                SourceExpr="Blocker AL Scope" }
 
     { 8   ;2   ;Field     ;
                 Name=NAVTableName;
@@ -294,24 +310,45 @@ OBJECT Page 110231 LockWatch Episodes
 
     { 11  ;2   ;Field     ;
                 Name=DocumentNo;
-                ToolTipML=[ENU=Specifies the document the fight is over: the contended row read back by the lock hash, or - when that road stays silent - the one from the culprit's context mark. The next column says which road answered.;
-                           RUS=Определяет документ, ЗА КОТОРЫЙ идёт спор: спорная строка, поднятая обратным поиском по хэшу блокировки, а если та дорога промолчала - документ из отметки виновника. Какая дорога ответила, сказано соседней колонкой.];
+                ToolTipML=[ENU=Specifies the document the fight is over: the contended row read back by the lock hash, or - when that road stays silent - the one from the culprit's context mark. The column after this one names the road that answered, and the next explains an empty cell.;
+                           RUS=Определяет документ, ЗА КОТОРЫЙ идёт спор: спорная строка, поднятая обратным поиском по хэшу блокировки, а если та дорога промолчала - документ из отметки виновника. Следующая колонка называет ответившую дорогу, а за ней стоит причина пустой клетки.];
                 ApplicationArea=#All;
                 SourceExpr="Document No." }
 
+    { 64  ;2   ;Field     ;
+                Name=DocumentSource;
+                ToolTipML=[ENU=Specifies which road named the document. The source is named together with the document on purpose: a name without its source cannot be argued with, and a document of the wrong road looks exactly as convincing as the right one.;
+                           RUS=Определяет, какая дорога назвала документ. Источник назван вместе с документом нарочно: имя без источника нечем оспорить, а документ не с той дороги выглядит ровно так же убедительно, как свой.];
+                ApplicationArea=#All;
+                SourceExpr="Document Source" }
+
+    { 65  ;2   ;Field     ;
+                Name=NoDocumentReason;
+                ToolTipML=[ENU=Specifies why the document is empty. An empty column without a reason reads as an episode without people and documents, which is not the same thing at all.;
+                           RUS=Определяет, почему документ пуст. Пустая колонка без причины читается как эпизод без людей и документов, а это совсем не одно и то же.];
+                ApplicationArea=#All;
+                SourceExpr="No Document Reason" }
+
     { 63  ;2   ;Field     ;
                 Name=CulpritDocumentNo;
-                ToolTipML=[ENU=Specifies what the CULPRIT is busy with: the last document its own transaction touched, taken from the context mark. It is a different question from the one beside it - the fight is over one row, and a culprit touches many - and when the two disagree, this is the column that tells you what the person is actually doing.;
-                           RUS=Определяет, ЧЕМ ЗАНЯТ ВИНОВНИК: последний документ, который тронула его собственная транзакция, - из отметки контекста. Вопрос это другой, чем у соседней колонки: спор идёт за одну строку, а виновник трогает много, - и когда ответы расходятся, именно здесь видно, над чем человек работает на самом деле.];
+                ToolTipML=[ENU=Specifies what the CULPRIT is busy with: the last document its own transaction touched, taken from the context mark. A different question from the Document No. column - the fight is over one row, and a culprit touches many.;
+                           RUS=Определяет, ЧЕМ ЗАНЯТ ВИНОВНИК: последний документ, который тронула его собственная транзакция, - из отметки контекста. Вопрос это другой, чем у колонки "Документ": спор идёт за одну строку, а виновник трогает много.];
                 ApplicationArea=#All;
                 SourceExpr="Culprit Document No." }
 
     { 12  ;2   ;Field     ;
                 Name=UserName;
-                ToolTipML=[ENU=Specifies the account behind the victim. Empty is not a failure: without the platform switch the tool names the operation, not the person, and it does not pretend otherwise.;
-                           RUS=Определяет учётную запись жертвы. Пусто - не сбой: без соответствующей настройки платформы инструмент называет операцию, а не человека, и не притворяется, что может иначе.];
+                ToolTipML=[ENU=Specifies the account behind the culprit. Empty is not a failure: without the platform switch the tool names the operation, not the person, and it does not pretend otherwise. The column after this one says which road the name came by.;
+                           RUS=Определяет учётную запись виновника. Пусто - не сбой: без соответствующей настройки платформы инструмент называет операцию, а не человека, и не притворяется, что может иначе. Следующая колонка говорит, какой дорогой имя пришло.];
                 ApplicationArea=#All;
                 SourceExpr="User Name" }
+
+    { 66  ;2   ;Field     ;
+                Name=UserSource;
+                ToolTipML=[ENU=Specifies which road named the user. The source is named together with the name on purpose: a name without its source cannot be argued with, and an empty cell here says that nobody named anybody.;
+                           RUS=Определяет, какая дорога назвала пользователя. Источник назван вместе с именем нарочно: имя без источника нечем оспорить, а пустая клетка здесь говорит, что имя не назвал никто.];
+                ApplicationArea=#All;
+                SourceExpr="User Source" }
 
     { 55  ;2   ;Field     ;
                 Name=VictimUserName;
@@ -391,8 +428,8 @@ OBJECT Page 110231 LockWatch Episodes
 
     { 57  ;2   ;Field     ;
                 Name=BlockerLogin;
-                ToolTipML=[ENU=Specifies the SQL login of the session holding the lock. For an outside connection - a utility, a job, somebody's SSMS - this is the only answer to "who" there is, because only a NAV session lays down a context mark. For a NAV session it is the service account and names nobody.;
-                           RUS=Определяет логин SQL сеанса, который держит блокировку. Для чужого соединения - утилиты, задания, чьего-то SSMS - это единственный возможный ответ на вопрос "кто": отметку контекста кладёт только сессия NAV. Для сессии NAV здесь учётная запись службы, и она не называет никого.];
+                ToolTipML=[ENU=Specifies the SQL login of the session holding the lock. For an outside connection - a utility, a job, somebody's query window - it is the only answer to who there is. For a NAV session it is the service account and names nobody.;
+                           RUS=Определяет логин SQL сеанса, который держит блокировку. Для чужого соединения - утилиты, задания, чьего-то окна запросов - это единственный возможный ответ на вопрос "кто". Для сессии NAV здесь учётная запись службы, и она не называет никого.];
                 ApplicationArea=#All;
                 SourceExpr="Blocker Login" }
 

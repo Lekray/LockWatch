@@ -25,7 +25,7 @@ OBJECT Table 110238 LockWatch Episode History
                                                    OptionCaptionML=[ENU=Unknown,Yes,No;
                                                                     RUS=Не опознана,Да,Нет];
                                                    OptionString=Unknown,Yes,No }
-    { 13  ;   ;Victim Host         ;Text80        ;CaptionML=[ENU=Victim Host;
+    { 13  ;   ;Victim Host         ;Text128       ;CaptionML=[ENU=Victim Host;
                                                               RUS=Жертва, машина] }
     { 14  ;   ;Victim Process Id   ;Integer       ;CaptionML=[ENU=Victim Process Id;
                                                               RUS=Жертва, процесс] }
@@ -53,7 +53,7 @@ OBJECT Table 110238 LockWatch Episode History
                                                               RUS=Номер базы] }
     { 33  ;   ;Held Mode           ;Code10        ;CaptionML=[ENU=Held Mode;
                                                               RUS=Режим держимой блокировки] }
-    { 34  ;   ;Wait Type           ;Code30        ;CaptionML=[ENU=Wait Type;
+    { 34  ;   ;Wait Type           ;Code60        ;CaptionML=[ENU=Wait Type;
                                                               RUS=Чего ждёт жертва] }
     { 35  ;   ;SQL Object Name     ;Text250       ;CaptionML=[ENU=SQL Object Name;
                                                               RUS=Имя объекта SQL] }
@@ -121,12 +121,13 @@ OBJECT Table 110238 LockWatch Episode History
     { 64  ;   ;Blocker Login       ;Text128       ;CaptionML=[ENU=Blocker SQL Login;
                                                               RUS=Логин SQL виновника];
                                                    Editable=No }
-    { 65  ;   ;Blocker Host        ;Text80        ;CaptionML=[ENU=Blocker Host;
+    { 65  ;   ;Blocker Host        ;Text128       ;CaptionML=[ENU=Blocker Host;
                                                               RUS=Узел виновника];
                                                    Editable=No }
     { 66  ;   ;Blocker Program     ;Text128       ;CaptionML=[ENU=Blocker Program;
                                                               RUS=Программа виновника];
-                                                   Editable=No }    { 67  ;   ;Victim Login        ;Text128       ;CaptionML=[ENU=Victim SQL Login;
+                                                   Editable=No }
+    { 67  ;   ;Victim Login        ;Text128       ;CaptionML=[ENU=Victim SQL Login;
                                                               RUS=Логин SQL жертвы];
                                                    Editable=No }
     { 68  ;   ;Victim Program      ;Text128       ;CaptionML=[ENU=Victim Program;
@@ -156,9 +157,6 @@ OBJECT Table 110238 LockWatch Episode History
     {    ;Entry No.                               ;Clustered=Yes }
     {    ;Started At                               }
     {    ;NAV Table Name,Started At                }
-    {    ;User Name,Started At                     }
-    {    ;Document No.,Started At                  }
-    {    ;Deadlock Id                              }
   }
   FIELDGROUPS
   {
@@ -186,8 +184,16 @@ OBJECT Table 110238 LockWatch Episode History
           чистят ЖУРНАЛ, потому что им нужна чистая доска; истории они не касаются
           вовсе. Признак в общей таблице такой защиты не даёт: DELETE сносит и его.
         - Читают их по-разному. Журнал смотрят, чтобы понять, что происходит СЕЙЧАС;
-          историю - чтобы понять, что было и повторяется ли. Ключи здесь другие: по
-          времени, по таблице, по человеку, по документу.
+          историю - чтобы понять, что было и повторяется ли. Ключей поэтому три: сквозной
+          номер, по которому строка находится и переезжает, время начала - порядок обоих
+          экранов, и пара "таблица плюс время", по которой свод и охват складывают историю.
+
+      Ключи по человеку, по документу и по отпечатку графа сняты, и вот довод. Ни одного
+      SETCURRENTKEY по ним не было ни в одном объекте, ни одна страница этими порядками не
+      ходила: по человеку и по документу строки здесь не ищут (искать их надо в журнале,
+      пока эпизод свеж), а отпечаток графа нужен только ЖУРНАЛУ - там по нему отсеиваются
+      повторы одного и того же графа. А каждый вторичный ключ - это ещё одна запись на
+      каждой вставке истории, то есть плата за порядок, которым никто не ходит.
 
       Список полей списан с журнала слово в слово, и расхождение ловится проверкой в
       обкатке: два списка сверяются номер за номером, и добавленное в журнал поле, забытое

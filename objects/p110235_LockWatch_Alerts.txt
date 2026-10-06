@@ -19,11 +19,27 @@ OBJECT Page 110235 LockWatch Alerts
     SourceTableView=SORTING(Raised At)
                     ORDER(Descending);
     PageType=List;
+    RefreshOnActivate=Yes;
     ActionList=ACTIONS
     {
       { 20      ;    ;ActionContainer;
                       Name=AlertActions;
                       ActionContainerType=ActionItems }
+      { 25      ;1   ;Action    ;
+                      Name=Refresh;
+                      CaptionML=[ENU=Refresh;
+                                 RUS=Обновить];
+                      ToolTipML=[ENU=Read the alerts again and recount what is shown. The background pass raises and confirms them on its own, and this page notices none of that by itself.;
+                                 RUS=Перечитать тревоги и пересчитать показанное. Фоновый проход сам их поднимает и сам подтверждает, и сама страница об этом не узнаёт.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Refresh;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
       { 21      ;1   ;Action    ;
                       Name=ShowEpisode;
                       CaptionML=[ENU=Episode;
@@ -70,8 +86,8 @@ OBJECT Page 110235 LockWatch Alerts
                       Name=PurgeShown;
                       CaptionML=[ENU=Delete What Is Shown;
                                  RUS=Удалить показанное];
-                      ToolTipML=[ENU=Delete exactly the alerts this list is showing right now. The background pass never clears alerts: an alert is the record that a message went out, and erasing it would sign off on someone else's talk with monitoring. So a person presses this, and the count is named before the question.;
-                                 RUS=Удалить ровно те тревоги, которые список показывает сейчас. Фоном тревоги не чистятся никогда: тревога - запись о том, что наружу ушло сообщение, и стереть её значит расписаться за чужой разговор с мониторингом. Поэтому жмёт это человек, и число называется до вопроса.];
+                      ToolTipML=[ENU=Delete the alerts this list is showing right now. The background pass never clears alerts: an alert is the record that a message went out, and erasing it would sign off on someone else's talk with monitoring. The press is a person's, and the count comes first.;
+                                 RUS=Удалить тревоги, которые список показывает сейчас. Фоном они не чистятся никогда: тревога - запись об ушедшем наружу сообщении, и стереть её значит расписаться за чужой разговор с мониторингом. Жмёт её человек, и число называется до вопроса.];
                       ApplicationArea=#All;
                       Image=Delete;
                       PromotedCategory=Process;
@@ -193,13 +209,16 @@ OBJECT Page 110235 LockWatch Alerts
       NothingShownTxt@1000000000 : TextConst 'ENU=The list is showing nothing, so there is nothing to delete.;RUS=Список сейчас ничего не показывает, значит и удалять нечего.';
       ConfirmPurgeTxt@1000000001 : TextConst 'ENU=Delete %1 alerts? This is exactly what the list is showing right now, and the messages that already went out stay out.;RUS=Удалить %1 тревог? Это ровно то, что список показывает сейчас, а ушедшие наружу сообщения останутся ушедшими.';
       PurgedTxt@1000000002 : TextConst 'ENU=Deleted alerts: %1.;RUS=Удалено тревог: %1.';
+      EpisodeGoneErr@1000000003 : TextConst 'ENU=The episode of this alert is no longer in the journal: it has either moved to history or been dropped as too short, and the alert knows nothing of that - a person has to clean alerts up. Look in history by the same head of the chain.;RUS=Эпизода этой тревоги в журнале больше нет: он либо переехал в историю, либо выброшен как слишком короткий, и тревога об этом не знает - тревоги убирает человек. Поищите его в истории по той же голове цепочки.';
 
     LOCAL PROCEDURE ShowEpisode@1();
     VAR
       Episode@1000000000 : Record 110231;
     BEGIN
+      // Молчание тут читалось бы как "эпизод пропал", а он не пропал: тревога живёт своим
+      // сроком и переезда эпизода в историю не замечает. Причина называется словами.
       IF NOT Episode.GET("Episode Entry No.") THEN
-        EXIT;
+        ERROR(EpisodeGoneErr);
       Episode.SETRECFILTER;
       PAGE.RUN(PAGE::"LockWatch Episodes",Episode);
     END;

@@ -33,6 +33,20 @@ OBJECT Page 110230 LockWatch Setup
       { 40      ;    ;ActionContainer;
                       Name=WatchActions;
                       ActionContainerType=ActionItems }
+      { 47      ;1   ;Action    ;
+                      Name=RefreshState;
+                      CaptionML=[ENU=Refresh;
+                                 RUS=Обновить];
+                      ToolTipML=[ENU=Read the watchdog state again and recount the numbers shown. The background pass writes them, and a card page recounts them by itself only when the focus leaves it and comes back.;
+                                 RUS=Перечитать состояние сторожа и пересчитать показанные числа. Пишет их фоновый проход, а карточка сама пересчитывает их только тогда, когда фокус уходит с неё и возвращается.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Image=Refresh;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
       { 41      ;1   ;Action    ;
                       Name=StartWatch;
                       CaptionML=[ENU=Start;
@@ -166,8 +180,8 @@ OBJECT Page 110230 LockWatch Setup
                 Name=ScheduledTasks;
                 CaptionML=[ENU=Scheduled Tasks;
                            RUS=Запланированных задач];
-                ToolTipML=[ENU=Specifies how many passes are queued in the task scheduler. One is right. Zero with the watch enabled means the chain broke. More than one means two watches would be closing each other episodes. One does not promise the passes happen - a queued task on an instance with the task scheduler off never runs, and the line below says so.;
-                           RUS=Определяет, сколько проходов стоит в планировщике. Правильно - один. Ноль при включённом стороже означает, что цепочка оборвалась. Больше одного - что два наблюдателя закрывают эпизоды друг другу. Одна задача не обещает, что проходы идут: при выключенном планировщике экземпляра она стоит в очереди и не исполняется, и об этом говорит строка ниже.];
+                ToolTipML=[ENU=Specifies how many passes are queued in the task scheduler. One is right. Zero with the watch enabled means the chain broke. More than one means two watches closing each other episodes. A queued task is not a promise that passes run.;
+                           RUS=Определяет, сколько проходов стоит в планировщике. Правильно - один. Ноль при включённом стороже означает, что цепочка оборвалась. Больше одного - что два наблюдателя закрывают эпизоды друг другу. Стоящая задача не обещает, что проходы идут.];
                 ApplicationArea=#All;
                 Editable=FALSE;
                 SourceExpr=ScheduledTasks }
@@ -195,8 +209,8 @@ OBJECT Page 110230 LockWatch Setup
 
     { 55  ;2   ;Field     ;
                 Name=JournalLanguageId;
-                ToolTipML=[ENU=Specifies the language in which the watch writes WORDS into the journal - advice, reasons and its own messages. The background task has no person behind it and no language of its own, so without this it writes in the language of the service. Switching the language in the client does not change what is already stored: the client shows a saved string, it does not build it again.;
-                           RUS=Определяет язык, на котором сторож пишет в журнал СЛОВА - подсказки, причины и свои сообщения. У фоновой задачи нет ни человека, ни его языка, и без этой настройки она пишет на языке службы. Переключение языка в клиенте уже записанное не меняет: клиент показывает сохранённую строку, а не собирает её заново.];
+                ToolTipML=[ENU=Specifies the language in which the watch writes WORDS into the journal - advice, reasons and messages of its own. A background task has no language of its own, so without this it writes in the language of the service. Switching the language in the client does not change what is stored.;
+                           RUS=Определяет язык, на котором сторож пишет в журнал СЛОВА - подсказки, причины и свои сообщения. У фоновой задачи нет своего языка, и без этой настройки она пишет на языке службы. Переключение языка в клиенте уже записанное не меняет.];
                 ApplicationArea=#All;
                 SourceExpr="Journal Language ID" }
 
@@ -226,8 +240,8 @@ OBJECT Page 110230 LockWatch Setup
                 Name=MaxRows;
                 CaptionML=[ENU=Max Rows per Pass;
                            RUS=Потолок строк за проход];
-                ToolTipML=[ENU=Specifies how many waiters one pass takes. When the queue is longer, the longest waits are kept and the pass is marked truncated.;
-                           RUS=Определяет, сколько ждущих берёт один проход. Если очередь длиннее, остаются самые долгие ожидания, а проход метится усечённым.];
+                ToolTipML=[ENU=Specifies how many waiters one pass takes. When the queue is longer, the longest waits are kept and the pass is marked truncated. Five hundred is the tool's own ceiling - the size of the chain arrays - and a higher value still cuts the queue there.;
+                           RUS=Определяет, сколько ждущих берёт один проход. Если очередь длиннее, остаются самые долгие ожидания, а проход метится усечённым. Пятьсот - собственный потолок инструмента, размер массивов цепочки, и большее значение всё равно обрежет очередь на нём.];
                 ApplicationArea=#All;
                 SourceExpr="Max Rows per Pass" }
 
@@ -253,8 +267,8 @@ OBJECT Page 110230 LockWatch Setup
                 Name=HistoryThreshold;
                 CaptionML=[ENU=Wait worth keeping in history (ms);
                            RUS=Какое ожидание стоит хранить в истории, мс];
-                ToolTipML=[ENU=Specifies how long an episode had to wait to be worth keeping. What is older than the term leaves the journal: episodes at or above this length MOVE to history, shorter ones are DELETED. History full of half-second episodes stops being history and becomes a second journal. Zero means no threshold - everything moves, as it did before this field existed.;
-                           RUS=Определяет, сколько эпизод должен был ждать, чтобы его стоило хранить. Из журнала уезжает то, что старше срока: эпизоды не короче этого ожидания ПЕРЕЕЗЖАЮТ в историю, остальные УДАЛЯЮТСЯ. История, набитая эпизодами по полсекунды, перестаёт быть историей и становится вторым журналом. Ноль означает, что порога нет: уезжает всё, как было до появления этого поля.];
+                ToolTipML=[ENU=Specifies how long an episode had to wait to be worth keeping. When the term expires, episodes at or above this length MOVE to history and shorter ones are DELETED. History of half-second episodes is no longer history. Zero means no threshold: everything moves.;
+                           RUS=Определяет, сколько эпизод должен был ждать, чтобы его стоило хранить. По истечении срока эпизоды не короче этого ожидания ПЕРЕЕЗЖАЮТ в историю, а короткие УДАЛЯЮТСЯ. История из полусекундных эпизодов перестаёт быть историей. Ноль означает, что порога нет: уезжает всё.];
                 ApplicationArea=#All;
                 SourceExpr="History Threshold (ms)" }
 
@@ -285,8 +299,8 @@ OBJECT Page 110230 LockWatch Setup
 
     { 37  ;2   ;Field     ;
                 Name=CoverageEnabled;
-                ToolTipML=[ENU=Specifies whether the cumulative counters of the server are read into the coverage. They cost fractions of a millisecond and are the only thing that sees the waits shorter than the poll period. Switching this off does not make the journal fuller, it only makes it impossible to tell how full it is.;
-                           RUS=Определяет, читать ли накопительные счётчики сервера в охват. Стоят они доли миллисекунды и единственные видят ожидания короче периода опроса. Выключение не делает журнал полнее - оно только лишает возможности узнать, насколько он полон.];
+                ToolTipML=[ENU=Specifies whether the cumulative counters of the server are read into the coverage. They cost fractions of a millisecond and are the only thing that sees the waits shorter than the poll period. Switching this off does not make the journal fuller, it only hides how full it is.;
+                           RUS=Определяет, читать ли накопительные счётчики сервера в охват. Стоят они доли миллисекунды и единственные видят ожидания короче периода опроса. Выключение не делает журнал полнее - оно только скрывает, насколько он полон.];
                 ApplicationArea=#All;
                 SourceExpr="Coverage Enabled" }
 
@@ -306,15 +320,15 @@ OBJECT Page 110230 LockWatch Setup
 
     { 53  ;2   ;Field     ;
                 Name=PlatformNamesEnabled;
-                ToolTipML=[ENU=Specifies whether the tool may ask the platform for the name of the PERSON behind a lock. It costs a config change, an instance restart, both SQL rights and a permanent server-side event session that outlives the tool - so this is switched on by a decision, not by default.;
+                ToolTipML=[ENU=Specifies whether the tool may ask the platform for the name of the PERSON behind a lock. It costs a config change, an instance restart, both SQL rights and a permanent server session that outlives the tool - so it is switched on by a decision, not by default.;
                            RUS=Определяет, вправе ли инструмент спрашивать у платформы имя ЧЕЛОВЕКА за блокировкой. Стоит это правки конфига, перезапуска экземпляра, обоих прав SQL и постоянной серверной сессии, переживающей снятие инструмента, - поэтому включается решением, а не по умолчанию.];
                 ApplicationArea=#All;
                 SourceExpr="Platform Names Enabled" }
 
     { 54  ;2   ;Field     ;
                 Name=PlatformRoadStatus;
-                ToolTipML=[ENU=Specifies what the last check of the platform road had to say. The refusal of that road is invisible by itself - an empty screen looks the same on a healthy system and on a broken one - so the check asks for the rights, for the monitor session, and cross-checks an empty platform table against a non-empty server queue.;
-                           RUS=Определяет, что сказала последняя проверка дороги от платформы. Отказ этой дороги сам по себе невидим - пустой экран одинаков на здоровой системе и на сломанной, - поэтому проверка спрашивает права, сессию мониторинга и сверяет пустую штатную таблицу с непустой очередью сервера.];
+                ToolTipML=[ENU=Specifies what the last check of the platform road had to say. A refusal is invisible by itself - an empty screen looks the same on a healthy system and on a broken one - so the check asks for the rights and the monitor session, and cross-checks an empty platform table against the queue.;
+                           RUS=Определяет, что сказала последняя проверка дороги от платформы. Отказ сам по себе невидим - пустой экран одинаков на здоровой системе и на сломанной, - поэтому проверка спрашивает права и сессию мониторинга и сверяет пустую штатную таблицу с очередью.];
                 ApplicationArea=#All;
                 MultiLine=Yes;
                 Editable=FALSE;
@@ -324,8 +338,8 @@ OBJECT Page 110230 LockWatch Setup
                 Name=DemoEnabled;
                 CaptionML=[ENU=Demo Button Enabled;
                            RUS=Кнопка показа доступна];
-                ToolTipML=[ENU=Specifies whether the Demo button may raise a lock. Clear it and the button is not available. The demo holds a row of its own table for a few seconds on purpose, and where any deliberate wait on the server is a conversation with the security team, this is the switch that ends that conversation.;
-                           RUS=Определяет, вправе ли кнопка "Демо" поднимать блокировку. Снимите галку - и кнопка станет недоступна. Показ нарочно держит строку собственной таблицы несколько секунд, и там, где любое умышленное ожидание на сервере обсуждается со службой безопасности, кончается этот разговор снятой галкой.];
+                ToolTipML=[ENU=Specifies whether the Demo button may raise a lock. Clear it and the button is unavailable. The demo deliberately holds a row for a few seconds: where a deliberate wait on the server is agreed with the security team, this switch settles the question.;
+                           RUS=Определяет, вправе ли кнопка "Демо" поднимать блокировку. Снимите галку - кнопка станет недоступна. Показ нарочно держит строку несколько секунд: там, где умышленное ожидание на сервере согласуют со службой безопасности, эта галка снимает и вопрос.];
                 ApplicationArea=#All;
                 SourceExpr="Demo Enabled" }
 

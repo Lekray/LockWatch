@@ -25,7 +25,7 @@ OBJECT Table 110231 LockWatch Episode
                                                    OptionCaptionML=[ENU=Unknown,Yes,No;
                                                                     RUS=Не опознана,Да,Нет];
                                                    OptionString=Unknown,Yes,No }
-    { 13  ;   ;Victim Host         ;Text80        ;CaptionML=[ENU=Victim Host;
+    { 13  ;   ;Victim Host         ;Text128       ;CaptionML=[ENU=Victim Host;
                                                               RUS=Жертва, машина] }
     { 14  ;   ;Victim Process Id   ;Integer       ;CaptionML=[ENU=Victim Process Id;
                                                               RUS=Жертва, процесс] }
@@ -53,7 +53,7 @@ OBJECT Table 110231 LockWatch Episode
                                                               RUS=Номер базы] }
     { 33  ;   ;Held Mode           ;Code10        ;CaptionML=[ENU=Held Mode;
                                                               RUS=Режим держимой блокировки] }
-    { 34  ;   ;Wait Type           ;Code30        ;CaptionML=[ENU=Wait Type;
+    { 34  ;   ;Wait Type           ;Code60        ;CaptionML=[ENU=Wait Type;
                                                               RUS=Чего ждёт жертва] }
     { 35  ;   ;SQL Object Name     ;Text250       ;CaptionML=[ENU=SQL Object Name;
                                                               RUS=Имя объекта SQL] }
@@ -121,12 +121,13 @@ OBJECT Table 110231 LockWatch Episode
     { 64  ;   ;Blocker Login       ;Text128       ;CaptionML=[ENU=Blocker SQL Login;
                                                               RUS=Логин SQL виновника];
                                                    Editable=No }
-    { 65  ;   ;Blocker Host        ;Text80        ;CaptionML=[ENU=Blocker Host;
+    { 65  ;   ;Blocker Host        ;Text128       ;CaptionML=[ENU=Blocker Host;
                                                               RUS=Узел виновника];
                                                    Editable=No }
     { 66  ;   ;Blocker Program     ;Text128       ;CaptionML=[ENU=Blocker Program;
                                                               RUS=Программа виновника];
-                                                   Editable=No }    { 67  ;   ;Victim Login        ;Text128       ;CaptionML=[ENU=Victim SQL Login;
+                                                   Editable=No }
+    { 67  ;   ;Victim Login        ;Text128       ;CaptionML=[ENU=Victim SQL Login;
                                                               RUS=Логин SQL жертвы];
                                                    Editable=No }
     { 68  ;   ;Victim Program      ;Text128       ;CaptionML=[ENU=Victim Program;
@@ -191,6 +192,12 @@ OBJECT Table 110231 LockWatch Episode
       задача, поэтому спора за последнюю страницу индекса не возникает. У таблицы
       отметки контекста (110233), куда пишут все сессии сразу, ключ другой - по сеансу,
       и там строка своя у каждого.
+
+      Журнал, история и тревоги разделены по компаниям (DataPerCompany=Yes), и это тоже
+      осознанно: строка называет учётную запись, документ и таблицу компании, а общий
+      журнал показывал бы чужой компании чужие строки. Наблюдение при этом одно на БАЗУ -
+      см. настройку и состояние сторожа, - и заводить его надо ОДНОЙ задачей: вторая
+      цепочка пишет в ту же строку состояния и потому видна.
 
       Три поля названы честно и потому длинно:
         "Непосредственный блокирующий" - кого назвал SQL, а не кто виноват;

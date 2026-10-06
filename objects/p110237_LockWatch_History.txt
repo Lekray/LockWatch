@@ -157,10 +157,24 @@ OBJECT Page 110237 LockWatch Episode History
 
     { 10  ;2   ;Field     ;
                 Name=DocumentNo;
-                ToolTipML=[ENU=Specifies the document the fight was over. Empty is explained in the next column, not left silent.;
-                           RUS=Определяет документ, за который шёл спор. Пустота объясняется соседней колонкой, а не оставляется молчанием.];
+                ToolTipML=[ENU=Specifies the document the fight was over. The next column names the road that answered, and the one after it explains an empty cell instead of leaving it silent.;
+                           RUS=Определяет документ, за который шёл спор. Следующая колонка называет ответившую дорогу, а за ней стоит причина пустой клетки, а не молчание.];
                 ApplicationArea=#All;
                 SourceExpr="Document No." }
+
+    { 54  ;2   ;Field     ;
+                Name=DocumentSource;
+                ToolTipML=[ENU=Specifies which road named the document. The source is named together with the document on purpose: a name without its source cannot be argued with, and a document of the wrong road looks exactly as convincing as the right one.;
+                           RUS=Определяет, какая дорога назвала документ. Источник назван вместе с документом нарочно: имя без источника нечем оспорить, а документ не с той дороги выглядит ровно так же убедительно, как свой.];
+                ApplicationArea=#All;
+                SourceExpr="Document Source" }
+
+    { 11  ;2   ;Field     ;
+                Name=NoDocumentReason;
+                ToolTipML=[ENU=Specifies why the document could not be named. An empty column without a reason reads as an episode without people and documents, and that is a different thing.;
+                           RUS=Определяет, почему документ назвать не удалось. Пустая колонка без причины читается как эпизод без людей и документов, а это другое.];
+                ApplicationArea=#All;
+                SourceExpr="No Document Reason" }
 
     { 50  ;2   ;Field     ;
                 Name=CulpritDocumentNo;
@@ -169,19 +183,19 @@ OBJECT Page 110237 LockWatch Episode History
                 ApplicationArea=#All;
                 SourceExpr="Culprit Document No." }
 
-    { 11  ;2   ;Field     ;
-                Name=NoDocumentReason;
-                ToolTipML=[ENU=Specifies why the document could not be named.;
-                           RUS=Определяет, почему документ назвать не удалось.];
-                ApplicationArea=#All;
-                SourceExpr="No Document Reason" }
-
     { 12  ;2   ;Field     ;
                 Name=UserName;
-                ToolTipML=[ENU=Specifies the NAV account behind the culprit. It comes from the context mark, and only a NAV session lays one down.;
-                           RUS=Определяет учётную запись NAV за виновником. Приходит она из отметки контекста, а отметку кладёт только сессия NAV.];
+                ToolTipML=[ENU=Specifies the NAV account behind the culprit. It comes from the context mark, and only a NAV session lays one down. The column after this one names the road the name came by.;
+                           RUS=Определяет учётную запись NAV за виновником. Приходит она из отметки контекста, а отметку кладёт только сессия NAV. Следующая колонка называет дорогу, которой имя пришло.];
                 ApplicationArea=#All;
                 SourceExpr="User Name" }
+
+    { 53  ;2   ;Field     ;
+                Name=UserSource;
+                ToolTipML=[ENU=Specifies which road named the user. The source is named together with the name on purpose: a name without its source cannot be argued with, and an empty cell here says that nobody named anybody.;
+                           RUS=Определяет, какая дорога назвала пользователя. Источник назван вместе с именем нарочно: имя без источника нечем оспорить, а пустая клетка здесь говорит, что имя не назвал никто.];
+                ApplicationArea=#All;
+                SourceExpr="User Source" }
 
     { 13  ;2   ;Field     ;
                 Name=VictimUserName;
