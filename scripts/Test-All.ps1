@@ -85,6 +85,12 @@ $pwshExe = (Get-Process -Id $PID).Path
 # запасом на холодный старт службы. Перешагнувший этот предел прогон не медленный, а мёртвый.
 function RunDeadlineSeconds { 12 * 60 }
 
+# Срок ЗАПРОСА у sqlcmd: -l ограничивает только вход. Запрос, вставший за чужим замком, без
+# него висит сколько угодно, и уборка сметы не кончилась бы никогда - а она обязана кончиться
+# при любом исходе. Две минуты: дольше всех тут идёт не запрос (обновление одной строки
+# настройки), а прогон, и на прогон у сметы свой счёт.
+function QueryTimeoutSeconds { 120 }
+
 function Read-Shared([string]$path) {
     # Файл пишет ДРУГОЙ процесс, и открывать его надо с общим доступом: обычное чтение
     # спорит с пишущим и падает отказом в самый неудобный миг - посреди чужого прогона.
@@ -119,7 +125,10 @@ function Stop-Tree([int]$id) {
 $runs = @(
     @{
         Name = 'onstand'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 55; Critical = $true; WithInstance = $true
+        # 57 = 31 разбор без базы (Codeunit 110231) + 22 мерный прогон журнала (110233)
+        # + 4 завод набора разрешений (110247). Обкатки печатают итог сами, и смета
+        # складывает их строки - значит число тут обязано следовать за ними.
+        Checks = 57; Critical = $true; WithInstance = $true
         Why = 'выкладка первой: всё дальнейшее меряет то, что она положила на стенд'
         What = 'сборка пакета, выкладка компилятором, разбор без базы, мерный прогон журнала'
     }
@@ -168,7 +177,7 @@ $runs = @(
     }
     @{
         Name = 'demo'; Script = 'Test-Demo.ps1'; Extra = @()
-        Checks = 4; WithInstance = $true
+        Checks = 5; WithInstance = $true
         Why = 'показывает сторожа и потому идёт сразу за ним: без заведённого сторожа показ отказывается работать'
         What = 'кнопка показа поднимает настоящее ожидание, а снятая галка запрещает сам показ, а не только кнопку'
     }
@@ -204,7 +213,7 @@ $runs = @(
     }
     @{
         Name = 'redeploy'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 55; WithInstance = $true
+        Checks = 57; WithInstance = $true
         Why = 'возвращает стенд в рабочее состояние - и это же второй замер: выкладка на ОЧИЩЕННУЮ базу'
         What = 'повторная выкладка на базу, с которой инструмент только что сняли'
     }
@@ -223,6 +232,24 @@ foreach ($name in @($Only) + @($Skip)) {
     if ($name -notin $known) { Fail "прогона с именем '$name' нет. Есть: $($known -join ', ')" }
 }
 
+# Набор, который и вправду пойдёт. Спрашивается он ДО первого прогона, потому что в уборке
+# решается, возвращать ли инструмент на стенд, - а к тому времени смета уже может быть
+# оборвана, и спрашивать будет не у кого.
+$redeployRun   = $runs | Where-Object { $_.Name -eq 'redeploy' }
+$planned       = @($runs | Where-Object { (($Only.Count -eq 0) -or ($_.Name -in $Only)) -and ($_.Name -notin $Skip) })
+$needsRedeploy = @($planned | Where-Object { $_.Name -eq 'redeploy' }).Count -gt 0
+
+# Снятие инструмента без возврата оставляет стенд пустым: мерить после него нечего, пока не
+# выложишь заново. Смета в таком составе кончается на снятии, и человек уходит, не зная, что
+# стенд остался без инструмента, - снятие выглядит пройденной проверкой. Пара эта отсекается
+# ЗДЕСЬ, до единого прогона: отказ после снятия был бы отказом по факту, а не упреждением.
+# Кому нужно снять и не возвращать - того ждёт Uninstall-LockWatch.ps1: это работа, а не смета.
+if (-not $needsRedeploy -and @($planned | Where-Object { $_.Name -eq 'uninstall' }).Count -gt 0) {
+    Fail ('в наборе есть uninstall, но нет redeploy: смета сняла бы инструмент и не вернула его. ' +
+          'Возьмите -Only с обоими именами (uninstall,redeploy) либо уберите uninstall из -Skip; ' +
+          'одиночное снятие - дело Uninstall-LockWatch.ps1, и оно там же описано')
+}
+
 # Служба поднимается ОДИН раз на всю смету. Каждый прогон умеет поднять её сам, но платит
 # за это холодным стартом: первый вход после запуска молча собирает business assemblies,
 # и на полном наборе объектов это минуты. Десять холодных стартов подряд - это не проверка
@@ -234,31 +261,12 @@ if ((Get-Service $service -ErrorAction SilentlyContinue) -and (Get-Service $serv
     $startedByUs = $true
 }
 
-$results = @()
-$notRun  = @()
-$stopped = $false
-
-foreach ($run in $runs) {
-    $index = "[$($results.Count + $notRun.Count + 1)/$($runs.Count)]"
-
-    if ($stopped) {
-        $notRun += @{ Name = $run.Name; Reason = 'смета оборвана: не встала выкладка'; Gap = $true }
-        continue
-    }
-    if (($Only.Count -gt 0) -and ($run.Name -notin $Only)) {
-        $notRun += @{ Name = $run.Name; Reason = 'не выбран ключом -Only'; Gap = $false }
-        continue
-    }
-    if ($run.Name -in $Skip) {
-        $notRun += @{ Name = $run.Name; Reason = 'снят ключом -Skip'; Gap = $false }
-        continue
-    }
-    $missing = @($run.Needs | Where-Object { $_ -and -not [Environment]::GetEnvironmentVariable($_) })
-    if ($missing.Count -gt 0) {
-        $notRun += @{ Name = $run.Name; Reason = "не задано: $($missing -join ', ')"; Gap = $true }
-        continue
-    }
-
+# Ход одного прогона: отдельный процесс, крайний срок и разбор отчёта. Отдельной функцией
+# это затем, что в уборке сметы тот же самый ход нужен ещё раз: возврат инструмента на
+# стенд - это ТОТ ЖЕ прогон Test-OnStand, и второй копии его в смете быть не должно.
+# Имя файла журнала помечается меткой захода: у повторного он свой, иначе затёр бы отчёт
+# того захода, чей обрыв и заставил его повторить.
+function Invoke-PlanRun([hashtable]$run, [string]$index, [string]$logTag = '') {
     Write-Host ''
     Write-Host "$index $($run.Name) - $($run.What)" -ForegroundColor Cyan
     Write-Host "        порядок: $($run.Why)" -ForegroundColor DarkGray
@@ -270,7 +278,7 @@ foreach ($run in $runs) {
     # Ключ -StopInstance дочерним прогонам не передаётся никогда: службу гасит смета и
     # только в самом конце. Прогон, погасивший её посередине, заставил бы следующий
     # заплатить холодным стартом - и замер цены прохода стал бы замером разогрева.
-    $log = Join-Path $outDir "all-$($run.Name).log"
+    $log = Join-Path $outDir "all-$($run.Name)$logTag.log"
     $errLog = "$log.err"
     Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
 
@@ -328,47 +336,113 @@ foreach ($run in $runs) {
     }
     elseif ($sumTotal -gt $run.Checks) { $note = "проверок стало больше ($sumTotal против $($run.Checks)) - обнови ведомость" }
 
-    $results += @{
+    return @{
         Name = $run.Name; Ok = $ok; Passed = $sumPassed; Total = $sumTotal
-        Expected = $run.Checks; Spent = $spent; Note = $note
+        Expected = $run.Checks; Spent = $spent; Note = $note; Hung = $hung
+        # Строки итога: по ним уборка отличает прогон, который ОТВЕТИЛ (пусть и отказом), от
+        # прогона сорванного. Ответивший сказал о себе всё, и повторять его нечего; сорванный
+        # не сказал ничего, и что стало со стендом - неизвестно.
+        Lines = $lines
     }
+}
 
-    if ($ok) {
-        Write-Host "$index $($run.Name): пройдено $sumPassed из $sumTotal" -ForegroundColor Green
-    } else {
-        Write-Host "$index $($run.Name): ПРОВАЛ - $note" -ForegroundColor Red
-        if ($run.Critical) {
-            $stopped = $true
-            Write-Host 'Смета обрывается: без выкладки всё дальнейшее меряло бы вчерашние объекты' -ForegroundColor Red
+$results = @()
+$notRun  = @()
+$stopped = $false
+# Исход повторной выкладки: дошла ли она до ответа и чем кончилась. Если она в наборе и
+# ответа не дала, инструмент возвращает на стенд уборка сметы - и это единственное место,
+# где он вернётся: следующий прогон сметы начнётся с того, что снимет его снова.
+$redeployVerdict = $false
+$redeployOk = $false
+
+# Уборка сметы - в finally, и это не украшение. Всё, что выше, работает как раз тогда, когда
+# смета идёт НЕ так: не встала выкладка - дальше всё меряет вчерашнее; прогон снят по сроку -
+# стенд остался как есть; нажат Ctrl+C - у сметы конец один, а состояние у стенда разное. Два
+# дела принадлежат смете, а не человеку, и оба нужны именно в этих заходах: вернуть инструмент
+# на стенд, если набор его снимал и не выложил заново, и вернуть в настройку имя сервера SQL,
+# которое снятие стирает вместе со строкой. Без уборки они не делались ровно тогда, когда были
+# нужны единственный раз.
+try {
+    foreach ($run in $runs) {
+        $index = "[$($results.Count + $notRun.Count + 1)/$($runs.Count)]"
+
+        if ($stopped) {
+            $notRun += @{ Name = $run.Name; Reason = 'смета оборвана: не встала выкладка'; Gap = $true }
+            continue
+        }
+        if (($Only.Count -gt 0) -and ($run.Name -notin $Only)) {
+            $notRun += @{ Name = $run.Name; Reason = 'не выбран ключом -Only'; Gap = $false }
+            continue
+        }
+        if ($run.Name -in $Skip) {
+            $notRun += @{ Name = $run.Name; Reason = 'снят ключом -Skip'; Gap = $false }
+            continue
+        }
+        $missing = @($run.Needs | Where-Object { $_ -and -not [Environment]::GetEnvironmentVariable($_) })
+        if ($missing.Count -gt 0) {
+            $notRun += @{ Name = $run.Name; Reason = "не задано: $($missing -join ', ')"; Gap = $true }
+            continue
+        }
+
+        $res = Invoke-PlanRun $run $index
+        $results += $res
+        if (($run.Name -eq 'redeploy') -and (-not $res.Hung) -and ($res.Lines -gt 0)) {
+            $redeployVerdict = $true
+            $redeployOk = $res.Ok
+        }
+
+        if ($res.Ok) {
+            Write-Host "$index $($run.Name): пройдено $($res.Passed) из $($res.Total)" -ForegroundColor Green
+        } else {
+            Write-Host "$index $($run.Name): ПРОВАЛ - $($res.Note)" -ForegroundColor Red
+            if ($run.Critical) {
+                $stopped = $true
+                Write-Host 'Смета обрывается: без выкладки всё дальнейшее меряло бы вчерашние объекты' -ForegroundColor Red
+            }
         }
     }
 }
-
-# Снятие инструмента сносит таблицу настройки вместе с остальными, а повторная выкладка
-# заводит её ЗАВОДСКОЙ: без имени сервера SQL каждый следующий проход падает, и стенд
-# остаётся с включённым, но неработающим сторожем. Заметить это по зелёной смете нельзя -
-# все прогоны выставляют имя сервера себе сами, а последний оставляет его пустым.
-#
-# Возвращается ровно то, что зависит от СРЕДЫ и чего в объектах нет: имя сервера. Остальное
-# у заводской настройки правильное, и подставлять сюда чужие значения не наше дело.
-if ($results.Count -gt 0) {
-    $back = & sqlcmd -S $Server -d $Database -E -b -h -1 -W -Q `
-        "SET NOCOUNT ON; UPDATE [dbo].[$Company`$LockWatch Setup] SET [SQL Server] = N'$Server'; SELECT @@ROWCOUNT;" 2>&1
-    if ($LASTEXITCODE -eq 0) {
+finally {
+    # Уборка сметы. Делается при ЛЮБОМ исходе - и когда смета дошла до конца, и когда
+    # оборвалась; ради второго она тут и стоит.
+    if ($needsRedeploy -and -not $redeployVerdict) {
         Write-Host ''
-        Write-Host "Стенду возвращено имя сервера SQL в настройке (строк: $(($back -join '').Trim()))"
-        Write-Host 'Настройка после снятия и выкладки - заводская. Строку таблицы документа,'
-        Write-Host 'если она была, заводить заново: страница «Таблицы контекста».'
-    } else {
-        Write-Host ''
-        Write-Host 'ВНИМАНИЕ: имя сервера SQL в настройку вернуть не удалось - сторож не пойдёт' -ForegroundColor Yellow
+        Write-Host 'Смета не дошла до повторной выкладки - возвращаю инструмент на стенд' -ForegroundColor Yellow
+        $res = Invoke-PlanRun $redeployRun '[возврат]' '-recover'
+        $redeployOk = $res.Ok
     }
-}
+    if ($needsRedeploy -and -not $redeployOk) {
+        Write-Host ''
+        Write-Host 'ВНИМАНИЕ: инструмент на стенд не выложен - мерить на нём нечего, пока не выложишь' -ForegroundColor Yellow
+    }
 
-if ($startedByUs -and $StopInstance) {
-    Write-Host ''
-    Write-Host "Останавливаю службу $Instance - её подняла смета, ей и гасить"
-    Stop-Service $service -Force
+    # Снятие инструмента сносит таблицу настройки вместе с остальными, а повторная выкладка
+    # заводит её ЗАВОДСКОЙ: без имени сервера SQL каждый следующий проход падает, и стенд
+    # остаётся с включённым, но неработающим сторожем. Заметить это по зелёной смете нельзя -
+    # все прогоны выставляют имя сервера себе сами, а последний оставляет его пустым.
+    #
+    # Возвращается ровно то, что зависит от СРЕДЫ и чего в объектах нет: имя сервера. Остальное
+    # у заводской настройки правильное, и подставлять сюда чужие значения не наше дело.
+    if ($results.Count -gt 0) {
+        $back = & sqlcmd -S $Server -d $Database -E -b -l 30 -t (QueryTimeoutSeconds) -h -1 -W -Q `
+            "SET NOCOUNT ON; UPDATE [dbo].[LockWatch Setup] SET [SQL Server] = N'$Server'; SELECT @@ROWCOUNT;" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host ''
+            Write-Host "Стенду возвращено имя сервера SQL в настройке (строк: $(($back -join '').Trim()))"
+            Write-Host 'Настройка после снятия и выкладки - заводская. Строку таблицы документа,'
+            Write-Host 'если она была, заводить заново: страница «Таблицы контекста».'
+        } else {
+            Write-Host ''
+            Write-Host 'ВНИМАНИЕ: имя сервера SQL в настройку вернуть не удалось - сторож не пойдёт' -ForegroundColor Yellow
+        }
+    }
+
+    # Служба гасится в самом конце уборки: возврат инструмента без неё не обходится.
+    if ($startedByUs -and $StopInstance) {
+        Write-Host ''
+        Write-Host "Останавливаю службу $Instance - её подняла смета, ей и гасить"
+        Stop-Service $service -Force
+    }
 }
 
 $runsOk    = @($results | Where-Object { $_.Ok }).Count

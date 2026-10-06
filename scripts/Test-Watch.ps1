@@ -43,8 +43,9 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 
 $episode = "[$Company`$LockWatch Episode]"
 $history = "[$Company`$LockWatch Episode History]"
-$setup   = "[$Company`$LockWatch Setup]"
-$state   = "[$Company`$LockWatch Watchdog]"
+# Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
+$setup   = '[LockWatch Setup]'
+$state   = '[LockWatch Watchdog]'
 $mark    = "[$Company`$LockWatch Context Mark]"
 # Та же таблица, но именем, каким её пишет в журнал разбор: без компании и без скобок.
 # Спор в опыте идёт за неё, и спрашивать эпизод надо по ЭТОМУ имени.
@@ -52,12 +53,18 @@ $markName = 'LockWatch Context Mark'
 $tasks   = '[dbo].[Scheduled Task]'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
+# Срок ЗАПРОСА у sqlcmd. Без него запрос, вставший за чужим замком, висит сколько угодно:
+# -l ограничивает только вход, а не самый запрос. Опыт здесь держит замки нарочно, и
+# спрашивать очередную судьбу эпизода, стоя в ней же, - верный способ не кончить прогон
+# никогда. Две минуты: дольше всех тут ждёт не запрос, а опыт, и он ждёт своим счётом.
+function QueryTimeoutSeconds { 120 }
+
 function Invoke-Sql([string]$query) {
     # -w 500 обязателен: по умолчанию sqlcmd рвёт строку на 80 знаках, и длинное значение
     # приходит ДВУМЯ строками. Проверка, читающая первую, получает обрезок и судит по нему.
     # -b обязателен не меньше: без него sqlcmd возвращает НОЛЬ и на ошибке SQL, проверка
     # кода возврата проходит вхолостую, а запрос не выполнен вовсе.
-    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -w 500 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -t (QueryTimeoutSeconds) -w 500 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
     if ($LASTEXITCODE -ne 0) { Fail "SQL не выполнился: $($answer -join ' ')" }
     return ,@($answer | Where-Object { $_ -and ($_ -notmatch '^\(') })
 }
@@ -112,6 +119,10 @@ $movedSaid = ''
 $armProc = $null
 $stopProc = $null
 function Start-Sqlcmd([string]$name, [string]$sql) {
+    # Срок ЗАПРОСА здесь нарочно не ставится: эти соединения держат замок, а держателю
+    # положено ждать - в его скрипте стоит WAITFOR, и замок и есть то, ради чего он поднят.
+    # Оборвав его по сроку, прогон кончил бы опыт посреди окна и стал бы винить инструмент.
+    # Висящий держатель снимает уборка прогона: ради неё процессы и запомнены.
     $file = Join-Path $outDir $name
     [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
     Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList @(
@@ -340,6 +351,11 @@ function ShortEpisodeMs {
 # расходятся на секунды. Пять секунд перекрывают эту разницу, не пряча самой границы.
 function SilenceSlackSeconds { 5 }
 
+# Уборка за собой судится по факту, и её беды копятся здесь: в отчёт они обязаны попасть и
+# тогда, когда сцена оборвалась отказом, - больше о них сказать некому.
+$cleanupWarn = @()
+$cleanupFail = @()
+
 try {
     Write-Host 'Подготовка стенда'
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
@@ -356,10 +372,31 @@ try {
     # этот пережил бы прогон: следующие сцены сметы остались бы без своих эпизодов, а
     # покраснели бы три прогона, ни один из которых сторожа не касается. Ловилось это
     # 13.09.2026 и стоило целой сметы.
+    #
+    # Порогов в настройке ДВА, и они про разное: срок переезда в историю и порог тревоги.
+    # Пока имя было одно (здесь стояло $thresholdWas), второе затирало первое: уборка
+    # возвращала в [History Threshold (ms)] значение [Alert Threshold (ms)], и срок
+    # переезда 60000 превращался в 5000 - то есть следующий прогон мерил переезд не тем
+    # сроком, каким его завели. Переменных поэтому две, и каждая возвращает своё поле.
     $ceilingWas = Scalar "SELECT CONVERT(varchar(11),[Journal Rows Ceiling]) FROM $setup;"
-    $thresholdWas = Scalar "SELECT CONVERT(varchar(11),[History Threshold (ms)]) FROM $setup;"
+    $historyThresholdWas = Scalar "SELECT CONVERT(varchar(11),[History Threshold (ms)]) FROM $setup;"
+    $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
+    # Охват прогон ВКЛЮЧАЕТ, а не берёт готовым у предшественника, и это лечение измеренной
+    # беды. Отметку "охват считается с" ставит первый же проход, а на выключенном охвате её
+    # не ставит никто - проверка согласия часов краснела бы не по делу. Выключенным он при
+    # этом остаётся ЗАКОННО: прогон прохода возвращает охват найденным, и на установке с
+    # выключенным охватом он выключен и после него. Полагаться на соседа значило бы мерить
+    # то, чем кончил он, вместо того, что делает сторож.
+    $coverageWas = Scalar "SELECT CONVERT(varchar(2),[Coverage Enabled]) FROM $setup;"
+    # Пустая находка - это не ноль, а НЕЧИТАННАЯ строка. Поля ниже прогон правит прямо
+    # следом, и возвращать их в уборке будет нечем: молчание тут означало бы полную уборку,
+    # которой не было.
+    if (-not ($ceilingWas -and $historyThresholdWas -and $deadlocksWas -and $coverageWas)) {
+        $cleanupWarn += 'настройка прочиталась не вся - вернуть её поля в уборке нечем'
+    }
     Invoke-Sql @"
 UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0,
+       [Coverage Enabled] = 1,
        [History Threshold (ms)] = $(HistoryProbeMs),
        [Journal Rows Ceiling] = $(CeilingProbeRows);
 "@ | Out-Null
@@ -453,11 +490,11 @@ FROM $state;
     # Кэш прогревается НАРОЧНО: сцена спрашивает слово сторожа перед правкой. Без этого она
     # зависела бы от того, читал ли кто-то настройку в этой жизни службы.
     Ask-Method 'SayHealth' | Out-Null
-    $thresholdWas = Scalar "SELECT [Alert Threshold (ms)] FROM $setup;"
+    $alertThresholdWas = Scalar "SELECT [Alert Threshold (ms)] FROM $setup;"
     Invoke-Sql "UPDATE $setup SET [Alert Threshold (ms)] = $(ProbeThresholdMs);" | Out-Null
     $armAgain = Try-Method 'StartWatch'
     $thresholdNow = Scalar "SELECT [Alert Threshold (ms)] FROM $setup;"
-    Invoke-Sql "UPDATE $setup SET [Alert Threshold (ms)] = $thresholdWas;" | Out-Null
+    Invoke-Sql "UPDATE $setup SET [Alert Threshold (ms)] = $alertThresholdWas;" | Out-Null
     # Половины две, и порознь они пусты: завод, читающий кэш, падает - и первая краснеет; а
     # завод, прочитавший кэш и всё же записавший, вернул бы прежний порог - краснеет вторая.
     Check 'настройка, правленная мимо NAV, не ломает завод сторожа' `
@@ -703,6 +740,23 @@ SELECT CONVERT(varchar(11),@new);
 
     # Одного выключателя мало: уже поставленная задача проснулась бы и после "стоп".
     # Поэтому проверяем не намерение, а результат - что проходов больше НЕТ.
+    #
+    # Мерка эта краснела ЛОЖНО, и вот отчего: проход, начавшийся ДО остановки, дописывает
+    # свою отметку уже после неё, и окно, поставленное сразу за "стоп", засчитывало ЕГО как
+    # проход после остановки. Спросить, идёт ли проход сейчас, снаружи нечем, поэтому окно
+    # начинается с ТИШИНЫ: пока отметка двигается, идущий проход ещё не кончился, и мерить
+    # нечего. Тишина и есть тот миг, после которого всякое движение отметки - настоящий
+    # проход, а не хвост прежнего.
+    $quietFrom = LastPass
+    $settled = Wait-For {
+        $now = LastPass
+        if ($now -eq $quietFrom) { Start-Sleep -Seconds 5; return (LastPass) -eq $quietFrom }
+        $script:quietFrom = $now
+        return $false
+    } 30
+    if (-not $settled) {
+        Fail 'отметка последнего прохода не устоялась за 30 с - проходы не прекратились, и мерить окно нечем'
+    }
     $frozen = LastPass
     $moved = Wait-For { (LastPass) -ne $frozen } 15
     Check 'после остановки проходов больше нет' (-not $moved) `
@@ -852,18 +906,66 @@ finally {
     Stop-Sqlcmd $cover
     if ($armProc) { Stop-Sqlcmd $armProc.Process }
     if ($stopProc) { Stop-Sqlcmd $stopProc.Process }
-    $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode;"
-    $cleanup += " DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId;"
-    $cleanup += " UPDATE $setup SET [Enabled] = 0, [Deadlocks Enabled] = 1;"
-    # Потолок и порог возвращаются теми же, какими были: подставлять сюда заводские числа
-    # значило бы стереть настройку установки под видом уборки за собой.
+    # Журнал чистится ПО СВОЕМУ ПРИЗНАКУ, а не целиком: свой эпизод здесь тот, что про нашу
+    # таблицу отметок, - ровно так же его называет и сам прогон, спрашивая его судьбу.
+    # Чужие строки журнала - это чьи-то настоящие блокировки, и сметать их заодно со своим
+    # значило бы унести не своё: на стенде с чужой работой такое не повторить.
+    $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1;"
+    $cleanup += " DELETE FROM $episode WHERE [NAV Table Name] = N'$markName';"
+    # Задачи снимаются С КОМПАНИЕЙ. Тот же кодюнит в другой компании той же базы - это чужая
+    # цепочка, и DELETE без компании унёс бы её заодно со своей. Читающие запросы этого
+    # прогона компанию называют все до одного (TaskCount) - снятие обязано называть её тоже.
+    $cleanup += " DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';"
+    # Выключатель гасится НАРОЧНО: прогон кончается остановленным сторожем. А сбор
+    # взаимоблокировок и охват возвращаются НАЙДЕННЫМИ: прогон трогал их только на время
+    # опыта, и заводские числа здесь стирали бы настройку установки под видом уборки за собой.
+    $cleanup += " UPDATE $setup SET [Enabled] = 0;"
+    if ($deadlocksWas) { $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = $deadlocksWas;" }
+    if ($coverageWas)  { $cleanup += " UPDATE $setup SET [Coverage Enabled] = $coverageWas;" }
+    # Потолок, срок переезда и порог тревоги возвращаются теми же, какими были: подставлять
+    # сюда заводские числа значило бы стереть настройку установки под видом уборки за собой.
     if ($ceilingWas) { $cleanup += " UPDATE $setup SET [Journal Rows Ceiling] = $ceilingWas;" }
-    if ($thresholdWas) { $cleanup += " UPDATE $setup SET [History Threshold (ms)] = $thresholdWas;" }
+    if ($historyThresholdWas) { $cleanup += " UPDATE $setup SET [History Threshold (ms)] = $historyThresholdWas;" }
+    if ($alertThresholdWas) { $cleanup += " UPDATE $setup SET [Alert Threshold (ms)] = $alertThresholdWas;" }
     # Своя строка из истории уносится по НОМЕРУ, а не очисткой таблицы: история стенда -
     # это чужие настоящие эпизоды, и смести их заодно со своим было бы дороже, чем
     # оставить свой.
     if ($movedNo) { $cleanup += " DELETE FROM $history WHERE [Entry No_] = $movedNo;" }
-    & sqlcmd -S $Server -d $Database -E -l 30 -h -1 -Q $cleanup 2>&1 | Out-Null
+    # Уборка судится по ФАКТУ, а не по намерению. Ключ -b здесь обязателен: без него sqlcmd
+    # вернёт НОЛЬ и на ошибке, и провалившаяся уборка выглядела бы сделанной, а её беды
+    # переживают прогон - оставленная задача идёт сама и сыграет в чужом замере, оставленная
+    # отметка сыграет чужой строкой в следующем прогоне.
+    $cleanupSaid = & sqlcmd -S $Server -d $Database -E -b -l 30 -t (QueryTimeoutSeconds) -h -1 -W -Q $cleanup 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $cleanupFail += "уборка отказала: sqlcmd вернул $LASTEXITCODE, $(($cleanupSaid -join ' ').Trim())"
+    }
+    $leftMarks = [int](Scalar "SELECT COUNT(*) FROM $mark WHERE [Server Instance Id] = -1;")
+    $leftJournal = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [NAV Table Name] = N'$markName';")
+    if ($leftMarks -gt 0)   { $cleanupFail += "подложных отметок осталось $leftMarks" }
+    if ($leftJournal -gt 0) { $cleanupFail += "своих эпизодов в журнале осталось $leftJournal" }
+    if ((TaskCount) -gt 0)  { $cleanupFail += "задач сторожа осталось $(TaskCount) (компания $Company)" }
+    # Настройка спрашивается тем же счётом: возвращённая "почти" - это не возвращённая.
+    # Сверяется она, только если была ПРОЧИТАНА: пустая находка - это не ноль, а нечитанная
+    # строка, и сравнивать с ней нечего (прогон, не дошедший до чтения, и не менял ничего).
+    if ($ceilingWas -and $historyThresholdWas -and $alertThresholdWas -and $deadlocksWas -and $coverageWas) {
+        $backWas = "$ceilingWas|$historyThresholdWas|$alertThresholdWas|$deadlocksWas|$coverageWas"
+        $backNow = Scalar @"
+SELECT ISNULL(CONVERT(varchar(11),[Journal Rows Ceiling]),'') + '|' +
+       ISNULL(CONVERT(varchar(11),[History Threshold (ms)]),'') + '|' +
+       ISNULL(CONVERT(varchar(11),[Alert Threshold (ms)]),'') + '|' +
+       ISNULL(CONVERT(varchar(2),[Deadlocks Enabled]),'') + '|' +
+       ISNULL(CONVERT(varchar(2),[Coverage Enabled]),'')
+FROM $setup;
+"@
+        if ($backNow -ne $backWas) {
+            $cleanupWarn += "настройка возвращена не той, что была найдена: [$backNow] вместо [$backWas]"
+        }
+    }
+    if ($cleanupWarn -or $cleanupFail) {
+        Write-Host ''
+        Write-Host 'ВНИМАНИЕ: уборка за собой прошла не так, как задумано:' -ForegroundColor Yellow
+        ($cleanupWarn + $cleanupFail) | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+    }
     if ($StopInstance) { Stop-Service $service -Force }
 }
 
@@ -872,4 +974,7 @@ Write-Host "пройдено $passed из $total"
 Write-Host ''
 $report | ForEach-Object { Write-Host $_ }
 if ($passed -lt $total) { Fail 'фоновая задача проверку не прошла' }
+# Уборка - часть прогона, а не вежливость в конце: оставленная задача идёт сама и сыграет в
+# следующем замере, оставленная отметка сыграет чужой строкой.
+if ($cleanupFail) { Fail ("уборка за собой не обошлась:`n  " + ($cleanupFail -join "`n  ")) }
 Write-Host 'Готово: сторож заводится, идёт сам, ловит блокировку и умирает по кнопке' -ForegroundColor Green

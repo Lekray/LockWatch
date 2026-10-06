@@ -5,16 +5,20 @@
 
 .DESCRIPTION
     Отвечает на один вопрос: СОБИРАЕТСЯ ли то, что лежит в objects/, и ПРОХОДИТ ли обкатка.
-    Ни код возврата finsql, ни пустой лог импорта сами по себе ничего не доказывают -
-    поэтому вердикт снимается из базы: поле [Compiled] и сверка [Date]/[Time] с файлом.
+    Ни код возврата finsql, ни его лог сами по себе ничего не доказывают: удачная выкладка
+    лога не оставляет вовсе, а молча не сделанная даёт ноль и пустой лог - так выглядит
+    невидимое модальное окно. Оба читаются, и всякий отказ по ним останавливает сборку, но
+    вердикт снимается из базы: поле [Compiled] и сверка [Date]/[Time] с ПАКЕТОМ, в
+    OBJECT-PROPERTIES которого проставлен штамп этой сборки.
 
     Порядок:
       (a) собирает монолит из objects/ в порядке зависимостей Table -> Codeunit -> Report ->
-          Page -> XMLport -> Query -> MenuSuite и перекодирует его в cp866;
+          Page -> XMLport -> Query -> MenuSuite, проставляет в копию штамп сборки и
+          перекодирует её в cp866;
       (b) ПРОВЕРЯЕТ, что перекодировка обратима: cp1251 и UTF-8 ломают кириллицу молча,
           а потерянный символ обнаружится только в клиенте;
-      (c) импортирует и компилирует через finsql;
-      (d) доказывает импорт сверкой Date/Time из OBJECT-PROPERTIES с [dbo].[Object];
+      (c) импортирует и компилирует через finsql, читая и код возврата, и лог;
+      (d) доказывает импорт сверкой Date/Time ИЗ ПАКЕТА с [dbo].[Object];
       (e) сверяет число несобранных по ВСЕЙ базе с замером «до»: свой объект может
           собраться и при этом сломать зависимые;
       (f) при -Run поднимает экземпляр службы и гонит обкатку, которая судит сама.
@@ -138,12 +142,19 @@ if ($hasTables) {
     $navServerArgs = ",NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort"
 }
 
+# Срок ЗАПРОСА у sqlcmd. Без него запрос, вставший за чужим замком, висит сколько угодно:
+# -l ограничивает только вход, а не самый запрос, и прогон, дождавшийся чужой транзакции,
+# выглядит не сломанным, а думающим. Две минуты - это на порядки больше самого долгого
+# здешнего запроса (обход очереди - доли миллисекунды, счёт по всей базе - 0,6 мс), и всё же
+# величина конечная: всякий здешний отказ виден и разбирается быстрее.
+function QueryTimeoutSeconds { 120 }
+
 function Invoke-Sql([string]$query) {
     # -w 500 обязателен: по умолчанию sqlcmd рвёт строку на 80 знаках, и длинное значение
     # приходит ДВУМЯ строками. Проверка, читающая первую, получает обрезок и судит по нему.
     # -b обязателен не меньше: без него sqlcmd возвращает НОЛЬ и на ошибке SQL, проверка
     # кода возврата проходит вхолостую, а запрос не выполнен вовсе.
-    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -w 500 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
+    $answer = & sqlcmd -S $Server -d $Database -E -b -l 30 -t (QueryTimeoutSeconds) -w 500 -W -s '|' -h -1 -Q "SET NOCOUNT ON; $query" 2>&1
     if ($LASTEXITCODE -ne 0) { Fail "SQL не выполнился: $($answer -join ' ')" }
     # Запятая обязательна. Без неё PowerShell разворачивает массив из одной строки в скаляр,
     # и $row[0] берёт ПЕРВЫЙ СИМВОЛ строки: дата превращается в "0", а [int] от символа "2"
@@ -375,16 +386,32 @@ if ($permProblems) {
 }
 function Invoke-Finsql([string]$argLine, [string]$logName) {
     $log = Join-Path $outDir $logName
+    # Лог от прежнего захода читать нельзя: имя файла - это время вызова, и совпасть оно
+    # может (два вызова в одну секунду). Чужая ошибка, приписанная этому вызову, послала бы
+    # искать не там, а главное - выдала бы за ответ то, чего этот вызов не говорил.
+    if (Test-Path $log) { Remove-Item $log -Force }
     $navArgs = "ServerName=$Server,Database=$Database,NTAuthentication=1,LogFile=`"$log`""
     $process = Start-Process -FilePath $finsql -PassThru -NoNewWindow -ArgumentList "$argLine,$navArgs"
     if (-not $process.WaitForExit($TimeoutMinutes * 60000)) {
         $process.Kill()
         Fail "finsql завис дольше $TimeoutMinutes мин и снят. Обычная причина - невидимое модальное окно"
     }
+    # Код возврата читается затем же, зачем и лог. Сам он доказательством не является -
+    # молча не сделанная работа даёт ровно ноль, - но ГОВОРЯЩИЙ отказ пропустить нельзя.
+    $code = $process.ExitCode
     if (Test-Path $log) {
         $text = ([System.Text.Encoding]::GetEncoding(866).GetString([IO.File]::ReadAllBytes($log))).Trim()
-        if ($text) { Fail "finsql ($logName):`n$text$(Coordinates-Note $text)" }
+        if ($text) { Fail "finsql ($logName) вернул $code и оставил в логе:`n$text$(Coordinates-Note $text)" }
+        # Пустой лог - это тоже отказ, и вот почему. Ошибку finsql пишет В ЛОГ, и только её:
+        # удачный вызов лога не оставляет вовсе (в out/ нет ни одного лога от удачной
+        # выкладки, а все имеющиеся несут одну ошибку). Значит пустой файл лога - подпись
+        # вызова, который НЕ СДЕЛАЛ НИЧЕГО: так выглядит невидимое модальное окно. Ни
+        # сказать, что именно не сделано, ни отличить это от удачи по логу нечем - потому
+        # вердикт и снимается из базы (сверка штампа сборки ниже).
+        Fail ("finsql ($logName) вернул $code, а лог оставил ПУСТЫМ: вызов не сделал ничего. " +
+              'Невидимое модальное окно выглядит ровно так; сборка такого не пропускает.')
     }
+    if ($code -ne 0) { Fail "finsql ($logName) вернул код $code и лога не оставил - вызов не удался" }
 }
 
 function Coordinates-Note([string]$text) {
@@ -423,8 +450,11 @@ $sampleLost = 'The table changes were saved, but they contain schema changes tha
               'synchronized to the database with the Microsoft Dynamics NAV Server instance.' +
               'Contact your system administrator with the following information:' +
               'Server Name: Server Instance: Management Port: 0 -- Object: Table 110230'
-$samplePort = "Не удаётся обработать изменения таблицы`r`nИмя сервера: localhost`r`n" +
-              "Экземпляр сервера: DynamicsNAV110`r`nПорт управления: 9999"
+# Имена в образце ВЫДУМАНЫ и нарочно ни на что не похожи. Настоящего имени здесь быть не
+# должно ни в каком виде, а совпади оно с тем, что стоит на машине, где идёт сборка, -
+# самопроверка объявила бы утечкой саму себя и остановила бы сборку на ровном месте.
+$samplePort = "Не удаётся обработать изменения таблицы`r`nИмя сервера: LW-NOSUCH-SERVER`r`n" +
+              "Экземпляр сервера: LW-NOSUCH-INSTANCE`r`nПорт управления: 9999"
 if (-not (Coordinates-Note $sampleLost)) {
     Fail 'приписка молчит на отказе с ПУСТЫМИ координатами - читателя оставят наедине с чужими словами'
 }
@@ -1236,12 +1266,51 @@ if ($nameProblems) {
 }
 # Пакет собирается из ТОГО, ЧТО ЕДЕТ. Тела берутся уже разобранные: каждое кончается
 # переводом строки, и склейка возвращает те же байты за вычетом отсеянного.
-$shipMonolith = ($shipParts | ForEach-Object { $_.Body }) -join ''
+#
+# В КОПИЮ, которая едет в пакет, проставляется время ЭТОЙ сборки, и вот зачем. Date= и Time=
+# в objects/ при правках не двигаются: они проставлены там раз и навсегда (07-15.09, 12:00:00
+# у всех). А C/SIDE кладёт в [dbo].[Object] именно то, что стоит в OBJECT-PROPERTIES, - и
+# значит сверка "в базе та же дата, что в файле" на неизменной дате сходится и тогда, когда
+# импорт не выполнялся ВООБЩЕ: объект уже лежит в базе, дата у него прежняя, вердикт зелёный,
+# а смета меряет вчерашнюю сборку.
+#
+# Со штампом совпадение ДАТЫ И ВРЕМЕНИ в базе доказывает, что импортировалось именно это.
+# Больше доказать нечем: у finsql, молча не сделавшего работу, и код возврата нулевой, и лог
+# пуст. В самих файлах objects/ не правится ничего: там эта дата принадлежит правке объекта,
+# а сборке она не принадлежит.
+function Set-BuildStamp([string]$body, [string]$date, [string]$time) {
+    # Меняется только блок OBJECT-PROPERTIES: Date= и Time= бывают и свойством контрола, и
+    # подменить их значило бы править объект, а не сборку. Не найдя блока или поля, функция
+    # возвращает пустоту - и сборка отказывает: пакет без штампа вердикта не даёт вовсе.
+    $block = [regex]::Match($body, '(?s)OBJECT-PROPERTIES\r?\n\s*\{.*?\r?\n\s*\}')
+    if (-not $block.Success) { return '' }
+    $stamped = $block.Value
+    foreach ($field in @(@{ Name = 'Date'; Value = $date }, @{ Name = 'Time'; Value = $time })) {
+        $one = [regex]::Replace($stamped, "(?m)^(\s*$($field.Name)=)[^;]*;", "`${1}$($field.Value);", 1)
+        if ($one -eq $stamped) { return '' }
+        $stamped = $one
+    }
+    return $body.Substring(0, $block.Index) + $stamped + $body.Substring($block.Index + $block.Length)
+}
+
+$buildAt   = Get-Date
+$buildDate = $buildAt.ToString('dd.MM.yy')
+$buildTime = $buildAt.ToString('HH:mm:ss')
+$shipBodies = @(); $stampProblems = @()
+foreach ($p in $shipParts) {
+    $stamped = Set-BuildStamp $p.Body $buildDate $buildTime
+    if ($stamped) { $shipBodies += $stamped } else { $stampProblems += "$($p.Kind) $($p.No) $($p.Name)" }
+}
+if ($stampProblems) {
+    Fail ("в OBJECT-PROPERTIES пакета не нашлось Date=/Time= - штамп сборки ставить некуда, а без " +
+          "него не отличить выложенное от прежнего:`n  " + ($stampProblems -join "`n  "))
+}
+$shipMonolith = $shipBodies -join ''
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $shipMonolith, (New-Object System.Text.UTF8Encoding($false)))
 [IO.File]::WriteAllBytes($pack, $cp866.GetBytes($shipMonolith))
-Write-Host ("  объектов {0}, пакет {1:N0} байт" -f $shipParts.Count, (Get-Item $pack).Length)
+Write-Host ("  объектов {0}, штамп сборки {1} {2}, пакет {3:N0} байт" -f $shipParts.Count, $buildDate, $buildTime, (Get-Item $pack).Length)
 foreach ($s in $sampleParts) {
     Write-Host "  образец в пакет не едет: $($s.Kind) $($s.No) $($s.Name)" -ForegroundColor DarkYellow
 }
@@ -1262,10 +1331,13 @@ $declared = foreach ($file in $shipFiles) {
     $head = (Get-Content $file.FullName -TotalCount 12) -join "`n"
     if ($head -notmatch '(?m)^OBJECT\s+(\w+)\s+(\d+)\s') { Fail "не разобрать заголовок объекта: $($file.Name)" }
     $kind = $Matches[1]; $id = [int]$Matches[2]
+    # Дата и время в файле проверяются на месте - без них штампу сборки нечего было бы
+    # заменять, и это отказ, а не пропуск. А в вердикт едет ШТАМП, а не они: в пакет уехала
+    # копия со штампом, и совпадение с базой доказывает импорт именно этого пакета, а не то,
+    # что объект лежал в базе раньше (ради чего дата и перестала в вердикт годиться).
     if ($head -notmatch '(?m)^\s*Date=([\d\.]+);') { Fail "нет Date в $($file.Name)" }
-    $date = $Matches[1]
     if ($head -notmatch '(?m)^\s*Time=([\d:]+);') { Fail "нет Time в $($file.Name)" }
-    [pscustomobject]@{ Kind = $kind; Id = $id; Date = $date; Time = $Matches[1]; Letter = $file.Name.Substring(0,1) }
+    [pscustomobject]@{ Kind = $kind; Id = $id; Date = $buildDate; Time = $buildTime; Letter = $file.Name.Substring(0,1) }
 }
 
 foreach ($group in $declared | Group-Object Letter) {
@@ -1281,14 +1353,20 @@ foreach ($group in $declared | Group-Object Letter) {
 }
 
 Write-Host 'Вердикт по базе, а не по логу'
+# Сверяются ДАТА И ВРЕМЯ, и оба берутся из штампа сборки, а не из файла. Дата одна этого не
+# доказывала: она в objects/ не двигается, и на уже выложенном объекте совпадала бы и при
+# полностью пропущенном импорте. Время со штампом - это уже замер: такой секунды в базе не
+# было ни у одной прежней выкладки. Число [Compiled] отвечает на второй вопрос - собралось ли
+# импортированное, - и его ноль означает отказ, а не пропуск.
 $failed = @()
 foreach ($object in $declared) {
     $row = (Invoke-Sql "SELECT CONVERT(varchar(10),[Date],104) + '|' + CONVERT(varchar(8),[Time],108) + '|' + CONVERT(varchar(2),[Compiled]) FROM [dbo].[Object] WHERE [Type]=$($typeNo[$object.Letter]) AND [ID]=$($object.Id);")
     if (-not $row) { $failed += "$($object.Kind) $($object.Id): в базе нет вовсе - импорт не состоялся"; continue }
     $parts = ($row[0] -split '\|').Trim()
     $wantDate = ([datetime]::ParseExact($object.Date, 'dd.MM.yy', $null)).ToString('dd.MM.yyyy')
-    if ($parts[0] -ne $wantDate) { $failed += "$($object.Kind) $($object.Id): в базе дата $($parts[0]), в файле $wantDate - импортировалось не это" }
-    elseif ($parts[2] -ne '1')   { $failed += "$($object.Kind) $($object.Id): НЕ СОБРАН" }
+    if ($parts[0] -ne $wantDate)       { $failed += "$($object.Kind) $($object.Id): в базе дата $($parts[0]), в пакете $wantDate - импортировалось не это" }
+    elseif ($parts[1] -ne $object.Time) { $failed += "$($object.Kind) $($object.Id): в базе время $($parts[1]), в пакете $($object.Time) - импортировалось не это" }
+    elseif ($parts[2] -ne '1')          { $failed += "$($object.Kind) $($object.Id): НЕ СОБРАН" }
     else { Write-Host "  $($object.Kind) $($object.Id): собран, $($parts[0]) $($parts[1])" }
 }
 if ($failed) { Fail ($failed -join "`n       ") }
