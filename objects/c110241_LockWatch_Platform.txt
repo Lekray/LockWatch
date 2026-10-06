@@ -20,7 +20,7 @@ OBJECT Codeunit 110241 LockWatch Platform
       DeadTxt@1000000004 : TextConst 'ENU=The platform road is dead: %1;RUS=Дорога от платформы мертва: %1';
       NoRightsTxt@1000000005 : TextConst 'ENU=the service account is missing rights - VIEW SERVER STATE %1, ALTER ANY EVENT SESSION %2;RUS=учётной записи службы не хватает прав - VIEW SERVER STATE %1, ALTER ANY EVENT SESSION %2';
       NoMonitorTxt@1000000006 : TextConst 'ENU=the deadlock monitor session is not running on the server. It is started by the platform itself when EnableDeadlockMonitoring is on - which means the key is off, or the instance has not been restarted since.;RUS=серверная сессия мониторинга не работает. Её заводит сама платформа при взведённом EnableDeadlockMonitoring - значит ключ снят либо экземпляр после его взвода не перезапускали.';
-      DeadMapTxt@1000000007 : TextConst 'ENU=the map is dead: the server queue has %1 lock waits and the platform table is empty. The rights and the monitor session are both in place, so the transaction map was not filled. Measured 08.09.2026 on this platform build - it stays empty even with the key on, and even for a lock held by the reading session itself.;RUS=карта мертва: в очереди сервера %1 ожиданий блокировок, а штатная таблица пуста. Права и сессия мониторинга на месте, значит карта транзакций не наполнилась. Измерено 08.09.2026 на этой сборке платформы - она остаётся пустой и при взведённом ключе, и даже для блокировки, которую держит сама читающая сессия.';
+      DeadMapTxt@1000000007 : TextConst 'ENU=the map is dead as far as this database can tell: the SERVER queue holds %1 lock waits - counted over ALL databases at once - while the platform table is empty. The rights and the monitor session are both in place, so in OUR database the transaction map was not filled. The wait may also belong to another database: the counter is not filtered by database, and it cannot tell those two cases apart. Measured 08.09.2026 on this platform build - the table stays empty even with the key on, and even for a lock held by the reading session itself.;RUS=карта мертва, насколько это видно из нашей базы: в очереди СЕРВЕРА %1 ожиданий блокировок - счёт по ВСЕМ базам сразу, - а штатная таблица пуста. Права и сессия мониторинга на месте, значит в НАШЕЙ базе карта транзакций не наполнилась. Ожидание может принадлежать и чужой базе: счётчик по номеру базы не отбирает, и эти два случая им не различить. Измерено 08.09.2026 на этой сборке платформы - таблица остаётся пустой и при взведённом ключе, и даже для блокировки, которую держит сама читающая сессия.';
       AliveTxt@1000000008 : TextConst 'ENU=The platform road is alive: rights in place, the monitor session is running, the platform table holds %1 rows.;RUS=Дорога от платформы жива: права на месте, сессия мониторинга работает, в штатной таблице строк %1.';
       QuietTxt@1000000009 : TextConst 'ENU=The platform road is alive: rights in place, the monitor session is running. There is nothing to name right now - neither the queue nor the platform table holds anything.;RUS=Дорога от платформы жива: права на месте, сессия мониторинга работает. Называть сейчас нечего - ни в очереди, ни в штатной таблице ничего нет.';
       NoSqlTxt@1000000010 : TextConst 'ENU=the server could not be asked: %1;RUS=сервер спросить не удалось: %1';
@@ -34,6 +34,7 @@ OBJECT Codeunit 110241 LockWatch Platform
     VAR
       Episode@1000000002 : Record 110231;
       Locks@1000000003 : Record 2000000154;
+      Setup@1000000004 : Record 110230;
     BEGIN
       // Дорога к имени ЧЕЛОВЕКА от самой платформы. Мост - номер транзакции виновника: он
       // уже лежит в строке журнала, снятый со стороны SQL, и он же стоит первым полем в
@@ -44,7 +45,17 @@ OBJECT Codeunit 110241 LockWatch Platform
       // неё EagerVirtual: любое чтение, даже с отбором, материализует ВСЕ блокировки
       // экземпляра и обходит все живые сессии - 157 мс при тридцати тысячах блокировок,
       // то есть дороже всего именно в шторм (FINDINGS, раздел 2).
+      //
+      // И только при включённых именах от платформы: дорога обещана установке вместе с
+      // выключателем, и обещание держится здесь, а не на кнопке страницы. Кнопок у дороги
+      // три, и каждая зовёт свою дверь; эта дверь - имя пользователя, и отказывает она
+      // словами, как и остальные две.
       Reason := '';
+      Setup.FetchOnce;
+      IF NOT Setup."Platform Names Enabled" THEN BEGIN
+        Reason := OffErr;
+        EXIT(FALSE);
+      END;
       IF NOT Episode.GET(EntryNo) THEN
         ERROR(NoEntryErr,EntryNo);
       IF Episode."Blocker Transaction Id" = 0 THEN BEGIN
@@ -78,12 +89,23 @@ OBJECT Codeunit 110241 LockWatch Platform
       MonitorRunning@1000000004 : Boolean;
       LockWaits@1000000005 : Integer;
       Rows@1000000006 : Integer;
+      Setup@1000000007 : Record 110230;
     BEGIN
       // Отказ этой дороги НЕВИДИМ: не выдали право - платформа пишет одну строку
       // трассировки уровня Warning, и таблица ведёт себя в точности как при отсутствии
       // блокировок. Экран будет пуст и на здоровой системе, и на сломанной, и различить
       // их можно только этой проверкой.
+      //
+      // А снятый выключатель дороги - отказ ВИДИМЫЙ, и он приходит словами: штатная
+      // таблица обещана установке только при включённых именах от платформы, и спрашивать
+      // её с улицы, мимо кнопки страницы, тоже нельзя. Проверка стоит здесь, а не на
+      // кнопке, потому что дверей к этой таблице три, а выключатель один.
       Reason := '';
+      Setup.FetchOnce;
+      IF NOT Setup."Platform Names Enabled" THEN BEGIN
+        Reason := OffErr;
+        EXIT(FALSE);
+      END;
       IF NOT Sql.PlatformRoad(ViewServerState,AlterEventSession,MonitorRunning,LockWaits) THEN BEGIN
         Reason := STRSUBSTNO(DeadTxt,STRSUBSTNO(NoSqlTxt,Sql.LastErrorText));
         EXIT(FALSE);
@@ -102,6 +124,12 @@ OBJECT Codeunit 110241 LockWatch Platform
       // таблица пуста ПРИ НЕПУСТОЙ ОЧЕРЕДИ - значит карта транзакций не наполнялась, и
       // ключ был снят в момент первого обращения к базе. Без этой проверки инструмент
       // сказал бы "всё хорошо" и показал пустую колонку.
+      //
+      // Оговорка, которую нельзя не сказать: счёт ожиданий - СЕРВЕРНЫЙ и по базе не
+      // отобран. Ожидание чужой базы даёт ту же картину, и различить два случая этим
+      // счётом нечем. Отбор по resource_database_id живёт в самом запросе к серверу
+      // (Codeunit 110234), и пока его там нет, вердикт говорит ровно то, что видно:
+      // "мертва, насколько это видно из нашей базы".
       IF (Rows = 0) AND (LockWaits > 0) THEN BEGIN
         Reason := STRSUBSTNO(DeadTxt,STRSUBSTNO(DeadMapTxt,LockWaits));
         EXIT(FALSE);
@@ -122,7 +150,12 @@ OBJECT Codeunit 110241 LockWatch Platform
     BEGIN
       // Ответ кладётся В СТРОКУ настройки, а не только в окно: окно закроют и забудут, а
       // строка останется рядом с выключателем и будет видна тому, кто придёт после.
+      //
+      // Снятый выключатель имён - отказ, а не ответ: дорога не спрашивается вовсе, и
+      // строка состояния не переписывается. Иначе проверка дороги при выключенных именах
+      // оставила бы в строке "мертва" - и это было бы враньём про исправную дорогу.
       Setup.FetchOnce;
+      CheckNamesOn;
       Alive := RoadStatus(Reason);
       Setup."Platform Road Status" := COPYSTR(Reason,1,MAXSTRLEN(Setup."Platform Road Status"));
       Setup.MODIFY;
@@ -172,6 +205,10 @@ OBJECT Codeunit 110241 LockWatch Platform
       // Что платформа видит СЕЙЧАС. Нужно это ровно тогда, когда имя не назвалось: пустая
       // штатная таблица и таблица, где нет нужной транзакции, - две разные беды, и лечатся
       // они по-разному. Без этого списка их не различить.
+      //
+      // Снятый выключатель имён - отказ словами, а не пустой список: пустой список в этом
+      // случае читался бы как "блокировок нет", то есть как ответ на другой вопрос.
+      CheckNamesOn;
       Locks.RESET;
       IF Locks.FINDSET THEN
         REPEAT
@@ -181,6 +218,23 @@ OBJECT Codeunit 110241 LockWatch Platform
                     COPYSTR(Locks."Object Name",1,40) + CrLf;
         UNTIL Locks.NEXT = 0;
       MESSAGE(LocksMsg,Shown,Line);
+    END;
+
+    LOCAL PROCEDURE CheckNamesOn@8();
+    VAR
+      Setup@1000000000 : Record 110230;
+    BEGIN
+      // Отказ СЛОВАМИ, и один на всех: обещание "штатная таблица читается только при
+      // включённых именах от платформы" держится здесь, а не на кнопке страницы - кнопок
+      // этих три, а дорога к таблице одна. Забудет проверку одна из трёх дверей - и
+      // обещание станет словом, а отказ - пустой колонкой, которую читают как "блокировок
+      // нет".
+      //
+      // NameUser и сторож дороги отказывают иначе - они возвращают причину вызывающему, а
+      // не бросают ошибку, - но спрашивают тот же выключатель.
+      Setup.FetchOnce;
+      IF NOT Setup."Platform Names Enabled" THEN
+        ERROR(OffErr);
     END;
 
     LOCAL PROCEDURE ShowLimit@6() : Integer;
@@ -232,6 +286,12 @@ OBJECT Codeunit 110241 LockWatch Platform
 
       Читается штатная таблица только по кнопке и на один случай: провайдер у неё
       EagerVirtual и материализует все блокировки экземпляра при любом чтении.
+
+      И только при ВКЛЮЧЁННЫХ именах от платформы - так обещано установке в списке того,
+      во что инструмент смотрит. Выключатель спрашивает КАЖДАЯ из трёх дверей к этой
+      таблице - имя пользователя, сторож дороги и список блокировок, - и держится это
+      здесь, а не на кнопках страницы: кнопок три, дорога одна, а вызов снаружи мимо
+      кнопки - обычное дело.
     }
     END.
   }

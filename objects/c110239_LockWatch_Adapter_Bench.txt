@@ -23,6 +23,7 @@ OBJECT Codeunit 110239 LockWatch Adapter Bench
       ResultTxt@1000000000 : TextConst 'ENU=ADAPTERBENCH ms %1 rows %2 us %3 marked %4;RUS=ADAPTERBENCH ms %1 rows %2 us %3 marked %4';
       DirtyErr@1000000001 : TextConst 'ENU=The bench document %1 already has %2 lines. A previous run did not clean up after itself, and measuring on top of them would measure the wrong thing.;RUS=У мерного документа %1 уже есть %2 строк. Прошлый прогон за собой не убрал, и мерить поверх них значило бы мерить не то.';
       NoRowErr@1000000002 : TextConst 'ENU=There is no context table row for table %1, so there is no switch to flip. The bench expects the row to be there already.;RUS=Строки таблицы контекста для таблицы %1 нет, а значит и переключать нечего. Мерный объект ждёт её заведённой.';
+      ZeroCostErr@1000000009 : TextConst 'ENU=The pass measured %1 ms for %2 rows, which is below the floor. Time that did not move is not a fast pass but an unread clock, and the price would leave the report silently.;RUS=Проход намерил %1 мс на %2 строк - это ниже пола. Не пошедшее время означает не быстрый проход, а непрочитанные часы, и цена ушла бы из отчёта молча.';
 
     [External]
     PROCEDURE Bench@1();
@@ -35,6 +36,7 @@ OBJECT Codeunit 110239 LockWatch Adapter Bench
       Index@1000000005 : Integer;
       Rows@1000000006 : Integer;
       PerRow@1000000007 : Integer;
+      Exact@1000000009 : Decimal;
       Marked@1000000008 : Integer;
     BEGIN
       // Цена подписки меряется на ШТАТНОЙ таблице, а не на таблице заказчика, и это
@@ -72,9 +74,35 @@ OBJECT Codeunit 110239 LockWatch Adapter Bench
       Mark.Release;
       COMMIT;
 
-      IF Rows > 0 THEN
-        PerRow := ROUND(Milliseconds * 1000 / Rows,1);
+      // Замер, показавший ноль, - это не мгновенная вставка, а непрочитанные часы: строка
+      // исчезла бы из отчёта тихо, а "цена подписки" осталась бы обещанием. Отказ говорит
+      // об этом словами, а прогон на нём и останавливается.
+      IF Milliseconds < CostFloorMs THEN
+        ERROR(ZeroCostErr,Milliseconds,Rows);
+
+      // Деление ДРОБНОЕ, а печатается ЦЕЛОЕ - и на то есть причина поважнее точности:
+      // строку разбирает прогон, и точка в числе (а тем паче разделитель разрядов, который
+      // платформа подставит числу в тысячу и больше) сломала бы разбор - подменила бы мкс
+      // на первую цифру и сделала бы проверку цены зелёной на чужом числе.
+      //
+      // Целочисленное деление тут тоже не годится: оно отбрасывало бы доли ДО округления,
+      // и ROUND рядом стоял бы украшением - отчёт обещал бы точность, которой в нём нет.
+      // Поэтому целое берётся из ДРОБНОГО частного.
+      IF Rows > 0 THEN BEGIN
+        Exact := Milliseconds * 1000.0;
+        Exact := Exact / Rows;
+        PerRow := ROUND(Exact,1);
+      END;
       MESSAGE(ResultTxt,Milliseconds,Rows,PerRow,Marked);
+    END;
+
+    LOCAL PROCEDURE CostFloorMs@7() : Integer;
+    BEGIN
+      // Десять миллисекунд. Пол нужен не ради точности, а против НУЛЯ: замер на стенде
+      // дал 826-1201 мс на две тысячи строк, то есть в сотню раз больше, и настоящий
+      // проход по живой базе короче десяти миллисекунд быть не может. А вот часы,
+      // вернувшие ноль, от пола краснеют - и это ровно тот случай, ради которого он тут.
+      EXIT(10);
     END;
 
     LOCAL PROCEDURE BenchRows@2() : Integer;

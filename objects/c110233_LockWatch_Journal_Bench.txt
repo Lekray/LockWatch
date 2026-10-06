@@ -24,7 +24,9 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Episode@1000000002 : Record 110231;
       Moved@1000000046 : Record 110238;
       PassedTxt@1000000003 : TextConst 'ENU=PASS;RUS=пройдено';
-      FailedTxt@1000000004 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ ';
+      // Два пробела после "ПРОВАЛ" - как и в обкатке разбора: слово занимает те же восемь
+      // знаков, что "пройдено", и имена проверок стоят в отчёте одной колонкой.
+      FailedTxt@1000000004 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ  ';
       VerdictTxt@1000000005 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
       DirtyErr@1000000006 : TextConst 'ENU=The journal is not empty (%1 rows from real observation). The bench opens and closes episodes of its own and trims by retention, so it runs on a stand with an empty journal - never beside a live watch.;RUS=Журнал не пуст (%1 строк настоящего наблюдения). Мерный прогон открывает и закрывает СВОИ эпизоды и чистит по сроку, поэтому идёт на стенде с пустым журналом, а не рядом с работающим сторожем.';
       EnabledErr@1000000007 : TextConst 'ENU=The watch is switched on in the setup. A pass of the bench would close the episodes of the real one.;RUS=Сторож включён в настройке. Проход мерного прогона закрыл бы эпизоды настоящего.';
@@ -36,7 +38,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CloseTxt@1000000013 : TextConst 'ENU=closed %1 of %2, of them granted %3, still open %4;RUS=закрыто %1 из %2, из них дождалось %3, осталось открытых %4';
       ChkSummaryHistoryTxt@1000000060 : TextConst 'ENU=the summary counts history when asked to and leaves it out when not;RUS=свод считает историю, когда его просят, и не считает, когда не просят';
       SummaryHistoryTxt@1000000061 : TextConst 'ENU=journal alone %1, with history %2, in history within the window %3;RUS=по журналу %1, с историей %2, в истории за окно %3';
-      ChkMirrorTxt@1000000048 : TextConst 'ENU=history repeats the journal field for field;RUS=история повторяет журнал поле в поле';
+      ChkMirrorTxt@1000000048 : TextConst 'ENU=history repeats the journal field for field, and a deliberately mismatched pair is caught;RUS=история повторяет журнал поле в поле, а заведомо чужая пара ловится';
       MirrorOkTxt@1000000049 : TextConst 'ENU=lists match;RUS=списки совпадают';
       MirrorCountTxt@1000000050 : TextConst 'ENU=fields in the journal %1, in history %2;RUS=полей в журнале %1, в истории %2';
       MirrorMissingTxt@1000000051 : TextConst 'ENU=field %1 %2 is missing from history;RUS=поля %1 %2 в истории нет';
@@ -53,8 +55,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CovReadsTxt@1000000071 : TextConst 'ENU=the tally grew by %1 episodes and %2 ms, the coverage by %3 and %4;RUS=накопитель вырос на %1 эпизодов и %2 мс, охват - на %3 и %4';
       ChkTrimTxt@1000000014 : TextConst 'ENU=what is older than the term leaves the journal for history, and nothing is lost on the way;RUS=что старше срока, уезжает из журнала в историю, и по дороге ничего не теряется';
       TrimTxt@1000000015 : TextConst 'ENU=moved %1 of the %2 backdated, left %3 of %4, landed in history %5;RUS=переехало %1 из %2 состаренных, осталось %3 из %4, доехало до истории %5';
-      ChkCostTxt@1000000016 : TextConst 'ENU=the NAV half of a pass fits into the declared ceiling;RUS=NAV-половина прохода укладывается в объявленный потолок';
-      CostTxt@1000000017 : TextConst 'ENU=worst pass %1 ms against the ceiling %2;RUS=худший проход %1 мс против потолка %2';
+      ChkCostTxt@1000000016 : TextConst 'ENU=the NAV half of a pass fits between the floor and the declared ceiling;RUS=NAV-половина прохода укладывается между полом и объявленным потолком';
+      CostTxt@1000000017 : TextConst 'ENU=worst pass %1 ms against the ceiling %2 and the floor %3;RUS=худший проход %1 мс против потолка %2 и пола %3';
       TimingTxt@1000000018 : TextConst 'ENU=%1: %2 ms for %3 rows, %4 us per row;RUS=%1: %2 мс на %3 строк, %4 мкс на строку';
       OpenPhaseTxt@1000000019 : TextConst 'ENU=opening;RUS=открытие';
       UpdatePhaseTxt@1000000020 : TextConst 'ENU=updating;RUS=обновление';
@@ -64,8 +66,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       SummaryTxt@1000000025 : TextConst 'ENU=lines %1, episodes %2 of %3, total wait %4 ms, longest %5 ms;RUS=строк %1, эпизодов %2 из %3, суммарное ожидание %4 мс, самое долгое %5 мс';
       ChkWindowTxt@1000000026 : TextConst 'ENU=the threshold and the window of the summary are real, not decoration;RUS=порог и окно сводки настоящие, а не украшение';
       WindowTxt@1000000027 : TextConst 'ENU=above a low threshold %1 of %2, above a high one %3, lines in a window past the last episode %4;RUS=выше низкого порога %1 из %2, выше высокого %3, строк в окне позже последнего эпизода %4';
-      ChkCoverageTxt@1000000029 : TextConst 'ENU=the first counter reading is only a mark, and the second one becomes a gain;RUS=первое чтение счётчика - только отметка, а прирастает второе';
-      CoverageTxt@1000000030 : TextConst 'ENU=waits %1 of the expected %2, milliseconds %3 of the expected %4, escalations %5;RUS=ожиданий %1 при ожидаемых %2, миллисекунд %3 при ожидаемых %4, эскалаций %5';
+      ChkCoverageTxt@1000000029 : TextConst 'ENU=the first counter reading is only a mark, and the second one becomes a gain, escalations included;RUS=первое чтение счётчика - только отметка, а прирастает второе, и эскалации вместе с ним';
+      CoverageTxt@1000000030 : TextConst 'ENU=waits %1 of the expected %2, milliseconds %3 of the expected %4, escalations %5 of the expected %6;RUS=ожиданий %1 при ожидаемых %2, миллисекунд %3 при ожидаемых %4, эскалаций %5 при ожидаемых %6';
       ChkCoverageResetTxt@1000000031 : TextConst 'ENU=a counter that went backwards is counted as a reset and does not drag the total back;RUS=пошедший назад счётчик считается обнулением и не тянет итог назад';
       CoverageResetTxt@1000000032 : TextConst 'ENU=resets %1, waits %2 of the expected %3, milliseconds %4 of the expected %5;RUS=обнулений %1, ожиданий %2 при ожидаемых %3, миллисекунд %4 при ожидаемых %5';
       ChkLatchTxt@1000000034 : TextConst 'ENU=the latch keeps one alert per head of a chain, and counts the episodes behind it;RUS=защёлка держит одну тревогу на голову цепочки и считает эпизоды за ней';
@@ -80,6 +82,14 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       NameHeldTxt@1000000043 : TextConst 'ENU=culprit "%1", victim "%2", document "%3", picked again %4 of the expected 0;RUS=виновник "%1", жертва "%2", документ "%3", выбран снова %4 при ожидаемом 0';
       ChkNameCeilingTxt@1000000044 : TextConst 'ENU=the questions stop at the declared ceiling instead of going on for as long as the episode does;RUS=вопросы прекращаются на объявленном потолке, а не идут столько же, сколько эпизод';
       NameCeilingTxt@1000000045 : TextConst 'ENU=attempts %1 of the ceiling %2, picked after the ceiling %3 of the expected 0;RUS=попыток %1 при потолке %2, выбран после потолка %3 при ожидаемом 0';
+      NoAnswerTxt@1000000082 : TextConst 'ENU=bench run: no road answered;RUS=мерный прогон: ни одна дорога не ответила';
+      // Накопитель выброшенного - строка состояния ЖИВОГО сторожа, и трогает его прогон
+      // только затем, чтобы проверить, что охват его читает. Прежние значения помнятся,
+      // чтобы вернуть их обратно: прогон, оставивший после себя нули, уничтожил бы счёт,
+      // накопленный наблюдением до него.
+      WasDroppedEpisodes@1000000079 : Integer;
+      WasDroppedMs@1000000080 : BigInteger;
+      DroppedPlanted@1000000081 : Boolean;
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -128,6 +138,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CovMsBefore@1000000071 : BigInteger;
       CovMsAfter@1000000072 : BigInteger;
       MirrorNote@1000000053 : Text;
+      MirrorOther@1000000054 : Text;
+      SweepRows@1000000055 : Integer;
+      Rounds@1000000056 : Integer;
+      PickedAfter@1000000057 : Integer;
       SummedJournal@1000000062 : Integer;
       SummedBoth@1000000063 : Integer;
       InHistoryNow@1000000064 : Integer;
@@ -169,14 +183,19 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
 
       Waiters := Parse.MaxWaitersPerPass;
 
+      // Первым утверждением - что результат ВООБЩЕ не пуст. Число ждущих - константа, а не
+      // результат, и пустой журнал сошёлся бы сам с собой: ноль открытых равен нулю
+      // ожидаемых, ноль строк равно нулю. "Открыто ноль" от "открыто пятьсот" отличается
+      // только этой проверкой.
+      //
       // Счётчик прохода и число строк в журнале - РАЗНЫЕ величины, и спрашиваются обе.
       // Счётчик наращивает тот же код, что и вставляет: уйди вставка - он всё равно
       // скажет "открыто пятьсот", и проверка с одним счётчиком осталась бы зелёной над
       // пустым журналом. "Ровно по эпизоду на ждущего" - утверждение про строки.
       OpenMs := PassOfWaiters(Waiters,FirstWaitMs,Opened,Updated,Closed,Restarted);
       Check(Passed,Total,Report,ChkOpenTxt,
-            (Opened = Waiters) AND (Updated = 0) AND (Closed = 0) AND
-            (BenchRowCount = Waiters),
+            (Opened > 0) AND (BenchRowCount > 0) AND (Opened = Waiters) AND (Updated = 0) AND
+            (Closed = 0) AND (BenchRowCount = Waiters),
             STRSUBSTNO(OpenTxt,Opened,Waiters,Updated,Closed,BenchRowCount));
 
       // Половина "не плодит новые" держится на числе строк, и она здесь была. Половина
@@ -226,14 +245,19 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // накопитель считает по нему приросты - значит, буфер можно подать руками. Строка
       // берётся с ОТРИЦАТЕЛЬНЫМ номером объекта: в SQL номера положительны, и столкнуться
       // с настоящей строкой такая не может.
-      MakeCounterReading(Reading,100,5000,1);
+      MakeCounterReading(Reading,100,5000,FirstEscalationsUnderTest);
       Coverage.Accumulate(Reading);
-      MakeCounterReading(Reading,150,8000,1);
+      MakeCounterReading(Reading,150,8000,SecondEscalationsUnderTest);
       Coverage.Accumulate(Reading);
       Cov.GET(BenchObjectId,BenchIndexId);
+      // Эскалации во ВТОРОМ чтении не те же, что в первом, и прирост спрашивается не
+      // нулевой: с равными числами ожидаемый ноль вышел бы и у кода, который эскалации не
+      // считает вовсе, - утверждение было бы пустым.
       Check(Passed,Total,Report,ChkCoverageTxt,
-            (Cov.Waits = 50) AND (Cov."Wait (ms)" = 3000) AND (Cov.Escalations = 0),
-            STRSUBSTNO(CoverageTxt,Cov.Waits,50,Cov."Wait (ms)",3000,Cov.Escalations));
+            (Cov.Waits = 50) AND (Cov."Wait (ms)" = 3000) AND
+            (Cov.Escalations = SecondEscalationsUnderTest - FirstEscalationsUnderTest),
+            STRSUBSTNO(CoverageTxt,Cov.Waits,50,Cov."Wait (ms)",3000,Cov.Escalations,
+                       SecondEscalationsUnderTest - FirstEscalationsUnderTest));
 
       // Обнуление счётчика сервером выглядит как значение МЕНЬШЕ прежнего. Разность в этом
       // случае была бы отрицательной, и итог поехал бы назад - молча и правдоподобно.
@@ -383,15 +407,24 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             (CovMsAfter - CovMsBefore = DropPlantMs),
             STRSUBSTNO(CovReadsTxt,DropPlantEpisodes,DropPlantMs,
                        CovEpAfter - CovEpBefore,CovMsAfter - CovMsBefore));
-      PlantDropped(0,0);
+      // Накопитель возвращается к ПРЕЖНИМ значениям, а не обнуляется: строка состояния -
+      // живая, её ведёт наблюдение, и нули, положенные прогоном, уничтожили бы счёт,
+      // накопленный до него.
+      UnplantDropped;
 
       // Зеркало сверяется КАЖДЫМ прогоном, а не глазами при правке. Список полей истории
       // списан с журнала, и разойтись он может только молча: добавленное поле просто не
       // доедет при переезде, и заметят это через месяц, когда понадобится.
-      MirrorNote := MirrorGap;
+      //
+      // Спрашиваются ДВЕ пары, и вторая - заведомо чужая, с другим числом полей. Без неё
+      // проверку прошла бы любая сверка, всегда отвечающая "списки совпадают": пустое
+      // зеркало осталось бы зелёным, потому что непустого ответа от сверки не требовал
+      // никто.
+      MirrorNote := MirrorGap(DATABASE::"LockWatch Episode",DATABASE::"LockWatch Episode History");
+      MirrorOther := MirrorGap(DATABASE::"LockWatch Episode",DATABASE::"LockWatch Coverage");
       Check(Passed,Total,Report,ChkMirrorTxt,
-            MirrorNote = '',
-            MirrorNote + MirrorOkNote(MirrorNote));
+            (MirrorNote = '') AND (MirrorOther <> ''),
+            MirrorNote + MirrorOkNote(MirrorNote) + ' ' + MirrorOther);
 
       // Свод по истории. Проверяется он ЗДЕСЬ, а не рядом с остальными проверками свода:
       // это единственный миг прогона, когда в истории заведомо что-то лежит - строки
@@ -408,6 +441,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             (SummedBoth - SummedJournal = InHistoryNow) AND (InHistoryNow > 0),
             STRSUBSTNO(SummaryHistoryTxt,SummedJournal,SummedBoth,InHistoryNow));
 
+      // Строк в уборке - столько, сколько их в журнале ПЕРЕД ней, и число это берётся
+      // счётом, а не вычитанием сцен: сцены меняются, и вычитание тихо устаревает -
+      // в отчёте стояло 483 при 473 выметенных, потому что две сцены порога сняли по пять.
+      SweepRows := BenchRowCount;
       SweepMs := Sweep;
 
       // Имена в истории. Проверяется на СВОИХ двух эпизодах и на пустом журнале - тот
@@ -463,18 +500,24 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
 
       // Второй эпизод так и остался без ответа: на нём и проверяется потолок. Без него
       // вопрос повторялся бы столько же, сколько живёт эпизод, а живёт он и по часу.
-      Episode.GET(NameB);
-      WHILE Episode."Name Attempts" < Parse.MaxNameAttempts DO BEGIN
+      //
+      // Кругов ровно столько, сколько нужно, чтобы упереться в потолок, и число их - СВОЁ.
+      // Цикл по счётчику проверяемого кода не кончился бы никогда ровно в том случае, ради
+      // которого он написан: сломай SetDocument счёт попыток - и прогон ушёл бы в вечный
+      // цикл вместо красного отчёта. Кончается он и тогда, когда проход перестаёт видеть
+      // эпизод, - а это и есть проверяемое место.
+      Rounds := 0;
+      REPEAT
+        Rounds := Rounds + 1;
         Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'','');
-        Episode.GET(NameB);
-      END;
+        PickedAfter := PickNameNow(NameB);
+      UNTIL (PickedAfter = 0) OR (Rounds >= NameAttemptRoundCeiling);
+      Episode.GET(NameB);
       NameAttemptsB := Episode."Name Attempts";
-      Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
-      NamePickedCeiling := 0;
-      IF NamePending.GET(NameB) THEN
-        NamePickedCeiling := 1;
+      NamePickedCeiling := PickedAfter;
       Check(Passed,Total,Report,ChkNameCeilingTxt,
-            (NameAttemptsB = Parse.MaxNameAttempts) AND (NamePickedCeiling = 0),
+            (NameAttemptsB = Parse.MaxNameAttempts) AND (NamePickedCeiling = 0) AND
+            (Rounds < NameAttemptRoundCeiling),
             STRSUBSTNO(NameCeilingTxt,NameAttemptsB,Parse.MaxNameAttempts,NamePickedCeiling));
 
       Sweep;
@@ -484,13 +527,18 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         Worst := UpdateMs;
       IF CloseMs > Worst THEN
         Worst := CloseMs;
-      Check(Passed,Total,Report,ChkCostTxt,Worst <= CeilingMs,STRSUBSTNO(CostTxt,Worst,CeilingMs));
+      // Спрашиваются ОБЕ границы: потолок и пол. Нижняя тут не украшение - замер,
+      // показавший ноль, означает не мгновенный проход, а непрочитанные часы, и проверка
+      // с одним потолком на ноль смотрела бы зелёным.
+      Check(Passed,Total,Report,ChkCostTxt,
+            (Worst <= CeilingMs) AND (Worst >= CostFloorMs),
+            STRSUBSTNO(CostTxt,Worst,CeilingMs,CostFloorMs));
 
       Report := Report + CrLf +
         Timing(OpenPhaseTxt,OpenMs,Waiters) +
         Timing(UpdatePhaseTxt,UpdateMs,Waiters) +
         Timing(ClosePhaseTxt,CloseMs,Waiters) +
-        Timing(SweepPhaseTxt,SweepMs,Waiters - BackdateRows - CeilingSurplus);
+        Timing(SweepPhaseTxt,SweepMs,SweepRows);
     END;
 
     LOCAL PROCEDURE PassOfWaiters@3(Waiters@1000000000 : Integer;WaitMs@1000000001 : Integer;VAR Opened@1000000002 : Integer;VAR Updated@1000000003 : Integer;VAR Closed@1000000004 : Integer;VAR Restarted@1000000005 : Integer) : Integer;
@@ -755,13 +803,37 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     BEGIN
       // Накопитель выброшенного кладётся руками: сцена меряет, что охват его ЧИТАЕТ, и
       // настоящее удаление тут только мешало бы - оно меняет и журнал.
+      //
+      // Прежние значения запоминаются ОДИН раз, на первом заходе, и возвращаются обратно
+      // в конце. Класть нули, как было прежде, значит уничтожать счёт, накопленный
+      // наблюдением: строка состояния - живая, и охват на бою читает именно её.
       State.FetchToWrite;
+      IF NOT DroppedPlanted THEN BEGIN
+        WasDroppedEpisodes := State."Dropped Episodes";
+        WasDroppedMs := State."Dropped Wait (ms)";
+        DroppedPlanted := TRUE;
+      END;
       State."Dropped Episodes" := Episodes;
       State."Dropped Wait (ms)" := WaitMs;
       State.MODIFY;
     END;
 
-    LOCAL PROCEDURE MirrorGap@43() : Text;
+    LOCAL PROCEDURE UnplantDropped@71();
+    VAR
+      State@1000000000 : Record 110237;
+    BEGIN
+      // Возврат прежних значений. Ничего не порченного прогон не трогает вовсе: до первого
+      // PlantDropped возвращать нечего.
+      IF NOT DroppedPlanted THEN
+        EXIT;
+      State.FetchToWrite;
+      State."Dropped Episodes" := WasDroppedEpisodes;
+      State."Dropped Wait (ms)" := WasDroppedMs;
+      State.MODIFY;
+      DroppedPlanted := FALSE;
+    END;
+
+    LOCAL PROCEDURE MirrorGap@43(JournalNo@1000000005 : Integer;HistoryNo@1000000006 : Integer) : Text;
     VAR
       JournalRef@1000000000 : RecordRef;
       HistoryRef@1000000001 : RecordRef;
@@ -774,8 +846,12 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // поле, добавленном в журнал и забытом здесь. Сверяются номер, имя, тип и длина:
       // одного имени мало (Text50 против Text250 прошло бы), одного типа тоже (обрезание
       // при переезде выглядело бы как усечённый текст, а не как поломка).
-      JournalRef.OPEN(DATABASE::"LockWatch Episode");
-      HistoryRef.OPEN(DATABASE::"LockWatch Episode History");
+      //
+      // Номера таблиц - параметры, а не константы: сверку обязано быть чем СПРОСИТЬ на
+      // заведомо чужой паре. Иначе непустого ответа от неё никто не требует, и сверка,
+      // всегда отвечающая "списки совпадают", остаётся зелёной даже над пустым зеркалом.
+      JournalRef.OPEN(JournalNo);
+      HistoryRef.OPEN(HistoryNo);
       IF JournalRef.FIELDCOUNT <> HistoryRef.FIELDCOUNT THEN
         EXIT(STRSUBSTNO(MirrorCountTxt,JournalRef.FIELDCOUNT,HistoryRef.FIELDCOUNT));
       FOR Index := 1 TO JournalRef.FIELDCOUNT DO BEGIN
@@ -838,9 +914,17 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     LOCAL PROCEDURE Timing@11(Phase@1000000000 : Text;Milliseconds@1000000001 : Integer;Rows@1000000002 : Integer) : Text;
     VAR
       PerRow@1000000003 : Integer;
+      Exact@1000000004 : Decimal;
     BEGIN
-      IF Rows > 0 THEN
-        PerRow := ROUND(Milliseconds * 1000 / Rows,1);
+      // Деление ДРОБНОЕ, а печатается ЦЕЛОЕ - и то, и другое нарочно. Целочисленное деление
+      // отбрасывало бы доли ДО округления, и ROUND рядом стоял бы украшением: отчёт обещал
+      // бы десятые доли, которых в нём не считалось. А показывать десятые доли
+      // микросекунды незачем: таких различий не видно ни на одной машине.
+      IF Rows > 0 THEN BEGIN
+        Exact := Milliseconds * 1000.0;
+        Exact := Exact / Rows;
+        PerRow := ROUND(Exact,1);
+      END;
       EXIT(STRSUBSTNO(TimingTxt,Phase,Milliseconds,Rows,PerRow) + CrLf);
     END;
 
@@ -1007,8 +1091,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     LOCAL PROCEDURE NoAnswerReason@41() : Text;
     BEGIN
       // Причина обязана быть НЕПУСТОЙ: пустая означает "ещё не спрашивали", и проверка
-      // мерила бы тогда не то, что собиралась.
-      EXIT('мерный прогон: ни одна дорога не ответила');
+      // мерила бы тогда не то, что собиралась. И двуязычной, как прочие слова: прогон идёт
+      // на службе, язык которой не наш, и русская строка из кода легла бы в колонку
+      // журнала рядом с английской подписью.
+      EXIT(NoAnswerTxt);
     END;
 
     LOCAL PROCEDURE MakeCounterReading@22(VAR Reading@1000000000 : TEMPORARY Record 110235;Waits@1000000001 : Integer;WaitMs@1000000002 : Integer;Escalations@1000000003 : Integer);
@@ -1055,6 +1141,54 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // ждущих, значит потолок принадлежит NAV-половине почти целиком. Число берётся
       // здесь, а не из настройки: поднятая на стенде настройка обесценила бы проверку.
       EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE CostFloorMs@74() : Integer;
+    BEGIN
+      // Десять миллисекунд - и это не украшение рядом с потолком. ЧАСЫ C/AL считают
+      // миллисекундами, и замер, показавший ноль, означает не мгновенный проход, а
+      // непрочитанное время: проверка с одним потолком смотрела бы на такое зелёным.
+      //
+      // Пол взят с запасом в восемь раз против самого дешёвого из трёх проходов на стенде
+      // (закрытие стоило 88 мс): об медленную машину он краснеть не должен, а на ноль и на
+      // единицу - обязан.
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE FirstEscalationsUnderTest@72() : Integer;
+    BEGIN
+      // Одна эскалация в первом чтении. Ноль брать нельзя: с нулём "первое чтение - только
+      // отметка" и "счётчик берётся как есть" дали бы один и тот же ответ.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE SecondEscalationsUnderTest@73() : Integer;
+    BEGIN
+      // Четыре во втором - то есть ДРУГОЕ число, а не то же самое. С равными числами
+      // ожидаемый прирост вышел бы нулём у всякого кода, включая тот, который эскалации не
+      // считает вовсе: утверждение было бы пустым.
+      EXIT(4);
+    END;
+
+    LOCAL PROCEDURE NameAttemptRoundCeiling@75() : Integer;
+    BEGIN
+      // Потолок КРУГОВ самого прогона, и он не меньше потолка попыток. Кругов на деле
+      // нужно на один меньше: последний SetDocument доводит счёт до потолка, и проход
+      // перестаёт видеть эпизод. Запас в один круг нужен затем, чтобы сорвавшийся счёт
+      // попыток остановился по СВОЕМУ счёту, а не по проверяемому.
+      EXIT(Parse.MaxNameAttempts);
+    END;
+
+    LOCAL PROCEDURE PickNameNow@76(EntryNo@1000000000 : Integer) : Integer;
+    VAR
+      Buffer@1000000001 : TEMPORARY Record 110231;
+    BEGIN
+      // Спрашивается не только счёт выбранных, но и сам эпизод: проход мог ответить "взял"
+      // и не положить в буфер ничего. Выбор идёт тем же вызовом, что и в проходе.
+      Journal.PickUnresolved(Buffer,Parse.MaxDocumentsPerPass);
+      IF Buffer.GET(EntryNo) THEN
+        EXIT(1);
+      EXIT(0);
     END;
 
     LOCAL PROCEDURE CrLf@19() : Text[2];
@@ -1125,6 +1259,24 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         говорит "обновлено 500, открыто 0, строк в журнале 500, из них с новым ожиданием
         0"; переспрашивание - "выбрано в первый раз 2, после пустого ответа 2, в буфере
         0 и 0". На целом коде 19 из 19.
+
+      Проверок с тех пор стало 22, и четыре из них добавлены потому, что прежние молчали
+      бы на сломанном коде:
+
+        непустой итог      - первым утверждением, а не следствием константы: пустой журнал
+                             сошёлся бы сам с собой;
+        эскалации          - во втором чтении счётчика теперь ДРУГОЕ число: с равными
+                             ожидаемый прирост вышел бы нулём и у кода, который их не
+                             считает вовсе;
+        зеркало            - спрашивается вторая, заведомо чужая пара: сверка, всегда
+                             отвечающая "списки совпадают", ловится только ею;
+        потолок кругов     - у переспрашивания свой счёт кругов, а не колонка журнала:
+                             цикл по счётчику проверяемого кода не кончился бы никогда.
+
+      Ещё три места приведены в правду без смены числа проверок: у цены появился ПОЛ
+      (замер в ноль проходил зелёным), мкс на строку считаются дробно (целое деление с
+      ROUND выдавало мнимую точность), а строк в уборке отчёт берёт счётом, а не
+      вычитанием сцен - вычитание тихо устарело на 483 против 473.
     }
     END.
   }

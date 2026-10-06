@@ -14,7 +14,8 @@ OBJECT Codeunit 110243 LockWatch Hold By User
   {
     VAR
       NoContextErr@1000000000 : TextConst 'ENU=No context table is switched on. The holder locks a row of the very table the tool was told to watch, and without such a table there is nothing to hold.;RUS=Ни одна таблица контекста не включена. Держатель берёт строку той самой таблицы, за которой велено следить, и без неё держать нечего.';
-      NoRowErr@1000000001 : TextConst 'ENU=Row %1 is not in table %2. It is put down by the run itself: the tool never writes into a live document.;RUS=Строки %1 в таблице %2 нет. Её кладёт сам прогон: в живой документ инструмент не пишет никогда.';
+      NoRowErr@1000000001 : TextConst 'ENU=Row %1 is not in table %2. It is put down by the run itself, and the holder edits only that row: it never creates rows and never touches a row that is not the aim. The edit is a WRITE - even with no field changed, the platform records the row as modified.;RUS=Строки %1 в таблице %2 нет. Её кладёт сам прогон, и держатель правит только её: строк он не заводит и чужой не трогает. Сама правка - это ЗАПИСЬ: даже когда ни одно поле не изменилось, платформа отмечает строку изменённой.';
+      NotTargetErr@1000000017 : TextConst 'ENU=The first enabled context row points at table %1, and the aim %2 is not there. The holder takes the whole table under LOCKTABLE and holds it for the whole run, so it refuses to hold a table the run did not put the aim into.;RUS=Первая включённая строка контекста указывает на таблицу %1, а мишени %2 там нет. Держатель берёт таблицу под LOCKTABLE целиком и держит её весь показ, поэтому держать не ту таблицу, куда прогон положил мишень, он отказывается.';
       NoMarkErr@1000000016 : TextConst 'ENU=The session modified its own row, but the context mark is not there. The adapter for that table is either missing or switched off, and without the mark the journal cannot name anyone.;RUS=Сеанс правил свою строку, а отметки контекста нет. Переходника на эту таблицу нет или он выключен, а без отметки журналу некого называть.';
       HeldTxt@1000000002 : TextConst 'ENU=LOCKHELD user %1 session %2 table %3 document %4 mark %5 ms %6;RUS=LOCKHELD user %1 session %2 table %3 document %4 mark %5 ms %6';
       WaitedTxt@1000000012 : TextConst 'ENU=LOCKWAITED user %1 session %2 document %3 mark %4 error %5;RUS=LOCKWAITED user %1 session %2 document %3 mark %4 error %5';
@@ -35,13 +36,33 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       // он сам, а ПЕРЕХОДНИК, подписанный на события этой таблицы, и кладёт он в неё USERID
       // той сессии, что правит строку. Соединением sqlcmd этого не проверить вовсе:
       // переходник живёт внутри NAV и о чужих соединениях не знает.
+      //
+      // ЦЕНА, и о ней прямо: таблица берётся из строки настройки контекста, то есть
+      // БОЕВАЯ. LOCKTABLE переводит чтения и записи этой сессии по ней в замок, а MODIFY
+      // ставит монопольный замок на строку-мишень, и держится всё это до конца транзакции
+      // - полторы минуты по умолчанию (HoldMs). Чужая работа в эту таблицу на всё это
+      // время встаёт за держателем. Ниже - не ошибка: объект мерный, и запускают его там,
+      // где на эти полторы минуты согласны.
       Context.SETRANGE(Enabled,TRUE);
       IF NOT Context.FINDFIRST THEN
         ERROR(NoContextErr);
 
       RecRef.OPEN(Context."Table No.");
-      RecRef.LOCKTABLE;
       DocField := RecRef.FIELD(Context."Document Field No.");
+      // Мишень ищется ДО замка, и это не формальность. Первая включённая строка контекста
+      // - не обязательно та, куда прогон положил мишень: строк бывает несколько, порядок
+      // у них по номеру таблицы, и включённая чужая увела бы держателя в другую таблицу -
+      // там он взял бы LOCKTABLE на полторы минуты и всё равно отказался бы работать.
+      // Отбор тот же, каким мишень читается и ниже, и в прогоне: по номеру документа.
+      DocField.SETRANGE(HoldDocumentNo);
+      IF NOT RecRef.FINDFIRST THEN
+        ERROR(NotTargetErr,Context."Table Name",HoldDocumentNo);
+
+      RecRef.LOCKTABLE;
+      // Отбор ставится ЗАНОВО, а не полагается на прежний. Строка перечитывается под
+      // замком - за миг между двумя чтениями её могли унести, и править тогда нечего, - а
+      // фильтр, снятый платформой при LOCKTABLE, увёл бы FINDFIRST на первую строку
+      // таблицы, то есть на ЧУЖУЮ. Правка чужой строки - ровно то, чего тут быть не должно.
       DocField.SETRANGE(HoldDocumentNo);
       IF NOT RecRef.FINDFIRST THEN
         ERROR(NoRowErr,HoldDocumentNo,Context."Table Name");
@@ -49,6 +70,10 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       // MODIFY без триггеров нарочно. Событие OnAfterModifyEvent платформа поднимает в
       // любом случае - переходник подписан на СОБЫТИЕ, а не на триггер, - а вот триггер
       // чужой таблицы это чужой код, и запускать его ради показа незачем.
+      //
+      // И это ЗАПИСЬ, а не "тронуть и не изменить": даже с тем же значением в каждом поле
+      // платформа отмечает строку изменённой. Поэтому правится ровно строка-мишень, и
+      // только она.
       RecRef.MODIFY;
 
       // Отметка ищется СВОЯ - по номеру экземпляра и сеанса. Ответ едет в сообщении не для
@@ -84,8 +109,17 @@ OBJECT Codeunit 110243 LockWatch Hold By User
         ERROR(NoContextErr);
 
       RecRef.OPEN(Context."Table No.");
-      RecRef.LOCKTABLE;
       DocField := RecRef.FIELD(Context."Document Field No.");
+      // Мишень проверяется ДО замка - по тому же доводу, что и у держателя: включённая
+      // строка контекста может указывать в чужую, боевую таблицу, и брать на ней LOCKTABLE
+      // ради отказа незачем. Отбор тот же, каким мишень читается и ниже.
+      DocField.SETRANGE(HoldDocumentNo);
+      IF NOT RecRef.FINDFIRST THEN
+        ERROR(NotTargetErr,Context."Table Name",HoldDocumentNo);
+      DocField.SETRANGE(WaitDocumentNo);
+      IF NOT RecRef.FINDFIRST THEN
+        ERROR(NoRowErr,WaitDocumentNo,Context."Table Name");
+      RecRef.LOCKTABLE;
       DocField.SETRANGE(WaitDocumentNo);
       IF NOT RecRef.FINDFIRST THEN
         ERROR(NoRowErr,WaitDocumentNo,Context."Table Name");
@@ -131,8 +165,11 @@ OBJECT Codeunit 110243 LockWatch Hold By User
 
     LOCAL PROCEDURE HoldDocumentNo@3() : Code[20];
     BEGIN
-      // Номер мишени, и он же обещание: в живой документ инструмент не пишет никогда.
-      // Строку с этим номером кладёт показ, он же её и убирает.
+      // Номер мишени, и он же граница правки: правится ТОЛЬКО строка с этим номером, и
+      // кладёт её прогон. Заводить свою строку в чужой таблице инструмент не станет, а
+      // править чужую не должен: MODIFY - это запись, даже когда ни одно поле не изменилось,
+      // и платформа отметит строку изменённой. Строку с этим номером кладёт показ, он же её
+      // и убирает.
       EXIT('LOCKWATCH-LIVE');
     END;
 
@@ -149,6 +186,19 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       пишет он USERID той сессии, что правит. Поэтому запускать держателя надо от имени
       того человека, чьё имя хочется увидеть в журнале, - Invoke-NAVCodeunit под его
       учётной записью, - а ждущим остаётся всё тот же sqlcmd.
+
+      ЦЕНА НАЗВАНА ПРЯМО, потому что платит её чужая таблица. Таблица берётся из строки
+      настройки контекста, то есть боевая, из установки. LOCKTABLE переводит чтения и
+      записи этой сессии по ней в замок (UPDLOCK), MODIFY ставит монопольный замок на
+      строку-мишень, и держится всё это до конца транзакции - полторы минуты по умолчанию
+      (HoldMs). ЧУЖАЯ работа в эту таблицу на всё это время встаёт за держателем. Объект
+      поэтому мерный: запускают его там, где на эти полторы минуты согласны.
+
+      И поэтому же проверяется МИШЕНЬ, а не первая включённая строка настройки. Строк
+      контекста бывает несколько, порядок у них по номеру таблицы, и включённая чужая
+      увела бы держателя в другую таблицу - где он подержал бы замок полторы минуты и
+      отказался бы работать. Мишень ищется ДО LOCKTABLE и тем же отбором, каким читается:
+      строка с номером HoldDocumentNo.
 
       Объект мерный, как и Codeunit 110233: в бою он не нужен и вреда не приносит - без
       строки-мишени он отказывается работать вовсе.

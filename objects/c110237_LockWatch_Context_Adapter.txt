@@ -115,14 +115,20 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
       ContextTable@1000000002 : Record 110232;
       DocNo@1000000003 : Code[20];
       Existed@1000000004 : Boolean;
+      WasEnabled@1000000005 : Boolean;
     BEGIN
       // Переходник, который ни разу не сработал, ничем не отличается от отсутствующего.
       // Поэтому он проверяет себя сам: пишет строку в таблицу контекста и смотрит, легла
       // ли отметка. Убирает за собой и то, и другое.
+      //
+      // За собой - значит и состояние строки: включённой она остаётся ТОЛЬКО если была
+      // включённой до обкатки. Иначе обкатка включила бы переходник на установке, где он
+      // выключен, и оставила бы его работать - молча и навсегда.
       DocNo := TestDocumentNo;
       IF NOT SubscriptionActive THEN
         ERROR(NotSubscribedErr,TableNo);
       Existed := ContextTable.GET(TableNo);
+      WasEnabled := Existed AND ContextTable.Enabled;
       IF NOT Existed THEN BEGIN
         ContextTable.INIT;
         ContextTable.VALIDATE("Table No.",TableNo);
@@ -130,7 +136,7 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
         ContextTable.Enabled := TRUE;
         ContextTable.INSERT;
       END ELSE
-        IF NOT ContextTable.Enabled THEN BEGIN
+        IF NOT WasEnabled THEN BEGIN
           ContextTable.Enabled := TRUE;
           ContextTable.MODIFY;
         END;
@@ -144,27 +150,34 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
 
       IF NOT Mark.GET(SERVICEINSTANCEID,SESSIONID) THEN BEGIN
         SalesLine.DELETE;
-        CleanUp(Existed);
+        CleanUp(Existed,WasEnabled);
         ERROR(NoMarkErr);
       END;
       IF Mark."Document No." <> DocNo THEN BEGIN
         SalesLine.DELETE;
-        CleanUp(Existed);
+        CleanUp(Existed,WasEnabled);
         ERROR(WrongDocErr,Mark."Document No.",DocNo);
       END;
 
       SalesLine.DELETE;
       Mark.Release;
-      CleanUp(Existed);
+      CleanUp(Existed,WasEnabled);
       MESSAGE(OkMsg,DocNo);
     END;
 
-    LOCAL PROCEDURE CleanUp@8(KeepContextRow@1000000000 : Boolean);
+    LOCAL PROCEDURE CleanUp@8(KeepContextRow@1000000000 : Boolean;WasEnabled@1000000001 : Boolean);
     VAR
-      ContextTable@1000000001 : Record 110232;
+      ContextTable@1000000002 : Record 110232;
     BEGIN
-      IF KeepContextRow THEN
+      IF KeepContextRow THEN BEGIN
+        // Строка была в настройке ДО обкатки, и состояние её - ЧУЖОЕ. Возвращается ровно
+        // то, что было: включённая остаётся включённой, выключенная - выключенной.
+        IF (NOT WasEnabled) AND ContextTable.GET(TableNo) THEN BEGIN
+          ContextTable.Enabled := FALSE;
+          ContextTable.MODIFY;
+        END;
         EXIT;
+      END;
       IF ContextTable.GET(TableNo) THEN
         ContextTable.DELETE;
     END;

@@ -19,7 +19,9 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     VAR
       Parse@1000000000 : Codeunit 110230;
       PassedTxt@1000000001 : TextConst 'ENU=PASS;RUS=пройдено';
-      FailedTxt@1000000002 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ ';
+      // Пробелов после "ПРОВАЛ" ДВА, а не один: слово занимает те же восемь знаков, что и
+      // "пройдено", и имя проверки в отчёте стоит в одной колонке у обеих строк.
+      FailedTxt@1000000002 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ  ';
       VerdictTxt@1000000003 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
       ChkWaitKeyTxt@1000000010 : TextConst 'ENU=a keylock line of the wait queue splits into kind, hobt, database and mode;RUS=строка keylock из очереди ожиданий разбирается на род, hobt, базу и режим';
       WaitKeyTxt@1000000011 : TextConst 'ENU=kind %1, hobt %2, database %3, mode %4, object %5;RUS=род %1, hobt %2, база %3, режим %4, объект %5';
@@ -76,6 +78,9 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       RingTxt@1000000063 : TextConst 'ENU=silent [%1], spoke [%2], quiet [%3];RUS=смолчало [%1], отдало [%2], тихо [%3]';
       ChkSilentTxt@1000000064 : TextConst 'ENU=a chain gone quiet is named, and a live one is not blamed;RUS=замолчавшая цепочка названа, а идущая - не оболгана';
       SilentTxt@1000000065 : TextConst 'ENU=fresh [%1], silent [%2], never [%3], stopped [%4];RUS=свежий [%1], молчит [%2], ни разу [%3], остановлен [%4]';
+      ChkCeilRingTxt@1000000066 : TextConst 'ENU=a ring the start does not belong to is stopped by the step ceiling and answers with the immediate blocker;RUS=кольцо, в которое начало не входит, обрывается потолком шагов и отвечает непосредственным блокирующим';
+      ChkCeilChainTxt@1000000067 : TextConst 'ENU=a chain longer than the ceiling is cut at the ceiling instead of being unwound to the end;RUS=цепочка длиннее потолка обрывается на потолке, а не разматывается до конца';
+      CeilChainTxt@1000000068 : TextConst 'ENU=links %1 with the array bound %2, head %3 at depth %4, ring %5;RUS=звеньев %1 при пределе массивов %2, голова %3 на глубине %4, кольцо %5';
       FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -112,6 +117,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckOutcome(Passed,Total,Report);
       CheckChain(Passed,Total,Report);
       CheckChainRing(Passed,Total,Report);
+      CheckChainCeiling(Passed,Total,Report);
       CheckVictims(Passed,Total,Report);
       CheckClass(Passed,Total,Report);
       CheckFingerprint(Passed,Total,Report);
@@ -349,8 +355,12 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Waiter[1] := 1; Blocker[1] := 2;
       Waiter[2] := 2; Blocker[2] := 1;
       Head := Parse.ChainHead(Waiter,Blocker,2,1,Depth,Cycle);
+      // Глубина после обрыва приходит ЕДИНИЦЕЙ, а не числом пройденных шагов: головы в
+      // кольце нет вовсе, и объявленный ответ - непосредственный блокирующий. Сравнение с
+      // потолком шагов стояло здесь прежде и покраснеть не могло: единица меньше потолка у
+      // всякого кода, который вообще вернулся, - а об измерении потолка речь ниже.
       Check(Passed,Total,Report,ChkCycleTxt,
-        Cycle AND (Depth <= Parse.MaxChainSteps + 1),
+        Cycle AND (Depth = 1),
         STRSUBSTNO(CycleTxt,Cycle,Depth));
 
       // И второе утверждение, отдельное: обрыв - это ещё не ответ. Головы в кольце нет, и
@@ -360,6 +370,69 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Check(Passed,Total,Report,ChkRingHeadTxt,
         (Head = 2) AND (Depth = 1),
         STRSUBSTNO(RingHeadTxt,Head,2,Depth));
+
+      // А это кольцо, в которое НАЧАЛО НЕ ВХОДИТ: 1 ждёт 3, 3 ждёт 2, 2 ждёт 3. Ветка
+      // "вернулись в начало" сюда не заходит НИКОГДА - разматывание кончается только
+      // потолком шагов. Такого набора в обкатке не было, и потолок не мерился ничем: в
+      // кольце выше обрыв приходит возвратом в начало, и до потолка дело не доходит.
+      //
+      // Числа пройденных шагов наружу не отдаётся: глубину на обрыве разбор тоже
+      // объявляет единицей. Мерится поэтому то, что видно: набор обязан ВЕРНУТЬСЯ (убери
+      // потолок - этот REPEAT не кончится ничем, и прогон повиснет вместо красного
+      // отчёта), назвать кольцо и ответить непосредственным блокирующим, а не жертвой.
+      Waiter[1] := 1; Blocker[1] := 3;
+      Waiter[2] := 3; Blocker[2] := 2;
+      Waiter[3] := 2; Blocker[3] := 3;
+      Head := Parse.ChainHead(Waiter,Blocker,3,1,Depth,Cycle);
+      Check(Passed,Total,Report,ChkCeilRingTxt,
+        Cycle AND (Head = 3) AND (Depth = 1) AND (Head <> 1),
+        STRSUBSTNO(ChainTxt,Head,Depth,Cycle));
+    END;
+
+    LOCAL PROCEDURE CheckChainCeiling@75(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Waiter@1000000003 : ARRAY [500] OF Integer;
+      Blocker@1000000004 : ARRAY [500] OF Integer;
+      Index@1000000005 : Integer;
+      Links@1000000006 : Integer;
+      Head@1000000007 : Integer;
+      Depth@1000000008 : Integer;
+      Cycle@1000000009 : Boolean;
+    BEGIN
+      // Цепочка ДЛИННЕЕ потолка и БЕЗ кольца: 1 ждёт 2, 2 ждёт 3, и так до конца. Такой
+      // набор мерит сам потолок, а не кольцо: без обрыва разматывание дошло бы до головы,
+      // лежащей на шаге "потолок плюс два", а с обрывом кончается раньше и отвечает
+      // непосредственным блокирующим. Покраснеет он и от снятого потолка - ответом станет
+      // дальняя голова, - и от потолка, поднятого выше длины цепочки: то же самое.
+      //
+      // Глубиной здесь не мерят нарочно: разбор объявляет её единицей на всяком обрыве, и
+      // числа шагов, на котором обрыв случился, наружу не отдаёт ничто. Мерится остановка
+      // и ответ, который она даёт.
+      FOR Index := 1 TO ChainBoundUnderTest DO BEGIN
+        Waiter[Index] := Index;
+        Blocker[Index] := Index + 1;
+      END;
+      Links := CeilingChainLinksUnderTest;
+      Head := Parse.ChainHead(Waiter,Blocker,Links,1,Depth,Cycle);
+      Check(Passed,Total,Report,ChkCeilChainTxt,
+        (Links <= ChainBoundUnderTest) AND (Head = 2) AND (Depth = 1),
+        STRSUBSTNO(CeilChainTxt,Links,ChainBoundUnderTest,Head,Depth,Cycle));
+    END;
+
+    LOCAL PROCEDURE ChainBoundUnderTest@76() : Integer;
+    BEGIN
+      // Размер массивов разбора - ARRAY [500]. Цепочку длиннее обкатка построить не может,
+      // и выросший выше этого потолок обязан покраснеть проверкой, а не уронить прогон
+      // отказом по индексу.
+      EXIT(500);
+    END;
+
+    LOCAL PROCEDURE CeilingChainLinksUnderTest@77() : Integer;
+    BEGIN
+      // На два звена больше потолка шагов. Голова такой цепочки лежит на шаге "потолок
+      // плюс два", то есть обрыв обязан случиться РАНЬШЕ, чем она найдётся, а без потолка
+      // разматывание дошло бы до неё и вернуло её же головой.
+      EXIT(Parse.MaxChainSteps + 2);
     END;
 
     LOCAL PROCEDURE CheckVictims@25(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -481,22 +554,62 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       QueueOk@1000000008 : Boolean;
       SiftOk@1000000009 : Boolean;
       LongOk@1000000010 : Boolean;
+      Victims@1000000011 : Integer;
+      SiftKey@1000000012 : Integer;
+      WaitMs@1000000013 : Integer;
+      AlertMs@1000000014 : Integer;
     BEGIN
       // Улика обязана назвать ТО САМОЕ число, по которому совет выдан. Без этого совет и
       // улика расходятся молча: подпись остаётся верной, а число под ней - от другого
       // признака, и оспорить совет становится нечем.
-      QueueOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,7,FALSE,0,FALSE,
+      //
+      // Числа держатся в переменных нарочно: одно и то же число подаётся разбору и ищется
+      // в улике. Разойдись эти два - проверка искала бы не то, что подала, и была бы
+      // зелёной над уликой от другого признака.
+      Victims := 7;
+      SiftKey := 3;
+      WaitMs := 7100;
+      AlertMs := 5000;
+      // И ищется число ЦЕЛИКОМ, а не цифрой: поиск подстрокой нашёл бы "семь" и в
+      // семнадцати, и в семидесяти - улика назвала бы другое число, а проверка смолчала.
+      QueueOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,Victims,FALSE,0,FALSE,
                               AdviceText,QueueEv) = Parse.AdviceQueue;
-      QueueOk := QueueOk AND (STRPOS(QueueEv,'7') > 0) AND (AdviceText <> '');
-      SiftOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,1,TRUE,3,FALSE,
+      QueueOk := QueueOk AND HoldsNumber(QueueEv,Victims) AND (AdviceText <> '');
+      SiftOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,1,TRUE,SiftKey,FALSE,
                              AdviceText,SiftEv) = Parse.AdviceSift;
-      SiftOk := SiftOk AND (STRPOS(SiftEv,'3') > 0);
-      LongOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,7100,5000,1,FALSE,0,FALSE,
+      SiftOk := SiftOk AND HoldsNumber(SiftEv,SiftKey);
+      LongOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,WaitMs,AlertMs,1,FALSE,0,FALSE,
                              AdviceText,LongEv) = Parse.AdviceLongWait;
-      LongOk := LongOk AND (STRPOS(LongEv,'7100') > 0) AND (STRPOS(LongEv,'5000') > 0);
+      LongOk := LongOk AND HoldsNumber(LongEv,WaitMs) AND HoldsNumber(LongEv,AlertMs);
       Check(Passed,Total,Report,ChkAdviceEvidenceTxt,
         QueueOk AND SiftOk AND LongOk,
         STRSUBSTNO(AdviceEvidenceTxt,QueueEv,SiftEv,LongEv));
+    END;
+
+    LOCAL PROCEDURE HoldsNumber@78(Evidence@1000000000 : Text;Expected@1000000001 : Integer) : Boolean;
+    VAR
+      ExpectedTxt@1000000002 : Text;
+      Pos@1000000003 : Integer;
+      Before@1000000004 : Text[1];
+      After@1000000005 : Text[1];
+    BEGIN
+      // Число стоит в улике ЦЕЛИКОМ: по бокам от него - пробел или край строки. Проверка на
+      // "цифра где-то в строке" ловит подмену только случайно: подставь вместо семи
+      // семнадцать или семьдесят - цифра на месте, а число другое, и улика врёт молча.
+      //
+      // Край строки разделителя не требует: за цифрой там ничего нет по определению, и
+      // значение, оставленное до проверки, - пробел.
+      ExpectedTxt := FORMAT(Expected);
+      Pos := STRPOS(Evidence,ExpectedTxt);
+      IF Pos = 0 THEN
+        EXIT(FALSE);
+      Before := ' ';
+      After := ' ';
+      IF Pos > 1 THEN
+        Before := COPYSTR(Evidence,Pos - 1,1);
+      IF (Pos + STRLEN(ExpectedTxt)) <= STRLEN(Evidence) THEN
+        After := COPYSTR(Evidence,Pos + STRLEN(ExpectedTxt),1);
+      EXIT((Before = ' ') AND (After = ' '));
     END;
 
     LOCAL PROCEDURE CheckAdviceQuiet@61(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);

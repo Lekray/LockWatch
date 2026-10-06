@@ -101,11 +101,21 @@ OBJECT Codeunit 110247 LockWatch Permissions
 
       // Снятое руками право обязано вернуться. Иначе набор, у которого кто-то убрал
       // вставку, выглядит заведённым и не даёт ничего - худший из возможных исходов.
-      Permission.GET(RoleId,Permission."Object Type"::"Table Data",DATABASE::"LockWatch Context Mark");
+      //
+      // Строка на таблицу отметок СПРАШИВАЕТСЯ, а не берётся на веру: до этой правки
+      // снятие права держалось на том, что строку завёл завод выше. Откажи он в этом
+      // месте - и обкатка молча правила бы ПУСТУЮ запись, а проверка "право вернулось"
+      // читала бы её же: пустая запись отвечает нулём, ноль не равен "да", и красным
+      // стало бы не то место.
+      IF NOT Permission.GET(RoleId,Permission."Object Type"::"Table Data",
+                            DATABASE::"LockWatch Context Mark") THEN
+        ERROR(NoRowErr,DATABASE::"LockWatch Context Mark");
       Permission."Insert Permission" := NoRight;
       Permission.MODIFY;
       Sync(Added,Fixed,Dropped);
-      Permission.GET(RoleId,Permission."Object Type"::"Table Data",DATABASE::"LockWatch Context Mark");
+      IF NOT Permission.GET(RoleId,Permission."Object Type"::"Table Data",
+                            DATABASE::"LockWatch Context Mark") THEN
+        ERROR(NoRowErr,DATABASE::"LockWatch Context Mark");
       IF Permission."Insert Permission" <> Permission."Insert Permission"::Yes THEN
         ERROR(NotRepairedErr);
 
@@ -161,6 +171,11 @@ OBJECT Codeunit 110247 LockWatch Permissions
 
       Permission.RESET;
       Permission.SETRANGE("Role ID",RoleId);
+      // Лишние строки убираются ВТОРОЙ переменной, поверх идущего FINDSET, и это не
+      // небрежность. Удалить строку той же переменной, которой идёт обход, значит унести
+      // из-под курсора текущую запись: часть набора либо пропустилась бы, либо прочлась
+      // дважды, и уборка молча оставила бы лишнее. Вторая переменная встаёт на ту же
+      // строку по её же ключу и уносит её, а обход продолжает идти своим курсором.
       IF Permission.FINDSET THEN
         REPEAT
           IF NOT Wanted.GET(RoleId,Permission."Object Type",Permission."Object ID") THEN
@@ -177,6 +192,17 @@ OBJECT Codeunit 110247 LockWatch Permissions
       // исполняется в транзакции того, кто пишет документ, и платформа спрашивает права
       // у НЕГО. Косвенные права - те самые, на которые вся эта механика в NAV и
       // рассчитана, - не сработали ни в одном из восьми сочетаний, поэтому здесь прямые.
+      //
+      // НЕИЗМЕРЕННОЕ названо вслух, и это право - EXECUTE. В наборе его нет вовсе: лестница
+      // из восьми ступеней мерила сочетания ПРАВ НА ТАБЛИЦЫ (чтение, вставка, правка,
+      // удаление), а нужен ли подписчику ещё и запуск объектов, не мерилось ни разу.
+      // Добавлять его вслепую нельзя: лишнее право приезжает установке, а за набор, несущий
+      // больше объявленного, отвечаем мы.
+      //
+      // Что будет, если платформа его всё-таки спросит: отказ придёт ВНУТРИ ЧУЖОЙ
+      // ТРАНЗАКЦИИ - в тот же миг, когда человек проводит документ, и сорвёт ЕМУ работу.
+      // Это и есть причина, по которой набор объявлен явно и целиком: пока право есть,
+      // беды не видно; когда его нет, падает не инструмент, а тот, кто ни в чём не виноват.
       Wanted.RESET;
       Wanted.DELETEALL;
       // Строку контекста подписчик только читает: она отвечает, участвует ли таблица.

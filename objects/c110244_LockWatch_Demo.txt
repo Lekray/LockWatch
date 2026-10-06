@@ -25,6 +25,11 @@ OBJECT Codeunit 110244 LockWatch Demo
       StartedTxt@1000000005 : TextConst 'ENU=The demo is running: two background sessions argue over one row for %1 seconds. Look at the journal in about that long.;RUS=Показ пошёл: две фоновые сессии спорят за одну строку %1 секунд. Через столько же смотрите журнал.';
       SlowPollTxt@1000000006 : TextConst 'ENU=Mind the poll period: %1 ms against the %2 ms of holding, so the pass may miss the wait entirely.;RUS=Учтите период опроса: %1 мс против %2 мс удержания - проход может не увидеть ожидания вовсе.';
       TargetTxt@1000000007 : TextConst 'ENU=The row the demo argues over;RUS=Строка, за которую спорит показ';
+      WaitUpTxt@1000000008 : TextConst 'ENU=The wait is up: session %1 is queueing for the row the demo holds, so the pass has something to see.;RUS=Ожидание поднято: сеанс %1 стоит в очереди за строкой показа, и проходу есть что увидеть.';
+      NoWaitTxt@1000000009 : TextConst 'ENU=The demo raised NO wait: the sessions took the row one after the other instead of queueing, and there is nothing for the pass to see. That is not a fault of the watch - compare the holding time with the poll period.;RUS=Показ НЕ поднял ожидания: сессии взяли строку по очереди, а не встали за ней, и смотреть проходу нечего. Это не беда сторожа - сверьте время удержания с периодом опроса.';
+      NoQueueTxt@1000000010 : TextConst 'ENU=The server queue could not be asked, so whether the wait came up stays UNKNOWN: %1;RUS=Очередь сервера спросить не удалось, и поднялось ли ожидание - НЕИЗВЕСТНО: %1';
+      Parse@1000000011 : Codeunit 110230;
+      Sql@1000000012 : Codeunit 110234;
 
     [External]
     PROCEDURE RunDemo@1();
@@ -32,6 +37,7 @@ OBJECT Codeunit 110244 LockWatch Demo
       HoldSession@1000000010 : Integer;
       WaitSession@1000000011 : Integer;
       Note@1000000012 : Text;
+      WaitState@1000000013 : Integer;
     BEGIN
       Setup.FetchOnce;
 
@@ -68,6 +74,20 @@ OBJECT Codeunit 110244 LockWatch Demo
         ERROR(NoSessionErr);
 
       Note := STRSUBSTNO(StartedTxt,HoldMs DIV 1000);
+      // Спрашивается ФАКТ ожидания, а не "сессии отправлены, а дальше как получится". Порядок
+      // спора держится на слепом SLEEP: ждущий может подняться раньше держателя, взять
+      // строку первым - и тогда показ отчитается "пошёл", а в очереди сервера не будет
+      // ничего. Ответов три, и все три называются словами: ожидание есть; ожидания нет -
+      // и тогда это не беда сторожа, а неудача самого показа; очередь спросить не удалось -
+      // и тогда честно сказано "неизвестно", а не "не поднялось".
+      WaitState := WaitUp(WaitSession);
+      IF WaitState > 0 THEN
+        Note := Note + ' ' + STRSUBSTNO(WaitUpTxt,WaitSession)
+      ELSE
+        IF WaitState = 0 THEN
+          Note := Note + ' ' + NoWaitTxt
+        ELSE
+          Note := Note + ' ' + STRSUBSTNO(NoQueueTxt,Sql.LastErrorText);
       // Период опроса длиннее удержания - это не отказ, а предупреждение: показ состоится,
       // но проход может лечь мимо окна. Молчать об этом нельзя, иначе пустой журнал после
       // показа читается как поломка инструмента.
@@ -75,6 +95,58 @@ OBJECT Codeunit 110244 LockWatch Demo
         Note := Note + ' ' + STRSUBSTNO(SlowPollTxt,Setup."Poll Period (ms)",HoldMs);
       IF GUIALLOWED THEN
         MESSAGE(Note);
+    END;
+
+    LOCAL PROCEDURE WaitUp@6(WaitSession@1000000000 : Integer) : Integer;
+    VAR
+      Observed@1000000001 : TEMPORARY Record 110231;
+      Waiter@1000000002 : ARRAY [500] OF Integer;
+      Blocker@1000000003 : ARRAY [500] OF Integer;
+      BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;
+      Rows@1000000005 : Integer;
+      ObservedAt@1000000006 : DateTime;
+      OtherDatabase@1000000007 : Integer;
+      Attempt@1000000008 : Integer;
+    BEGIN
+      // 1 - ожидание в очереди сервера ЕСТЬ, 0 - его нет, -1 - очередь спросить не удалось.
+      // Три ответа, а не два: "очередь не прочлась" и "ожидания нет" - разные беды, и показ,
+      // сваливший их в один ответ, объявил бы себя виноватым за отказ прав.
+      //
+      // Ждётся появление, а не берётся один снимок: ждущий сеанс поднимается и доходит до
+      // строки не мгновенно, и снимок сразу после STARTSESSION почти всегда был бы пустым -
+      // то есть проверка краснела бы на исправном показе. Опрос тот же, что в проходе, и
+      // стоит он доли миллисекунды на тихом сервере.
+      FOR Attempt := 1 TO VerifyTries DO BEGIN
+        Observed.RESET;
+        IF Sql.ReadQueue(Parse.MaxWaitersPerPass,FALSE,Observed,Waiter,Blocker,BlockerIsNav,
+                         Rows,ObservedAt,OtherDatabase) THEN BEGIN
+          Observed.RESET;
+          IF Observed.FINDSET THEN
+            REPEAT
+              IF Observed."Victim SPID" = WaitSession THEN
+                EXIT(1);
+            UNTIL Observed.NEXT = 0;
+          SLEEP(VerifyDelayMs);
+        END ELSE
+          EXIT(-1);
+      END;
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE VerifyTries@7() : Integer;
+    BEGIN
+      // Двенадцать попыток с четвертью секунды между ними - три секунды на подъём сеанса
+      // и постановку в очередь. Запас взят по самому медленному, что бывало на стенде:
+      // сеанс поднимается и берёт строку за доли секунды, но первый вызов после
+      // перезапуска службы платит за сборку бизнес-сборок, и это сотни миллисекунд.
+      EXIT(12);
+    END;
+
+    LOCAL PROCEDURE VerifyDelayMs@8() : Integer;
+    BEGIN
+      // Четверть секунды между опросами. Мельче незачем: очередь опрашивается заново
+      // каждый раз, и десяток лишних чтений на тихом сервере - это работа впустую.
+      EXIT(250);
     END;
 
     [External]
@@ -139,6 +211,20 @@ OBJECT Codeunit 110244 LockWatch Demo
       здесь пульт, в 110245 держатель, в 110246 ждущий. STARTSESSION умеет звать только
       OnRun, поэтому иначе пришлось бы передавать роль записью-параметром - и читать этот
       кодюнит стало бы вдвое дороже, чем он того стоит.
+
+      Два обещания, которые показ даёт и держит сам:
+
+      1. ИСХОД ПОКАЗА ПРОВЕРЯЕТСЯ, а не объявляется. Порядок спора держится на слепом
+         SLEEP, и ждущий может подняться первым - тогда ожидания в очереди не будет вовсе,
+         а показ отчитается "пошёл" и ничего не покажет. Поэтому после отправки сессий
+         спрашивается сама очередь сервера, и ответ говорит словами: ожидание поднято,
+         ожидания нет (и это неудача показа, а не сторожа) либо очередь не спросилась -
+         и тогда честно "неизвестно".
+      2. ПО ЭПИЗОДУ ПОКАЗА НЕ ТРЕВОЖАТ. Показ держит строку шесть секунд против порога
+         тревоги пять по умолчанию, то есть тревога ушла бы наружу по нажатию кнопки.
+         Помечен эпизод показа своей же таблицей мишени, и поднимает тревогу по нему
+         Codeunit 110240: строку тревоги негде пометить "это был показ", и такая строка
+         читалась бы потом как настоящая беда.
     }
     END.
   }
