@@ -1383,6 +1383,25 @@ if (-not $Instance) { Fail 'не задан экземпляр службы: п�
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY или параметр -Company' }
 
 $service = "MicrosoftDynamicsNavServer`$$Instance"
+# Мерному прогону журнала нужны два условия, и стенд их не гарантирует: сторож выключен
+# (EnabledErr - мерный закрыл бы эпизоды настоящего наблюдения) и журнал пуст (DirtyErr -
+# чистка по сроку задела бы чужие строки). 07.10.2026 смета упала ровно на этом: строка
+# настройки приехала миграцией DataPerCompany со включённым сторожем из показа. Правится
+# всё ДО перезапуска службы: у остановленной службы нет читающего кэша, и свежий экземпляр
+# увидит уже правильные значения. Настройка одна на базу (DataPerCompany=No) - приставки
+# компании в её SQL-имени нет; журнал по-прежнему по компаниям. Найденное состояние
+# сторожа возвращается после обкатки; строки журнала не возвращаются - на стенде это
+# данные прошлых прогонов и показа, тот же ответ, что у Test-Watch.
+$benchEnabledWas = Invoke-Sql "SELECT [Enabled] FROM [dbo].[LockWatch Setup]"
+if (($benchEnabledWas.Count -gt 0) -and ([int]$benchEnabledWas[0] -ne 0)) {
+    Write-Host 'Сторож включён в настройке - выключаю на время обкатки, верну после'
+    Invoke-Sql "UPDATE [dbo].[LockWatch Setup] SET [Enabled] = 0" | Out-Null
+}
+$benchJournalWas = Invoke-Sql "SELECT COUNT(*) FROM [dbo].[$Company`$LockWatch Episode]"
+if (($benchJournalWas.Count -gt 0) -and ([int]$benchJournalWas[0] -gt 0)) {
+    Write-Host "Журнал эпизодов не пуст ($($benchJournalWas[0]) строк прошлых прогонов) - чищу на время обкатки"
+    Invoke-Sql "DELETE FROM [dbo].[$Company`$LockWatch Episode]" | Out-Null
+}
 # Служба NAV держит СВОЙ кэш метаданных: после finsql-импорта работающий экземпляр
 # продолжает исполнять ПРЕЖНЮЮ версию объекта. Без перезапуска обкатка проверяет не то,
 # что только что выложено, и выглядит это как успех - самый дорогой вид лжи в прогоне.
@@ -1420,6 +1439,11 @@ Write-Host 'Обкатка и мерный прогон'
 $report = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-String
 $testFailed = $LASTEXITCODE -ne 0
 Write-Host $report.Trim()
+
+if (($benchEnabledWas.Count -gt 0) -and ([int]$benchEnabledWas[0] -ne 0)) {
+    Invoke-Sql "UPDATE [dbo].[LockWatch Setup] SET [Enabled] = $($benchEnabledWas[0])" | Out-Null
+    Write-Host 'Настройка сторожа возвращена к найденной - служба прочитает её на следующем перезапуске'
+}
 
 if ($StopInstance) {
     Write-Host "Останавливаю службу $Instance - на стенде с тесной памятью это не мелочь"
