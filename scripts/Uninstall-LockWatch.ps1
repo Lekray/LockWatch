@@ -1,4 +1,4 @@
-﻿#requires -Version 7
+#requires -Version 7
 <#
 .SYNOPSIS
     Снятие инструмента: что уходит, в каком порядке и что уйти не может. Без ключа -Yes
@@ -266,9 +266,13 @@ function Menu-Ours-Left([int]$id, [switch]$Soft) {
     return ,@($ids | Where-Object { $up.Contains($_) })
 }
 # Номера объектов-меню в базе. Их единицы: уровень у меню - свойство объекта, а не строки.
+# Ответ Invoke-Sql берётся ПЕРЕМЕННОЙ, а не конвейером: запятая в его return защищает
+# однострочный ответ от развёртки, и конвейер от вызова получает весь набор ОДНИМ
+# объектом - "1010 1030 1090" одной строкой, которая в число не кладётся (замерено
+# сметой 07.10.2026). Конвейер от переменной читает строки по одной.
 function Menu-Suites {
-    return ,@(Invoke-Sql "SELECT [ID] FROM [dbo].[Object] WHERE [Type] = 7 ORDER BY [ID];" |
-              ForEach-Object { [int]("$_".Trim()) })
+    $rows = Invoke-Sql "SELECT [ID] FROM [dbo].[Object] WHERE [Type] = 7 ORDER BY [ID];"
+    return ,@($rows | ForEach-Object { [int]("$_".Trim()) })
 }
 # Врезка ищется ПО GUID УЗЛОВ из заготовки, а не по номеру объекта: номер уровня меню
 # выбирает установка, и снятие, знавшее только ключ -MenuTargetId, оставляло врезку в чужом

@@ -1,4 +1,4 @@
-﻿#requires -Version 7
+#requires -Version 7
 <#
 .SYNOPSIS
     Сборка пакета из objects/, выкладка на стенд настоящим компилятором и прогон обкатки.
@@ -1306,6 +1306,21 @@ if ($stampProblems) {
           "него не отличить выложенное от прежнего:`n  " + ($stampProblems -join "`n  "))
 }
 $shipMonolith = $shipBodies -join ''
+# Предел ИМПОРТА на длину строки: строка длиннее 1024 знаков не отклоняется, а МОЛЧА
+# портит объект - C/SIDE записывает сигнатуры процедур и обнуляет их тела (замерено
+# 07.10.2026 на c110241: TextConst в 1096 знаков обнулил все тела, при этом Compiled=1,
+# код возврата 0, лог пуст; 917 знаков тот же импорт переваривает). Длинный текст
+# пишется продолжениями - по одной части на язык, как их выгружает сам C/SIDE.
+# Проверяется ПАКЕТ, а не исходники: порче безразлично, каким шагом она внесена.
+$longLines = @()
+$lineNo = 0
+foreach ($line in ($shipMonolith -split '\r\n')) {
+    $lineNo++
+    if ($line.Length -gt 1024) { $longLines += "строка $lineNo - $($line.Length) знаков" }
+}
+if ($longLines) {
+    Fail ("в пакете строки длиннее 1024 знаков - импорт обнулит тела процедур молча:`n  " + ($longLines -join "`n  "))
+}
 $packUtf = Join-Path $outDir 'LockWatch.txt'
 $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $shipMonolith, (New-Object System.Text.UTF8Encoding($false)))
