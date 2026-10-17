@@ -2,7 +2,7 @@ OBJECT Codeunit 110235 LockWatch Pass
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -67,6 +67,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       Closed@1000000026 : Integer;
       Restarted@1000000027 : Integer;
       Note@1000000028 : Text;
+      QueueErr@1000000047 : Text;
       Truncated@1000000029 : Boolean;
       State@1000000030 : Record 110237;
       PassMs@1000000031 : Integer;
@@ -111,17 +112,27 @@ OBJECT Codeunit 110235 LockWatch Pass
                            Observed,Waiter,Blocker,BlockerIsNav,
                            RowCount,ObservedAt,OtherDatabase)
       THEN BEGIN
+        // Причина отказа сохраняется ПЕРВОЙ: следующий SQL-запрос (охват) перепишет
+        // LastErrorText, и очередь осталась бы названной чужой ошибкой.
+        QueueErr := Sql.LastErrorText;
+        Note := STRSUBSTNO(ReadFailedTxt,QueueErr);
+        // Накопительный слой от очереди не зависит: его счётчики видны и тогда, когда
+        // dm_os_waiting_tasks прочитать не удалось. Пропустить его значило бы потерять
+        // прирост, который случился именно в этот период.
+        Note := Note + CollectCoverage(Setup,State,ObservedAt);
         // Отказ съёма журнал НЕ трогает. Закрыть эпизоды моментом, которого мы не знаем,
         // значило бы объявить их законченными, ничего об этом не выяснив.
         // Нули на месте выброшенного - не заглушка: до переезда проход здесь не доходит
         // вовсе, и прибавлять ему нечего.
         //
-        // Момент отказа берётся ЧАСАМИ СЕССИИ, и это единственный такой случай в проходе:
-        // момента от SQL нет - он и не приехал, в этом весь отказ. Шкала тут одна и та же
-        // на обоих концах (человек читает разницу с CURRENTDATETIME той же сессии), но у
-        // читателя из чужого пояса она сдвинется - как и у всякой отметки, положенной
-        // часами клиента (FINDINGS, раздел 56).
-        SaveWatchdog(State,STRSUBSTNO(ReadFailedTxt,Sql.LastErrorText),StartedAt,NoTime,0,FALSE,0,0);
+        // Если очередь успела принести SQL-момент до отказа, он и остаётся отметкой;
+        // пропавший момент подменяется часами сессии - другого не осталось. Длительность
+        // считается от начала прохода, поэтому отказ, потративший время, не выглядит
+        // нулевым (FINDINGS, раздел 56).
+        Elapsed := CURRENTDATETIME - StartedAt;
+        IF ObservedAt = 0DT THEN
+          ObservedAt := StartedAt;
+        SaveWatchdog(State,Note,ObservedAt,Elapsed,0,FALSE,0,0);
         EXIT(FALSE);
       END;
 
@@ -358,18 +369,34 @@ OBJECT Codeunit 110235 LockWatch Pass
 
     LOCAL PROCEDURE CollectCoverage@11(VAR Setup@1000000000 : Record 110230;
                                        VAR State@1000000006 : Record 110237;
-                                       PassAt@1000000007 : DateTime) : Text;
+                                       VAR PassAt@1000000007 : DateTime) : Text;
     VAR
       Reading@1000000001 : TEMPORARY Record 110235;
       Rows@1000000002 : Integer;
       Added@1000000003 : Integer;
       Changed@1000000004 : Integer;
       Resets@1000000005 : Integer;
+      BaselineOnly@1000000008 : Boolean;
+      ReadAt@1000000009 : DateTime;
     BEGIN
       IF NOT Setup."Coverage Enabled" THEN
         EXIT('');
-      IF NOT Sql.ReadCounters(Parse.MaxCoverageRows,Reading,Rows) THEN
-        EXIT(' ' + STRSUBSTNO(CoverageFailedTxt,Sql.LastErrorText));
+      // Первый проход после установки или после "начать счёт заново" снимает БАЗУ:
+      // все ненулевые счётчики без потолка. Обычный проход читает только выборку под
+      // потолком, но с теми же признаками ненулевого счётчика.
+      BaselineOnly := State."Coverage Since" = 0DT;
+      ReadAt := 0DT;
+      IF BaselineOnly THEN BEGIN
+        IF NOT Sql.ReadCounterBaseline(Reading,Rows,ReadAt) THEN
+          EXIT(' ' + STRSUBSTNO(CoverageFailedTxt,Sql.LastErrorText));
+      END ELSE BEGIN
+        IF NOT Sql.ReadCounters(Parse.MaxCoverageRows,Reading,Rows,ReadAt) THEN
+          EXIT(' ' + STRSUBSTNO(CoverageFailedTxt,Sql.LastErrorText));
+      END;
+      // Момент охвата - SQL-UTC. Обычный проход уже получил его вместе с очередью;
+      // при отказе очереди его может не быть, и тогда берётся момент чтения счётчиков.
+      IF PassAt = 0DT THEN
+        PassAt := ReadAt;
 
       // Отметка "охват считается с" ставится в тот же проход, что и первое чтение. Без
       // неё журнальная половина охвата считалась бы за всё время, а счётчики - с этого
@@ -382,7 +409,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF State."Coverage Since" = 0DT THEN
         State."Coverage Since" := PassAt;
 
-      Coverage.Accumulate(Reading);
+      Coverage.Accumulate(Reading,BaselineOnly);
       Coverage.PassCounts(Added,Changed,Resets);
       IF Resets > 0 THEN
         EXIT(' ' + STRSUBSTNO(CoverageResetTxt,Resets));
@@ -475,13 +502,6 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF Note <> '' THEN
         Msg := Msg + ' ' + Note;
       EXIT(Msg);
-    END;
-
-    LOCAL PROCEDURE NoTime@6() : Duration;
-    BEGIN
-      // Отказавший проход длительности не имеет: время до отказа - это не время прохода,
-      // и записать его в "последний проход, мс" значило бы показать цену того, чего не было.
-      EXIT(0);
     END;
 
     LOCAL PROCEDURE HeadIsForeign@4(VAR Blocker@1000000000 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000001 : ARRAY [500] OF Boolean;Count@1000000002 : Integer;HeadSpid@1000000003 : Integer) : Boolean;

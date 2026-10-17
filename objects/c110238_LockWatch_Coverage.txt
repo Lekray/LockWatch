@@ -2,7 +2,7 @@ OBJECT Codeunit 110238 LockWatch Coverage
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -21,7 +21,7 @@ OBJECT Codeunit 110238 LockWatch Coverage
       BaselineErr@1000000005 : TextConst 'ENU=The coverage count was not started over - the server counters could not be read - %1;RUS=Счёт охвата не начат заново - счётчики сервера не прочитаны - %1';
 
     [External]
-    PROCEDURE Accumulate@1(VAR Reading@1000000000 : Record 110235) : Integer;
+    PROCEDURE Accumulate@1(VAR Reading@1000000000 : Record 110235;BaselineOnly@1000000011 : Boolean) : Integer;
     VAR
       DeltaWaits@1000000001 : BigInteger;
       DeltaMs@1000000002 : BigInteger;
@@ -62,10 +62,20 @@ OBJECT Codeunit 110238 LockWatch Coverage
         DeltaWaits := 0;
         DeltaMs := 0;
         DeltaEsc := 0;
-        IF NOT Fresh THEN BEGIN
-          // Первое чтение даёт только ОТМЕТКУ, а не прирост: счётчик сервера считает от
-          // неизвестного момента, и записать его целиком в "насчитано" значило бы
-          // приписать наблюдению всё, что случилось до его начала.
+        IF Fresh THEN BEGIN
+          // Первая встреча индекса. В базовой съёмке (BaselineOnly) она даёт только
+          // отметку: счётчик сервера считает от неизвестного момента, и записать его
+          // целиком значило бы приписать наблюдению всё, что случилось до его начала.
+          // В обычном проходе индекс, которого в базовой съёмке не было (он тогда стоял
+          // нулём), получает весь счёт с нуля: иначе его первые ожидания пропали бы
+          // навсегда, ведь сравнивать их было бы не с чем.
+          IF NOT BaselineOnly THEN BEGIN
+            DeltaWaits := Reading."Last Waits";
+            DeltaMs := Reading."Last Wait (ms)";
+            DeltaEsc := Reading."Last Escalations";
+          END;
+        END ELSE BEGIN
+          // Известный индекс отдаёт прирост относительно своей последней отметки.
           DeltaWaits := Parse.CounterDelta(Coverage."Last Waits",Reading."Last Waits",ResetWaits);
           DeltaMs := Parse.CounterDelta(Coverage."Last Wait (ms)",Reading."Last Wait (ms)",ResetMs);
           DeltaEsc := Parse.CounterDelta(Coverage."Last Escalations",Reading."Last Escalations",ResetEsc);
@@ -262,6 +272,7 @@ OBJECT Codeunit 110238 LockWatch Coverage
       Sql@1000000001 : Codeunit 110234;
       Reading@1000000002 : TEMPORARY Record 110235;
       Rows@1000000003 : Integer;
+      ReadAt@1000000004 : DateTime;
     BEGIN
       // Счёт охвата начинается заново ЦЕЛИКОМ и в одном месте. Приросты и отметка "считается
       // с" - две половины одного числа: обнулить приросты, оставив отметку, значит сравнить
@@ -279,18 +290,26 @@ OBJECT Codeunit 110238 LockWatch Coverage
       //
       // Читается ДО уборки нарочно: не прочлось - не тронуто ничто. Половина начатого счёта
       // хуже неначатого, а отказ здесь называет причину словами сервера и соврать не может.
-      IF NOT Sql.ReadCounters(0,Reading,Rows) THEN
+      IF NOT Sql.ReadCounterBaseline(Reading,Rows,ReadAt) THEN
         ERROR(BaselineErr,Sql.LastErrorText);
+      // Базовая съёмка берёт ВСЕ ненулевые счётчики без потолка: строка, не попавшая в
+      // неё, в следующем проходе выглядела бы новой и принесла бы весь свой счёт с нуля.
+      // Поэтому и TRUE: на базе приростов нет, есть только отметка.
       ResetAll;
       // После уборки все строки свежие, а свежая даёт только ОТМЕТКУ и никакого прироста -
       // это и есть точка отсчёта. Выключенный накопительный слой ей не помеха: чтение
       // счётчиков само ничего не копит, и снятая точка дождётся дня, когда слой включат, -
       // обе половины останутся считанными от одного мига.
-      Accumulate(Reading);
+      Accumulate(Reading,TRUE);
       // Строка состояния перечитывается ПОД ЗАМКОМ: ту же строку пишет каждый проход, и
       // разойтись версиями им нельзя (FINDINGS, раздел 69).
       State.FetchToWrite;
-      State."Coverage Since" := CURRENTDATETIME;
+      // Отметка берётся тем же SQL-моментом, каким читались счётчики: журнальная и
+      // насчитанная половины охвата обязаны считаться от одной шкалы.
+      IF ReadAt <> 0DT THEN
+        State."Coverage Since" := ReadAt
+      ELSE
+        State."Coverage Since" := CURRENTDATETIME;
       // Выброшенное обнуляется ВМЕСТЕ с отметкой, иначе доля уйдёт за сотню процентов:
       // журнальная половина считалась бы с этого мига плюс всё выброшенное за прошлую
       // жизнь. Это та же пара, что отметка и приросты, - и обнуляется она там же.

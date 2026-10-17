@@ -2,7 +2,7 @@ OBJECT Codeunit 110232 LockWatch Journal
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -17,7 +17,6 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal@1000000001 : Record 110231;
       History@1000000012 : Record 110238;
       PassAt@1000000002 : DateTime;
-      PassPeriodMs@1000000003 : Integer;
       PassAlertMs@1000000011 : Integer;
       NextEntryNo@1000000004 : Integer;
       PassStarted@1000000005 : Boolean;
@@ -35,7 +34,8 @@ OBJECT Codeunit 110232 LockWatch Journal
       // тем же запросом, что отдал очередь. Свои часы здесь не годятся: между съёмом
       // и записью проходят миллисекунды, и они легли бы в начало каждого эпизода.
       PassAt := ObservedAt;
-      PassPeriodMs := PeriodMs;
+      // Период остаётся в сигнатуре для существующих вызовов: исход CloseRow
+      // считает по настоящему промежутку между проходами, а не по этому числу.
       // Порог тревоги нужен не журналу, а советчику: он единственное, что советчик берёт
       // из настройки, и приходит он сюда тем же путём, что и период - снаружи и один раз
       // на проход, а не чтением настройки на каждую строку.
@@ -782,6 +782,8 @@ OBJECT Codeunit 110232 LockWatch Journal
     LOCAL PROCEDURE CloseRow@9();
     VAR
       Waited@1000000000 : Duration;
+      Gap@1000000002 : Duration;
+      GapMs@1000000003 : Integer;
       VictimIsNav@1000000001 : Boolean;
     BEGIN
       // Мига конца мы не знаем: жертва исчезла где-то между прошлым наблюдением и этим,
@@ -791,10 +793,23 @@ OBJECT Codeunit 110232 LockWatch Journal
       VictimIsNav := Journal."Victim Is NAV" = Journal."Victim Is NAV"::Yes;
       Waited := Journal."Max Wait (ms)";
       Journal."Ended At" := Journal."Started At" + Waited;
+      // Исход считается по настоящему промежутку между последним наблюдением
+      // и этим проходом, а не по периоду опроса из настройки: медленная или
+      // остановленная цепочка не должна превращать долгое ожидание в "предоставлено".
+      // Промежуток ограничивается порогом NAV до перевода в Integer, иначе месяц
+      // и больше переполнит разрядность; отрицательный промежуток передаётся
+      // как -1, чтобы исход не стал "предоставлено".
+      Gap := PassAt - Journal."Last Seen At";
+      IF Gap < 0 THEN
+        GapMs := -1
+      ELSE IF Gap > Parse.NavLockTimeoutMs THEN
+        GapMs := Parse.NavLockTimeoutMs
+      ELSE
+        GapMs := Gap;
       // Значения исхода в разборе - те же числа, что и в списке опций поля, и это не
       // совпадение: разбор о таблице ничего не знает и знать не должен, а порядок опций
       // держится проверкой в обкатке.
-      Journal.Outcome := Parse.Outcome(Journal."Last Wait (ms)",PassPeriodMs,VictimIsNav);
+      Journal.Outcome := Parse.Outcome(Journal."Last Wait (ms)",GapMs,VictimIsNav);
       Journal.Open := FALSE;
       // Совет пересчитывается ПОСЛЕ исхода, а не до: "отказ по пределу" - это отдельный
       // совет, и до закрытия эпизода он неизвестен.

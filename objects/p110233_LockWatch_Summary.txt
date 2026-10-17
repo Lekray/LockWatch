@@ -2,7 +2,7 @@ OBJECT Page 110233 LockWatch Summary
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -21,7 +21,10 @@ OBJECT Page 110233 LockWatch Summary
                     ORDER(Descending);
     PageType=Worksheet;
     OnOpenPage=BEGIN
-                 SetWindow(DayHours);
+                 IF WholeRecord THEN
+                   SetWholeJournal
+                 ELSE
+                   SetWindow(DayHours);
                  Fill;
                END;
 
@@ -301,6 +304,7 @@ OBJECT Page 110233 LockWatch Summary
       TotalEpisodes@1000000004 : Integer;
       OverThresholdStyle@1000000005 : Text[30];
       WithHistory@1000000006 : Boolean;
+      WholeRecord@1000000010 : Boolean;
       CountedOverText@1000000007 : Text[50];
       JournalOnlyTxt@1000000008 : TextConst 'ENU=the journal;RUS=журналу';
       WithHistoryTxt@1000000009 : TextConst 'ENU=the journal and history;RUS=журналу и истории';
@@ -404,6 +408,14 @@ OBJECT Page 110233 LockWatch Summary
       // страницы: после запуска первое заполнение уже случилось, и человек увидел бы
       // сначала одно число, а потом другое.
       WithHistory := Yes;
+    END;
+
+    [External]
+    PROCEDURE SetWholeRecord@15();
+    BEGIN
+      // Явный вызов со страницы истории: по умолчанию окно остаётся за последние
+      // сутки, и только этот флаг открывает сводку по всей записи.
+      WholeRecord := TRUE;
     END;
 
     LOCAL PROCEDURE SetStyle@10();

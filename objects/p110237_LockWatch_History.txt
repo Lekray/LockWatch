@@ -2,7 +2,7 @@ OBJECT Page 110237 LockWatch Episode History
 {
   OBJECT-PROPERTIES
   {
-    Date=08.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -53,6 +53,7 @@ OBJECT Page 110237 LockWatch Episode History
                                  Summary@1000000000 : Page 110233;
                                BEGIN
                                  Summary.CountHistory(TRUE);
+                                 Summary.SetWholeRecord;
                                  Summary.RUN;
                                END;
                                 }

@@ -1286,9 +1286,9 @@ function Set-BuildStamp([string]$body, [string]$date, [string]$time) {
     if (-not $block.Success) { return '' }
     $stamped = $block.Value
     foreach ($field in @(@{ Name = 'Date'; Value = $date }, @{ Name = 'Time'; Value = $time })) {
-        $one = [regex]::Replace($stamped, "(?m)^(\s*$($field.Name)=)[^;]*;", "`${1}$($field.Value);", 1)
-        if ($one -eq $stamped) { return '' }
-        $stamped = $one
+        $pattern = "(?m)^(\s*$($field.Name)=)[^;]*;"
+        if (-not [regex]::IsMatch($stamped, $pattern)) { return '' }
+        $stamped = [regex]::Replace($stamped, $pattern, "`${1}$($field.Value);", 1)
     }
     return $body.Substring(0, $block.Index) + $stamped + $body.Substring($block.Index + $block.Length)
 }
@@ -1296,6 +1296,10 @@ function Set-BuildStamp([string]$body, [string]$date, [string]$time) {
 $buildAt   = Get-Date
 $buildDate = $buildAt.ToString('dd.MM.yy')
 $buildTime = $buildAt.ToString('HH:mm:ss')
+$stampProbe = Set-BuildStamp $shipParts[0].Body $buildDate $buildTime
+if (-not $stampProbe -or (Set-BuildStamp $stampProbe $buildDate $buildTime) -cne $stampProbe) {
+    Fail 'повторная установка того же штампа должна сохранить объект'
+}
 $shipBodies = @(); $stampProblems = @()
 foreach ($p in $shipParts) {
     $stamped = Set-BuildStamp $p.Body $buildDate $buildTime

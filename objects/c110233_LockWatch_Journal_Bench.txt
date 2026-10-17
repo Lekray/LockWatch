@@ -2,7 +2,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -90,6 +90,16 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       WasDroppedEpisodes@1000000079 : Integer;
       WasDroppedMs@1000000080 : BigInteger;
       DroppedPlanted@1000000081 : Boolean;
+      ChkCloseGapLongTxt@1000000090 : TextConst 'ENU=the outcome uses the real gap between passes, so a small configured period with a long gap is not granted;RUS=исход считается по настоящему промежутку между проходами: малый заданный период при долгом промежутке не даёт "предоставлено"';
+      CloseGapLongTxt@1000000091 : TextConst 'ENU=outcome %1, configured period %2 ms, real gap about %3 ms;RUS=исход %1, заданный период %2 мс, настоящий промежуток около %3 мс';
+      ChkCloseGapShortTxt@1000000092 : TextConst 'ENU=a short real gap is still judged as granted;RUS=короткий настоящий промежуток по-прежнему даёт "предоставлено"';
+      CloseGapShortTxt@1000000093 : TextConst 'ENU=outcome %1, configured period %2 ms, real gap about %3 ms;RUS=исход %1, заданный период %2 мс, настоящий промежуток около %3 мс';
+      ChkCloseGapHugeTxt@1000000094 : TextConst 'ENU=a gap of a month or more does not overflow and is not granted;RUS=промежуток в месяц и больше не переполняет разрядность и не даёт "предоставлено"';
+      CloseGapHugeTxt@1000000095 : TextConst 'ENU=outcome %1, gap %2 days;RUS=исход %1, промежуток %2 дн.';
+      ChkCovFreshTxt@1000000096 : TextConst 'ENU=the first positive reading with no baseline counts as a full gain;RUS=первый положительный замер без базы считается полным приростом';
+      CovFreshTxt@1000000097 : TextConst 'ENU=waits %1 of %2, ms %3 of %4, escalations %5 of %6;RUS=ожиданий %1 из %2, мс %3 из %4, эскалаций %5 из %6';
+      ChkCovBaselineTxt@1000000098 : TextConst 'ENU=a baseline-only reading ignores prehistory and adds nothing;RUS=замер только как база игнорирует предысторию и ничего не добавляет';
+      CovBaselineTxt@1000000099 : TextConst 'ENU=waits %1, ms %2, escalations %3, expected 0 each;RUS=ожиданий %1, мс %2, эскалаций %3, ожидалось по 0';
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -175,6 +185,11 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       NamePickedCeiling@1000000044 : Integer;
       NameBufferFirst@1000000073 : Integer;
       NameBufferAgain@1000000074 : Integer;
+      RegLongOutcome@1000000083 : Integer;
+      RegShortOutcome@1000000084 : Integer;
+      RegHugeOutcome@1000000085 : Integer;
+      RegHugeGap@1000000086 : Duration;
+      CovFound@1000000087 : Boolean;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -215,6 +230,24 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             (Closed = Waiters) AND (Granted = Waiters) AND (StillOpen = 0),
             STRSUBSTNO(CloseTxt,Closed,Waiters,Granted,StillOpen));
 
+      // Настройка периода больше не решает исход: CloseRow считает по настоящему
+      // промежутку между последним наблюдением и закрывающим проходом. Малый
+      // период при долгом промежутке не должен читаться как "предоставлено",
+      // короткий промежуток должен, а месяц и больше не должен переполнять Integer.
+      RegLongOutcome := RegEpisode(901,SecondWaitMs,100,Parse.NavLockTimeoutMs + 2000);
+      Check(Passed,Total,Report,ChkCloseGapLongTxt,
+            RegLongOutcome = Parse.OutcomeUnknown,
+            STRSUBSTNO(CloseGapLongTxt,RegLongOutcome,100,Parse.NavLockTimeoutMs + 2000));
+      RegShortOutcome := RegEpisode(902,SecondWaitMs,100,100);
+      Check(Passed,Total,Report,ChkCloseGapShortTxt,
+            RegShortOutcome = Parse.OutcomeGranted,
+            STRSUBSTNO(CloseGapShortTxt,RegShortOutcome,100,100));
+      RegHugeGap := 31 * Parse.MsPerDay;
+      RegHugeOutcome := RegEpisode(903,SecondWaitMs,100,RegHugeGap);
+      Check(Passed,Total,Report,ChkCloseGapHugeTxt,
+            RegHugeOutcome = Parse.OutcomeUnknown,
+            STRSUBSTNO(CloseGapHugeTxt,RegHugeOutcome,31));
+
       // Сводка проверяется ЗДЕСЬ, до состаривания и уборки: журнал в этот миг содержит
       // ровно то, что мерный прогон в него положил, - пятьсот закрытых эпизодов одной
       // таблицы и одного ключа. Обращений к SQL в сводке нет, поэтому и проверяется она
@@ -246,9 +279,9 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // берётся с ОТРИЦАТЕЛЬНЫМ номером объекта: в SQL номера положительны, и столкнуться
       // с настоящей строкой такая не может.
       MakeCounterReading(Reading,100,5000,FirstEscalationsUnderTest);
-      Coverage.Accumulate(Reading);
+      Coverage.Accumulate(Reading,TRUE);
       MakeCounterReading(Reading,150,8000,SecondEscalationsUnderTest);
-      Coverage.Accumulate(Reading);
+      Coverage.Accumulate(Reading,FALSE);
       Cov.GET(BenchObjectId,BenchIndexId);
       // Эскалации во ВТОРОМ чтении не те же, что в первом, и прирост спрашивается не
       // нулевой: с равными числами ожидаемый ноль вышел бы и у кода, который эскалации не
@@ -262,13 +295,36 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Обнуление счётчика сервером выглядит как значение МЕНЬШЕ прежнего. Разность в этом
       // случае была бы отрицательной, и итог поехал бы назад - молча и правдоподобно.
       MakeCounterReading(Reading,10,200,0);
-      Coverage.Accumulate(Reading);
+      Coverage.Accumulate(Reading,FALSE);
       Coverage.PassCounts(CovAdded,CovChanged,CovResets);
       Cov.GET(BenchObjectId,BenchIndexId);
       Check(Passed,Total,Report,ChkCoverageResetTxt,
             (CovResets = 1) AND (Cov.Resets = 1) AND (Cov.Waits = 60) AND (Cov."Wait (ms)" = 3200),
             STRSUBSTNO(CoverageResetTxt,Cov.Resets,Cov.Waits,60,Cov."Wait (ms)",3200));
       Cov.DELETE;
+
+      // Первый положительный замер без базы - это полный прирост; тот же замер
+      // с BaselineOnly=TRUE только задаёт базу и ничего не добавляет.
+      MakeCounterReading(Reading,40,1200,3);
+      Coverage.Accumulate(Reading,FALSE);
+      Cov.RESET;
+      Cov.INIT;
+      CovFound := Cov.GET(BenchObjectId,BenchIndexId);
+      Check(Passed,Total,Report,ChkCovFreshTxt,
+            (Cov.Waits = 40) AND (Cov."Wait (ms)" = 1200) AND (Cov.Escalations = 3),
+            STRSUBSTNO(CovFreshTxt,Cov.Waits,40,Cov."Wait (ms)",1200,Cov.Escalations,3));
+      IF CovFound THEN
+        Cov.DELETE;
+      MakeCounterReading(Reading,40,1200,3);
+      Coverage.Accumulate(Reading,TRUE);
+      Cov.RESET;
+      Cov.INIT;
+      CovFound := Cov.GET(BenchObjectId,BenchIndexId);
+      Check(Passed,Total,Report,ChkCovBaselineTxt,
+            CovFound AND (Cov.Waits = 0) AND (Cov."Wait (ms)" = 0) AND (Cov.Escalations = 0),
+            STRSUBSTNO(CovBaselineTxt,Cov.Waits,Cov."Wait (ms)",Cov.Escalations));
+      IF CovFound THEN
+        Cov.DELETE;
 
       // Защёлка тревоги проверяется без базы SQL и без единой блокировки: она работает над
       // строкой эпизода, а строку можно подать руками. Головы берутся отрицательные - в
@@ -564,6 +620,48 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Milliseconds := Elapsed;
       Journal.PassCounts(Opened,Updated,Closed,Restarted);
       EXIT(Milliseconds);
+    END;
+
+    LOCAL PROCEDURE RegEpisode@77(VictimSpid@1000000000 : Integer;WaitMs@1000000001 : Integer;PeriodMs@1000000002 : Integer;AgeMs@1000000003 : Duration) : Integer;
+    VAR
+      Observed@1000000004 : Record 110231;
+      Found@1000000005 : Record 110231;
+      FoundOutcome@1000000006 : Integer;
+    BEGIN
+      // Регрессионный эпизод: открыть, отодвинуть последнее наблюдение на
+      // настоящий промежуток, закрыть проходом и вернуть исход. Строка удаляется,
+      // чтобы остальные проверки видели только своих ожидающих.
+      FoundOutcome := -1;
+      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest);
+      MakeObserved(Observed,VictimSpid,WaitMs);
+      Journal.Observe(Observed);
+      Journal.FinishPass;
+      COMMIT;
+      Found.RESET;
+      Found.SETRANGE("Victim SPID",-VictimSpid);
+      IF Found.FINDFIRST THEN BEGIN
+        Found."Last Seen At" := CURRENTDATETIME - AgeMs;
+        Found.MODIFY;
+      END;
+      COMMIT;
+      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest);
+      Journal.FinishPass;
+      COMMIT;
+      Found.RESET;
+      Found.SETRANGE("Victim SPID",-VictimSpid);
+      IF Found.FINDFIRST THEN BEGIN
+        IF Found.Outcome = Found.Outcome::Granted THEN
+          FoundOutcome := Parse.OutcomeGranted
+        ELSE IF Found.Outcome = Found.Outcome::TimedOut THEN
+          FoundOutcome := Parse.OutcomeTimedOut
+        ELSE IF Found.Outcome = Found.Outcome::Deadlocked THEN
+          FoundOutcome := Parse.OutcomeDeadlocked
+        ELSE
+          FoundOutcome := Parse.OutcomeUnknown;
+        Found.DELETE;
+      END;
+      COMMIT;
+      EXIT(FoundOutcome);
     END;
 
     LOCAL PROCEDURE MakeObserved@4(VAR Observed@1000000000 : Record 110231;Index@1000000001 : Integer;WaitMs@1000000002 : Integer);
