@@ -2,7 +2,7 @@ OBJECT Codeunit 110241 LockWatch Platform
 {
   OBJECT-PROPERTIES
   {
-    Date=08.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -73,11 +73,6 @@ OBJECT Codeunit 110241 LockWatch Platform
 
       Episode."User Name" := COPYSTR(Locks."User Name",1,MAXSTRLEN(Episode."User Name"));
       Episode."User Source" := Episode."User Source"::FromPlatform;
-      // Колонки AL отвечают НЕ на тот вопрос, на который их хочется прочесть: платформа
-      // берёт их из живого стека виновника В МОМЕНТ ЧТЕНИЯ, а не оттуда, где он взял
-      // блокировку. Длинная проводка уходит через десятки кодюнитов, и два соседних
-      // чтения одного эпизода назовут разные объекты. Поэтому поле подписано честно.
-      Episode."Blocker AL Scope" := COPYSTR(Locks."AL Method Scope",1,MAXSTRLEN(Episode."Blocker AL Scope"));
       Episode.MODIFY;
       EXIT(TRUE);
     END;

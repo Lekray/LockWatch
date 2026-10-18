@@ -2,7 +2,7 @@ OBJECT Codeunit 110230 LockWatch Parse
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -21,14 +21,6 @@ OBJECT Codeunit 110230 LockWatch Parse
       AdvQueueTxt@1000000005 : TextConst 'ENU=A queue has formed behind one head: the trouble is one and the journal rows are many. The head of the chain is what has to be fixed, not each victim in turn.;RUS=За одной головой выстроилась очередь: беда одна, а строк в журнале много. Чинить надо голову цепочки, а не каждую жертву по очереди.';
       AdvTimedOutTxt@1000000006 : TextConst 'ENU=The victim did not get its lock: the platform gave up on its own limit and a human saw the refusal. Look at what holds the lock that long, not at the victim.;RUS=Жертва не дождалась: платформа сняла ожидание по своему пределу, и человек увидел отказ. Смотреть надо на то, что держит блокировку так долго, а не на жертву.';
       AdvLongWaitTxt@1000000007 : TextConst 'ENU=The wait is longer than the alert threshold, and there are no signs of a whole-table lock, of a sleeping transaction or of a queue. Look at the operation itself and at the document the fight is over.;RUS=Ожидание дольше порога тревоги, а признаков спора за таблицу целиком, сна и очереди нет. Смотреть надо на саму операцию и на документ, за который идёт спор.';
-      EvDeadlockTxt@1000000010 : TextConst 'ENU=deadlock, waited %1 ms;RUS=взаимоблокировка, ожидание %1 мс';
-      EvWholeTableTxt@1000000011 : TextConst 'ENU=the lock is on the whole object, waited %1 ms;RUS=замок на объекте целиком, ожидание %1 мс';
-      EvSleepingTxt@1000000012 : TextConst 'ENU=the culprit is in a transaction and silent, waited %1 ms;RUS=виновник в транзакции и молчит, ожидание %1 мс';
-      EvForeignTxt@1000000013 : TextConst 'ENU=the head of the chain is not a NAV session, waited %1 ms;RUS=голова цепочки - не сессия NAV, ожидание %1 мс';
-      EvSiftTxt@1000000014 : TextConst 'ENU=a SIFT aggregate, NAV key %1;RUS=SIFT-агрегат, ключ NAV %1';
-      EvQueueTxt@1000000015 : TextConst 'ENU=%1 victims behind one head;RUS=жертв за одной головой %1';
-      EvTimedOutTxt@1000000016 : TextConst 'ENU=refused on the limit, %1 ms;RUS=отказ по пределу, %1 мс';
-      EvLongWaitTxt@1000000017 : TextConst 'ENU=%1 ms against the threshold of %2 ms;RUS=%1 мс при пороге %2 мс';
       CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено сторожем блокировок, весь оператор %1 знаков, оставлено %2';
       OverrunTxt@1000000019 : TextConst 'ENU=The pass took %1 ms against the declared ceiling of %2.;RUS=Проход занял %1 мс при объявленном потолке %2.';
       RingSilentTxt@1000000020 : TextConst 'ENU=Deadlocks counted by the server: %1, and the system_health ring gave back none. Its output is capped - restart the session.;RUS=Сервер насчитал кругов %1, кольцо system_health не отдало ни одного. Выдача кольца переполнена - нужен перезавод сессии.';
@@ -111,6 +103,46 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
+    PROCEDURE MaxCulpritTables@77() : Integer;
+    BEGIN
+      // Сколько таблиц виновника читаются за один эпизод. Верхний предел, а не ожидание:
+      // проводка трогает шапку, строки, книгу и настройку - это единицы. Десяток покрывает
+      // такую проводку целиком, и при трёх хэшах на таблицу и десятке эпизодов за проход
+      // список не превышает трёхсот строк - их ещё можно прочитать, не став сторожем
+      // собственной же нагрузки.
+      EXIT(10);
+    END;
+
+    [External]
+    PROCEDURE MaxCulpritHashesPerTable@78() : Integer;
+    BEGIN
+      // Сколько разных страниц (хэшей) читаются по одной таблице. Строки одной транзакции
+      // в одной таблице ложатся на соседние страницы, и трёх хэшей хватает на шапку и пару
+      // строк. Больше - это уже не "строка виновника", а выборка таблицы: платить за неё
+      // приходится на каждом проходе, пока имя не найдено.
+      EXIT(3);
+    END;
+
+    [External]
+    PROCEDURE CulpritFullScanMaxRows@79() : Integer;
+    BEGIN
+      // До этого размера таблица читается целиком по хэшам: у %%lockres%% индекса нет,
+      // и отбор по нему всё равно означает скан - значит, скан небольшой таблицы дешевле
+      // любой хитрости. Сто тысяч строк - это таблица накладных небольшой установки.
+      EXIT(100000);
+    END;
+
+    [External]
+    PROCEDURE CulpritTailRows@80() : Integer;
+    BEGIN
+      // А это - сколько строк читается у большой таблицы. Только хвост: проводка пишет
+      // свежие строки, и номера записей растут, то есть нужная строка стоит последней
+      // в кластерном ключе. Тысяча строк - это несколько сотых секунды, тогда как скан
+      // таблицы в миллионы строк стоил бы секунд, и всё это время очередь стоит.
+      EXIT(1000);
+    END;
+
+    [External]
     PROCEDURE DocSourceNone@31() : Integer;
     BEGIN
       EXIT(0);
@@ -135,6 +167,25 @@ OBJECT Codeunit 110230 LockWatch Parse
       // строку одного документа, а спор идёт за строку другого - так бывает, когда одна
       // транзакция трогает несколько документов. Молча выбрать один значило бы соврать
       // уверенно, поэтому у журнала есть слово и на этот случай.
+      EXIT(3);
+    END;
+
+    [External]
+    PROCEDURE UserSourceFromMark@81() : Integer;
+    BEGIN
+      // Число обязано совпадать с OptionString поля "User Source" (None,FromMark,
+      // FromPlatform,FromCulpritRow): запись в журнал идёт этим числом, а показывает
+      // его галка поля. Расхождение не поймает ни компилятор, ни SQL - только глаз
+      // читателя, поэтому оба конца названы здесь.
+      EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE UserSourceFromCulpritRow@82() : Integer;
+    BEGIN
+      // Третье значение того же OptionString. Отдельная дорога, а не "ещё одна отметка":
+      // имя взято из деловых полей самой базы, и оспорить его иначе, чем зная дорогу,
+      // нельзя.
       EXIT(3);
     END;
 
@@ -206,7 +257,7 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
-    PROCEDURE ParseWaitResource@1(ResourceText@1000 : Text;VAR Kind@1001 : Text;VAR HobtId@1002 : BigInteger;VAR ObjectId@1003 : Integer;VAR DatabaseId@1004 : Integer;VAR HeldMode@1005 : Text) : Boolean;
+    PROCEDURE ParseWaitResource@1(ResourceText@1000 : Text;VAR Kind@1001 : Text;VAR HobtId@1002 : BigInteger;VAR ObjectId@1003 : Integer;VAR DatabaseId@1004 : Integer) : Boolean;
     VAR
       Trimmed@1006 : Text;
       SpacePos@1007 : Integer;
@@ -216,12 +267,11 @@ OBJECT Codeunit 110230 LockWatch Parse
       //   objectlock lockPartition=0 objid=1115203073 subresource=FULL dbid=7 id=... mode=X
       // Хэша ключа здесь НЕТ вовсе - он живёт только в dm_tran_locks. Значит дешёвый
       // опрос очереди отвечает "какая таблица и какой ключ", но не "какая запись".
-      // mode здесь - режим ДЕРЖИМОЙ блокировки, а wait_type говорит, чего хочет жертва.
+      // Пара mode не разбирается: режим держимой блокировки в журнал не ложится.
       Kind := '';
       CLEAR(HobtId);
       ObjectId := 0;
       DatabaseId := 0;
-      HeldMode := '';
 
       Trimmed := DELCHR(ResourceText,'<>',' ');
       IF Trimmed = '' THEN
@@ -239,7 +289,6 @@ OBJECT Codeunit 110230 LockWatch Parse
         ObjectId := 0;
       IF NOT EVALUATE(DatabaseId,PairValue(Trimmed,'dbid')) THEN
         DatabaseId := 0;
-      HeldMode := UPPERCASE(PairValue(Trimmed,'mode'));
 
       EXIT((Kind <> '') AND (DatabaseId > 0));
     END;
@@ -573,34 +622,29 @@ OBJECT Codeunit 110230 LockWatch Parse
     END;
 
     [External]
-    PROCEDURE Advise@51(EpisodeClassNo@1000 : Integer;OutcomeNo@1001 : Integer;MaxWaitMs@1002 : Integer;AlertMs@1003 : Integer;VictimsBehindHead@1004 : Integer;OnSift@1005 : Boolean;NavKeyNo@1006 : Integer;HeadIsForeign@1007 : Boolean;VAR AdviceText@1008 : Text;VAR Evidence@1009 : Text) : Integer;
+    PROCEDURE Advise@51(EpisodeClassNo@1000 : Integer;OutcomeNo@1001 : Integer;MaxWaitMs@1002 : Integer;AlertMs@1003 : Integer;VictimsBehindHead@1004 : Integer;OnSift@1005 : Boolean;HeadIsForeign@1006 : Boolean;VAR AdviceText@1007 : Text) : Integer;
     BEGIN
       // Совет - это не пересказ строки, а ответ на вопрос "что с этим делать". Отсюда и
       // порядок: беда, у которой есть СВОЁ лечение, старше беды, про которую известна
       // только длительность. Сначала три класса - у каждого лечение разное и названное,
       // потом три признака устройства, и только в конце длительность как таковая.
       //
-      // Улика рядом с советом обязательна. Совет без числа, по которому он выдан, - это
-      // мнение: его нечем оспорить и нечем проверить. По улике видно, на чём именно
-      // совет держится, и она же ловит совет, выданный не по тому признаку.
+      // Признаки, по которым выдан совет, и так лежат в строке эпизода: отдельной улики
+      // рядом совет не носит, и по этим же признакам совет и проверяется.
       AdviceText := '';
-      Evidence := '';
 
       IF EpisodeClassNo = ClassDeadlock THEN BEGIN
         AdviceText := AdvDeadlockTxt;
-        Evidence := STRSUBSTNO(EvDeadlockTxt,MaxWaitMs);
         EXIT(AdviceDeadlock);
       END;
 
       IF EpisodeClassNo = ClassWholeTable THEN BEGIN
         AdviceText := AdvWholeTableTxt;
-        Evidence := STRSUBSTNO(EvWholeTableTxt,MaxWaitMs);
         EXIT(AdviceWholeTable);
       END;
 
       IF EpisodeClassNo = ClassSleepingTran THEN BEGIN
         AdviceText := AdvSleepingTxt;
-        Evidence := STRSUBSTNO(EvSleepingTxt,MaxWaitMs);
         EXIT(AdviceSleeping);
       END;
 
@@ -608,25 +652,21 @@ OBJECT Codeunit 110230 LockWatch Parse
       // любой совет про ключи и пачки адресован не туда.
       IF HeadIsForeign THEN BEGIN
         AdviceText := AdvForeignTxt;
-        Evidence := STRSUBSTNO(EvForeignTxt,MaxWaitMs);
         EXIT(AdviceForeignHead);
       END;
 
       IF OnSift THEN BEGIN
         AdviceText := AdvSiftTxt;
-        Evidence := STRSUBSTNO(EvSiftTxt,NavKeyNo);
         EXIT(AdviceSift);
       END;
 
       IF VictimsBehindHead >= AdviceQueueWaiters THEN BEGIN
         AdviceText := AdvQueueTxt;
-        Evidence := STRSUBSTNO(EvQueueTxt,VictimsBehindHead);
         EXIT(AdviceQueue);
       END;
 
       IF OutcomeNo = OutcomeTimedOut THEN BEGIN
         AdviceText := AdvTimedOutTxt;
-        Evidence := STRSUBSTNO(EvTimedOutTxt,MaxWaitMs);
         EXIT(AdviceTimedOut);
       END;
 
@@ -635,7 +675,6 @@ OBJECT Codeunit 110230 LockWatch Parse
       // эпизоду, и советчик стал бы шумом, который перестают читать.
       IF (AlertMs > 0) AND (MaxWaitMs >= AlertMs) THEN BEGIN
         AdviceText := AdvLongWaitTxt;
-        Evidence := STRSUBSTNO(EvLongWaitTxt,MaxWaitMs,AlertMs);
         EXIT(AdviceLongWait);
       END;
 

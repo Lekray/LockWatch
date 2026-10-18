@@ -88,8 +88,8 @@ OBJECT Page 110237 LockWatch Episode History
                       Name=PurgeShown;
                       CaptionML=[ENU=Delete What Is Shown;
                                  RUS=Удалить показанное];
-                      ToolTipML=[ENU=Delete exactly the entries this list is showing right now. This is the only place in the tool where history is ever deleted, and a person has to press it: nothing removes history on its own - not a pass, not a task, not a term.;
-                                 RUS=Удалить ровно те строки, которые список показывает сейчас. Это единственное место во всём инструменте, где история вообще удаляется, и нажать его должен человек: сама по себе она не убывает - ни от прохода, ни от задачи, ни по сроку.];
+                      ToolTipML=[ENU=Delete exactly the entries this list is showing right now. The pass also removes history older than the retention from the setup, but that one is zero after the update - until a person sets it, nothing removes history on its own.;
+                                 RUS=Удалить ровно те строки, которые список показывает сейчас. Проход тоже удаляет историю старше срока хранения из настройки, но после обновления там ноль - пока человек его не выставит, сама по себе история не убывает.];
                       ApplicationArea=#All;
                       Image=Delete;
                       PromotedCategory=Process;
@@ -149,33 +149,12 @@ OBJECT Page 110237 LockWatch Episode History
                 ApplicationArea=#All;
                 SourceExpr="NAV Table Name" }
 
-    { 9   ;2   ;Field     ;
-                Name=NavKeyNo;
-                ToolTipML=[ENU=Specifies the NAV key number. There are two parsing rules, not one: for a table it is the suffix of the index name, for a SIFT view it is the number after the marker.;
-                           RUS=Определяет номер ключа NAV. Правил разбора два, а не одно: у таблицы это суффикс имени индекса, у представления SIFT - число после метки.];
-                ApplicationArea=#All;
-                SourceExpr="NAV Key No." }
-
     { 10  ;2   ;Field     ;
                 Name=DocumentNo;
-                ToolTipML=[ENU=Specifies the document the fight was over. The next column names the road that answered, and the one after it explains an empty cell instead of leaving it silent.;
-                           RUS=Определяет документ, за который шёл спор. Следующая колонка называет ответившую дорогу, а за ней стоит причина пустой клетки, а не молчание.];
+                ToolTipML=[ENU=Specifies the document the fight was over. It is named by the lock hash or by the context mark, and an empty cell is an honest answer of its own.;
+                           RUS=Определяет документ, за который шёл спор. Он назван по хэшу блокировки либо по отметке контекста, и пустая клетка - самостоятельный честный ответ.];
                 ApplicationArea=#All;
                 SourceExpr="Document No." }
-
-    { 54  ;2   ;Field     ;
-                Name=DocumentSource;
-                ToolTipML=[ENU=Specifies which road named the document. The source is named together with the document on purpose: a name without its source cannot be argued with, and a document of the wrong road looks exactly as convincing as the right one.;
-                           RUS=Определяет, какая дорога назвала документ. Источник назван вместе с документом нарочно: имя без источника нечем оспорить, а документ не с той дороги выглядит ровно так же убедительно, как свой.];
-                ApplicationArea=#All;
-                SourceExpr="Document Source" }
-
-    { 11  ;2   ;Field     ;
-                Name=NoDocumentReason;
-                ToolTipML=[ENU=Specifies why the document could not be named. An empty column without a reason reads as an episode without people and documents, and that is a different thing.;
-                           RUS=Определяет, почему документ назвать не удалось. Пустая колонка без причины читается как эпизод без людей и документов, а это другое.];
-                ApplicationArea=#All;
-                SourceExpr="No Document Reason" }
 
     { 50  ;2   ;Field     ;
                 Name=CulpritDocumentNo;
@@ -198,32 +177,19 @@ OBJECT Page 110237 LockWatch Episode History
                 ApplicationArea=#All;
                 SourceExpr="User Source" }
 
+    { 55  ;2   ;Field     ;
+                Name=CulpritNavSessions;
+                ToolTipML=[ENU=Specifies the NAV session numbers of the culprit, in ascending order. A number gets here only when the road could tie it to the account: from the culprit's context mark, or from the live sessions of that same account in this database on this server. One live session makes the answer unambiguous, several are listed together, and then the number no longer says WHICH session did it - only that it was one of those.;
+                           RUS=Определяет номера сеансов NAV виновника по возрастанию. Номер попадает сюда, только когда дорога сумела привязать его к учётной записи: из отметки контекста виновника либо из живых сеансов этой же учётки в этой базе на этом сервере. Один живой сеанс делает ответ однозначным, несколько перечислены вместе, и тогда номер уже не говорит, КОТОРЫЙ из них виноват, - только что виноват один из них.];
+                ApplicationArea=#All;
+                SourceExpr="Culprit NAV Sessions" }
+
     { 13  ;2   ;Field     ;
                 Name=VictimUserName;
                 ToolTipML=[ENU=Specifies who was kept waiting, from the victim's own context mark.;
                            RUS=Определяет, кого задержали, - из собственной отметки жертвы.];
                 ApplicationArea=#All;
                 SourceExpr="Victim User Name" }
-
-    { 48  ;2   ;Field     ;
-                Name=VictimLogin;
-                ToolTipML=[ENU=Specifies the SQL login of the waiting session. It answers "who waited" the way the server knows it, and it is filled always - unlike the NAV account next to it, which exists only where a context mark was laid.;
-                           RUS=Определяет логин SQL ждущего сеанса. Это ответ на "кто ждал" тем, что знает сервер, и он есть ВСЕГДА - в отличие от соседней учётной записи NAV, которая берётся только из отметки контекста.];
-                ApplicationArea=#All;
-                SourceExpr="Victim Login" }
-
-    { 49  ;2   ;Field     ;
-                Name=VictimProgram;
-                ToolTipML=[ENU=Specifies how the waiting session introduced itself to the server.;
-                           RUS=Определяет, как ждущий сеанс представился серверу.];
-                ApplicationArea=#All;
-                SourceExpr="Victim Program" }
-    { 14  ;2   ;Field     ;
-                Name=BlockerLogin;
-                ToolTipML=[ENU=Specifies the SQL login of the session that held the lock. For an outside connection this is the only answer to "who" there is.;
-                           RUS=Определяет логин SQL сеанса, который держал блокировку. Для чужого соединения это единственный возможный ответ на вопрос "кто".];
-                ApplicationArea=#All;
-                SourceExpr="Blocker Login" }
 
     { 15  ;2   ;Field     ;
                 Name=BlockerProgram;
@@ -245,13 +211,6 @@ OBJECT Page 110237 LockWatch Episode History
                            RUS=Определяет, сколько ждало за головой цепочки. Именно это и отличает досаду от остановки.];
                 ApplicationArea=#All;
                 SourceExpr="Victims Behind Head" }
-
-    { 18  ;2   ;Field     ;
-                Name=HeldMode;
-                ToolTipML=[ENU=Specifies the mode of the lock that was held.;
-                           RUS=Определяет режим блокировки, которую держали.];
-                ApplicationArea=#All;
-                SourceExpr="Held Mode" }
 
     { 19  ;2   ;Field     ;
                 Name=Advice;
@@ -309,9 +268,10 @@ OBJECT Page 110237 LockWatch Episode History
       Doomed@1000000000 : Record 110238;
       Rows@1000000001 : Integer;
     BEGIN
-      // Единственное место во всём инструменте, где история удаляется, и нажать его должен
-      // человек. Отбор берётся С ЭКРАНА: что человек видит, то и уйдёт. Кнопка "удалить
-      // старше N дней" спрашивала бы число вслепую, и промах в ней виден только потом.
+      // Ручное удаление поверх срока хранения: срок стирает старое порциями в проходе,
+      // а здесь человек убирает ровно то, что видит. Отбор берётся С ЭКРАНА: что человек
+      // видит, то и уйдёт. Кнопка "удалить старше N дней" спрашивала бы число вслепую,
+      // и промах в ней виден только потом.
       //
       // Число называется ДО вопроса, а не после: "удалить показанное" без счёта - это
       // предложение согласиться неизвестно на что.
@@ -336,7 +296,8 @@ OBJECT Page 110237 LockWatch Episode History
       вопрос: когда, сколько, за что, кто - и ни одной про "идёт ли сейчас", потому что в
       истории не идёт ничего.
 
-      Удаление тут одно и ручное. Всё остальное в инструменте историю только пополняет.
+      Удаляют историю двое: срок хранения из настройки - порциями в проходе, и человек
+      кнопкой - ровно то, что видит. Пока срок равен нулю, история не убывает сама.
     }
     END.
   }

@@ -43,6 +43,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       CoverageTxt@1000000038 : TextConst 'ENU=Coverage: %1 indexes grew.;RUS=Охват: приросло индексов %1.';
       AlertsTxt@1000000041 : TextConst 'ENU=Alerts raised %1, held back by the latch %2.;RUS=Тревог поднято %1, придержано защёлкой %2.';
       CoverageResetTxt@1000000039 : TextConst 'ENU=Coverage: %1 counters were zeroed by the server, that much waiting is lost from the total.;RUS=Охват: счётчиков обнулено сервером %1, столько же ожиданий потеряно для итога.';
+      CulpritRowFailedTxt@1000000048 : TextConst 'ENU=Names from culprit rows are not read: %1;RUS=Имена по строкам виновника не прочитаны: %1';
+      PurgedTxt@1000000049 : TextConst 'ENU=Purged from history %1.;RUS=Удалено из истории %1.';
 
     [External]
     PROCEDURE RunPass@1() : Boolean;
@@ -78,6 +80,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       DroppedSeen@1000000036 : Integer;
       DroppedSeenMs@1000000037 : BigInteger;
       RowLimit@1000000046 : Integer;
+      Purged@1000000038 : Integer;
     BEGIN
       // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
       // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
@@ -165,7 +168,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       // нечего вовсе - ожидание кончилось ровно потому, что блокировку отпустили. Пока
       // же эпизод идёт, вопрос повторяется каждым проходом: отметка виновника появляется
       // тогда, когда он трогает таблицу документа, а это бывает и позже начала ожидания.
-      Note := Note + NameDocuments;
+      Note := Note + NameDocuments(Setup."Names From Culprit Rows");
 
       // Тревога поднимается ПОСЛЕ разбора документа: в неё должны попасть и номер
       // документа, и учётная запись, а до разбора их ещё нет.
@@ -195,6 +198,14 @@ OBJECT Codeunit 110235 LockWatch Pass
                                       Dropped,DroppedSeen,DroppedSeenMs);
       Note := Note + MovedNote(Moved,Dropped);
 
+      // Срок хранения истории отдельный от срока переезда: журнал и история чистятся
+      // разными числами, и путать их значило бы либо терять историю раньше времени,
+      // либо держать её вечно. Предел тот же, что у переезда: проход не должен
+      // застревать на годовой истории.
+      Purged := Journal.PurgeHistory(Setup."History Retention (Days)",
+                                     TrimRowsPerPass(Setup."Max Rows per Pass"));
+      Note := Note + PurgedNote(Purged);
+
       Note := Note + SweptNote(Swept);
 
       Truncated := (RowLimit > 0) AND (RowCount >= RowLimit);
@@ -212,11 +223,13 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE NameDocuments@7() : Text;
+    LOCAL PROCEDURE NameDocuments@7(WantCulpritRow@1000000003 : Boolean) : Text;
     VAR
       Pending@1000000000 : TEMPORARY Record 110231;
       Context@1000000002 : TEMPORARY Record 110232;
       Picked@1000000001 : Integer;
+      Sessions@1000000004 : Text;
+      RoadNote@1000000005 : Text;
     BEGIN
       // Разбирать нечего - и запроса не будет вовсе. Это и есть ответ на "dm_tran_locks
       // в цикле не трогать никогда": на тихом сервере цикл её не трогает, а на шумном
@@ -225,27 +238,117 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF Picked = 0 THEN
         EXIT('');
       LoadContext(Context);
-      IF NOT Sql.ResolveDocuments(Pending,Context) THEN
+      IF NOT Sql.ResolveDocuments(Pending,Context,WantCulpritRow) THEN
         EXIT(' ' + STRSUBSTNO(DocFailedTxt,Sql.LastErrorText));
+
+      // Отказ ОДНОЙ дороги (по строке виновника) разбор документа не роняет: документы
+      // уже разобраны, и терять их из-за пустого имени нельзя. Причина уходит в ту же
+      // строку сторожа, что и прочие отказы разбора, а не в новую колонку.
+      RoadNote := '';
+      IF Sql.LastErrorText <> '' THEN
+        RoadNote := ' ' + STRSUBSTNO(CulpritRowFailedTxt,Sql.LastErrorText);
 
       Pending.RESET;
       IF Pending.FINDSET THEN
         REPEAT
+          // Сеанс виновника: у дороги отметки он уже прочитан из самой отметки и лежит в
+          // строке. Дорога по строке виновника номера не знает - для неё он собирается по
+          // учётке из живых сеансов этой базы. Пустое поверх найденного не кладётся.
+          Sessions := Pending."Culprit NAV Sessions";
+          IF (Sessions = '') AND (Pending."User Source" = Pending."User Source"::FromCulpritRow) THEN
+            Sessions := CulpritSessions(Pending."User Name");
           IF Pending."Document No." <> '' THEN
             Journal.SetDocument(Pending."Entry No.",Pending."Document No.",Pending."User Name",
                                 Pending."Document Source",'',Pending."Victim User Name",
-                                Pending."Culprit Document No.")
+                                Pending."Culprit Document No.",Pending."User Source",Sessions)
           ELSE
             // Пустая колонка с ПРИЧИНОЙ честнее пустой колонки без неё: без причины она
-            // читается как "блокировок по документам не было".
-            Journal.SetDocument(Pending."Entry No.",'','',Parse.DocSourceNone,NoMarkTxt,
-                                Pending."Victim User Name",'');
+            // читается как "блокировок по документам не было". Имя не теряется и здесь:
+            // документ не назван, а человек назван - это разные ответы.
+            Journal.SetDocument(Pending."Entry No.",'',Pending."User Name",Parse.DocSourceNone,
+                                NoMarkTxt,Pending."Victim User Name",
+                                Pending."Culprit Document No.",Pending."User Source",Sessions);
         UNTIL Pending.NEXT = 0;
       // Обрезка списка интересных блокировок (MaxLocks в Codeunit 110234) называется вслух
       // тем же словом прохода. У эпизодов, чьи блокировки в список не влезли, документ и
       // имя остались пустыми, и пустая колонка без этого слова читается как "ответа не
       // было", хотя ответ просто не искали.
-      EXIT(Sql.LocksTruncatedNote);
+      EXIT(Sql.LocksTruncatedNote + RoadNote);
+    END;
+
+    LOCAL PROCEDURE CulpritSessions@18(UserId@1000000000 : Code[50]) : Text;
+    VAR
+      Own@1000000001 : Record 2000000110;
+      Seen@1000000002 : Record 2000000110;
+      AliveSession@1000000003 : Record 2000000110;
+      Numbers@1000000004 : ARRAY [100] OF Integer;
+      Count@1000000005 : Integer;
+      Index@1000000006 : Integer;
+      Inner@1000000007 : Integer;
+      Instance@1000000008 : Integer;
+      Swapped@1000000009 : Integer;
+      Alive@1000000010 : Boolean;
+      DatabaseName@1000000011 : Text;
+      Part@1000000012 : Text;
+      Result@1000000013 : Text[250];
+    BEGIN
+      // Номер сеанса виновника по учётке. Дорога по строке виновника приносит имя, но не
+      // сеанс: в деловых полях строки сеанса нет. Собрать его можно только здесь, из
+      // Active Session: какие сеансы этой учётки живы в ЭТОЙ базе на этом сервере.
+      //
+      // Один живой сеанс делает ответ однозначным. Несколько номеров перечисляются вместе,
+      // и тогда колонка говорит "один из этих", а не "вот этот" - приписывать вину одному
+      // из нескольких окон значило бы гадать.
+      IF UserId = '' THEN
+        EXIT('');
+      IF NOT Own.GET(SERVICEINSTANCEID,SESSIONID) THEN
+        EXIT('');
+      DatabaseName := Own."Database Name";
+      Seen.RESET;
+      Seen.SETRANGE("User ID",UserId);
+      Seen.SETRANGE("Database Name",DatabaseName);
+      Count := 0;
+      IF Seen.FINDSET THEN
+        REPEAT
+          Instance := Seen."Server Instance ID";
+          AliveSession.RESET;
+          AliveSession.SETRANGE("Server Instance ID",Instance);
+          // Жив свой экземпляр и тот, у которого платформа помнит хоть один сеанс. Таблица
+          // сеансов переживает смерть сеанса и ошибается в безопасную сторону: лишний
+          // номер читается как "один из них", а не как выдуманный человек.
+          Alive := (Instance = SERVICEINSTANCEID) OR NOT AliveSession.ISEMPTY;
+          IF Alive AND (Count < LiveSessionsCap) THEN BEGIN
+            Count := Count + 1;
+            Numbers[Count] := Seen."Session ID";
+          END;
+        UNTIL Seen.NEXT = 0;
+      // По возрастанию - чтобы две одинаковые строки журнала читались одинаково и чтобы
+      // номер не зависел от порядка, в котором сервер отдал сеансы.
+      FOR Index := 1 TO Count - 1 DO
+        FOR Inner := Index + 1 TO Count DO
+          IF Numbers[Inner] < Numbers[Index] THEN BEGIN
+            Swapped := Numbers[Index];
+            Numbers[Index] := Numbers[Inner];
+            Numbers[Inner] := Swapped;
+          END;
+      FOR Index := 1 TO Count DO BEGIN
+        Part := FORMAT(Numbers[Index]);
+        IF Result <> '' THEN
+          Part := ',' + Part;
+        // Обрезка по длине поля: хвост, не влезший в 250 знаков, не дописывается -
+        // половина номера хуже его отсутствия.
+        IF STRLEN(Result) + STRLEN(Part) <= MAXSTRLEN(Result) THEN
+          Result := Result + Part;
+      END;
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE LiveSessionsCap@19() : Integer;
+    BEGIN
+      // Сто живых сеансов одной учётки - это уже не человек за экраном, а ферма заданий.
+      // Больше не влезло бы и в поле в 250 знаков. Предел стоит ради границы массива, а
+      // не ради ответа "сто": упереться в него на живой установке неоткуда.
+      EXIT(100);
     END;
 
     LOCAL PROCEDURE CollectDeadlocks@9(VAR Setup@1000000000 : Record 110230;
@@ -575,6 +678,16 @@ OBJECT Codeunit 110235 LockWatch Pass
       IF (Moved = 0) AND (Dropped = 0) THEN
         EXIT('');
       EXIT(' ' + STRSUBSTNO(MovedTxt,Moved,Dropped));
+    END;
+
+    LOCAL PROCEDURE PurgedNote@20(Purged@1000000000 : Integer) : Text;
+    BEGIN
+      // Ноль не пишется по той же причине, что и у переезда: строку сторожа читают
+      // каждым проходом, и постоянное "удалено 0" заслонило бы в ней то, ради чего
+      // её читают.
+      IF Purged = 0 THEN
+        EXIT('');
+      EXIT(' ' + STRSUBSTNO(PurgedTxt,Purged));
     END;
 
     LOCAL PROCEDURE MergedNote@17(Merged@1000000000 : Integer) : Text;

@@ -297,13 +297,16 @@ WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($waiter.Id);
     # базе, - и условие проходило бы состоянием, которого опыт не создавал. Здесь же весь
     # опыт держится на том, что блокировку держит СЕССИЯ NAV: имя человека платформа
     # обещает только ей, и спор двух чужих соединений отвечал бы на другой вопрос.
-    $who = Scalar "SELECT TOP 1 [NAV Table Name] + '|' + [Blocker Program] + '|' + [Victim Program] FROM $episode ORDER BY [Entry No_] DESC;"
+    # Жертва спрашивается признаком сессии NAV, а не программой: программу жертвы из
+    # журнала убрали. Ждёт здесь sqlcmd, то есть признак обязан быть «Нет» (2): «Да»
+    # значило бы, что опыт поставил в очередь не того.
+    $who = Scalar "SELECT TOP 1 [NAV Table Name] + '|' + [Blocker Program] + '|' + CONVERT(varchar(11),[Victim Is NAV]) FROM $episode ORDER BY [Entry No_] DESC;"
     $w = @(($who -split '\|') | ForEach-Object { $_.Trim() })
     while ($w.Count -lt 3) { $w += '' }
     Check 'эпизод по блокировке сессии NAV заведён' `
         (($rows -ge 1) -and ($w[0] -eq $markName) -and
-         ($w[1] -match '(?i)dynamics nav') -and ($w[2] -match '(?i)sqlcmd')) `
-        "строк в журнале $rows, таблица [$($w[0])] при ожидаемой [$markName], держал [$($w[1])], ждал [$($w[2])]"
+         ($w[1] -match '(?i)dynamics nav') -and ($w[2] -eq '2')) `
+        "строк в журнале $rows, таблица [$($w[0])] при ожидаемой [$markName], держал [$($w[1])], жертва - сессия NAV $($w[2]) при ожидаемом 2 (нет, ждёт sqlcmd)"
 
     # ---------- главная проверка: правду о мёртвой карте ----------
     # Здесь и выясняется цена всей затеи. Ключ взведён, права на месте, сессия мониторинга
@@ -322,7 +325,7 @@ WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($waiter.Id);
         $named = [int]$Matches[1]; $tried = [int]$Matches[2]; $note = $Matches[3].Trim()
     }
     $row = Scalar @"
-SELECT TOP 1 [User Name] + '|' + CONVERT(varchar(11),[User Source]) + '|' + [Blocker AL Scope]
+SELECT TOP 1 [User Name] + '|' + CONVERT(varchar(11),[User Source])
 FROM $episode ORDER BY [Entry No_] DESC;
 "@
     $f = ($row -split '\|') | ForEach-Object { $_.Trim() }

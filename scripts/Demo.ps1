@@ -367,7 +367,7 @@ SELECT @where;
 $classWords   = "CASE [Class] WHEN 0 THEN 'обычный' WHEN 1 THEN 'эскалация' WHEN 2 THEN 'спящая транзакция' WHEN 3 THEN 'взаимоблокировка' ELSE '?' END"
 $outcomeWords = "CASE [Outcome] WHEN 0 THEN 'не определён' WHEN 1 THEN 'дождался' WHEN 2 THEN 'предел ожидания' WHEN 3 THEN 'разорвана сервером' ELSE '?' END"
 $docWords     = "CASE [Document Source] WHEN 0 THEN 'нет' WHEN 1 THEN 'по хэшу блокировки' WHEN 2 THEN 'из отметки' WHEN 3 THEN 'дороги разошлись' ELSE '?' END"
-$userWords    = "CASE [User Source] WHEN 0 THEN 'нет' WHEN 1 THEN 'из отметки' WHEN 2 THEN 'от платформы' ELSE '?' END"
+$userWords    = "CASE [User Source] WHEN 0 THEN 'нет' WHEN 1 THEN 'из отметки' WHEN 2 THEN 'от платформы' WHEN 3 THEN 'по строке виновника' ELSE '?' END"
 
 function Last-Episode {
     # Сценам нужен ИХ эпизод, а не просто последняя строка журнала. Круги приезжают из
@@ -377,8 +377,8 @@ function Last-Episode {
     # Поэтому круги здесь отсекаются (у них своя сцена и свой запрос), а открытая строка
     # идёт вперёд закрытой: сцена рассказывает о том, что происходит ПРЯМО СЕЙЧАС.
     return Fields @"
-SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' + [Held Mode] + '|' +
-  [Wait Type] + '|' + $classWords + '|' + $outcomeWords + '|' +
+SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
+  $classWords + '|' + $outcomeWords + '|' +
   CONVERT(varchar(11),[Max Wait (ms)]) + '|' +
   CASE WHEN [Document No_] = '' THEN '-' ELSE [Document No_] END + '|' + $docWords + '|' +
   CASE WHEN [User Name] = '' THEN '-' ELSE [User Name] END + '|' + $userWords + '|' +
@@ -398,31 +398,31 @@ FROM $episode WHERE [Class] <> 3 ORDER BY [Open] DESC, [Entry No_] DESC;
 }
 
 function Tell-Episode($f) {
-    if ($f.Count -lt 23) { Warn 'в журнале пусто'; return }
-    Say "журнал: таблица [$($f[0])], ключ NAV $($f[1]), режим $($f[2]), ожидание $($f[3])"
-    Say "        эпизод $($f[4]), исход - $($f[5]), ждали $($f[6]) мс"
-    if ($f[7] -ne '-') { Say "        документ $($f[7]) ($($f[8]))" } else { Say "        документ не назван: $($f[17])" }
-    if ($f[9] -ne '-') { Say "        учётная запись виновника $($f[9]) ($($f[10]))" }
+    if ($f.Count -lt 21) { Warn 'в журнале пусто'; return }
+    Say "журнал: таблица [$($f[0])], ключ NAV $($f[1])"
+    Say "        эпизод $($f[2]), исход - $($f[3]), ждали $($f[4]) мс"
+    if ($f[5] -ne '-') { Say "        документ $($f[5]) ($($f[6]))" } else { Say "        документ не назван: $($f[15])" }
+    if ($f[7] -ne '-') { Say "        учётная запись виновника $($f[7]) ($($f[8]))" }
     # Чем занят виновник - ответ ОТДЕЛЬНЫЙ от "за что спор". Отметку кладёт его же
     # транзакция, и в ней последний документ, который он тронул; спор идёт за одну строку,
     # а тронул он за транзакцию много. Совпало - сказать об этом стоит одной строки;
     # разошлось - это и есть тот случай, ради которого колонка заведена: человек держит
     # одну сделку, а встали на другой.
-    if ($f[22] -ne '-') {
-        if ($f[22] -eq $f[7]) { Say "        занят он той же сделкой $($f[22])" }
-        else { Say "        а занят виновник сделкой $($f[22]) - спор идёт не за неё" }
+    if ($f[20] -ne '-') {
+        if ($f[20] -eq $f[5]) { Say "        занят он той же сделкой $($f[20])" }
+        else { Say "        а занят виновник сделкой $($f[20]) - спор идёт не за неё" }
     }
     # Второе имя - ответ на "кого задержали". Без него "кто кого" остаётся половиной
     # ответа: виновник назван, а пострадавший - номером сеанса.
-    if ($f[21] -ne '-') { Say "        учётная запись жертвы   $($f[21])" }
+    if ($f[19] -ne '-') { Say "        учётная запись жертвы   $($f[19])" }
     # Учётная запись NAV и логин SQL - разные ответы на разные вопросы, и порознь они
     # честнее. Отметку кладёт только сессия NAV; за чужим соединением - утилитой, заданием,
     # чьим-то окном запросов - учётной записи NAV нет и быть не может, зато сервер знает о
     # нём логин и программу, и это единственный ответ на "кто", какой вообще возможен.
-    if ($f[12] -ne '-') { Say "        держит: логин SQL $($f[12]), программа $($f[13])" }
-    Say "        жертва $($f[14]), голова цепочки $($f[15]), за головой жертв: $($f[16])"
-    Say "        совет: $($f[11])"
-    Say "        оператор виновника $($f[18]) байт, оператор жертвы $($f[19]) байт"
+    if ($f[10] -ne '-') { Say "        держит: логин SQL $($f[10]), программа $($f[11])" }
+    Say "        жертва $($f[12]), голова цепочки $($f[13]), за головой жертв: $($f[14])"
+    Say "        совет: $($f[9])"
+    Say "        оператор виновника $($f[16]) байт, оператор жертвы $($f[17]) байт"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -903,16 +903,13 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
         Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Victim Is NAV] = 1 AND [Open] = 0;")) -gt 0 } (CatchSeconds) | Out-Null
         $nav = Fields @"
 SELECT TOP 1 CONVERT(varchar(11),[Max Wait (ms)]) + '|' + $outcomeWords + '|' +
-  CASE WHEN [Victim Host] = '' THEN '-' ELSE [Victim Host] END + '|' +
-  CONVERT(varchar(11),[Victim Process Id]) + '|' +
   CASE WHEN [Document No_] = '' THEN '-' ELSE [Document No_] END + '|' +
   CASE WHEN [User Name] = '' THEN '-' ELSE [User Name] END
 FROM $episode WHERE [Victim Is NAV] = 1 ORDER BY [Entry No_] DESC;
 "@
-        if ($nav.Count -ge 6) {
+        if ($nav.Count -ge 4) {
             Good "исход назван: $($nav[1]), ждали $($nav[0]) мс при пределе $(LockTimeoutNavMs) мс"
-            Say "        жертва: узел $($nav[2]), процесс $($nav[3])"
-            Say "        документ $($nav[4]), учётная запись $($nav[5])"
+            Say "        документ $($nav[2]), учётная запись $($nav[3])"
         }
     } else {
         Warn 'сессия NAV в очередь не встала - сцену пропускаю'

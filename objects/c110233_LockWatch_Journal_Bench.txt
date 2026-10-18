@@ -79,7 +79,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       ChkNameLateTxt@1000000040 : TextConst 'ENU=the attempt count survives the next observation, and a late name reaches the row;RUS=счёт попыток переживает следующий съём, а позднее имя доезжает до строки';
       NameLateTxt@1000000041 : TextConst 'ENU=attempts after the observation %1 of the expected 1, culprit "%2", victim "%3", document "%4";RUS=попыток после съёма %1 при ожидаемой 1, виновник "%2", жертва "%3", документ "%4"';
       ChkNameHeldTxt@1000000042 : TextConst 'ENU=a late empty answer erases nothing, and a named episode is not asked again;RUS=поздний пустой ответ ничего не стирает, а названный эпизод больше не спрашивают';
-      NameHeldTxt@1000000043 : TextConst 'ENU=culprit "%1", victim "%2", document "%3", picked again %4 of the expected 0;RUS=виновник "%1", жертва "%2", документ "%3", выбран снова %4 при ожидаемом 0';
+      NameHeldTxt@1000000043 : TextConst 'ENU=culprit "%1", victim "%2", document "%3", sessions "%4", picked again %5 of the expected 0;RUS=виновник "%1", жертва "%2", документ "%3", сеансы "%4", выбран снова %5 при ожидаемом 0';
       ChkNameCeilingTxt@1000000044 : TextConst 'ENU=the questions stop at the declared ceiling instead of going on for as long as the episode does;RUS=вопросы прекращаются на объявленном потолке, а не идут столько же, сколько эпизод';
       NameCeilingTxt@1000000045 : TextConst 'ENU=attempts %1 of the ceiling %2, picked after the ceiling %3 of the expected 0;RUS=попыток %1 при потолке %2, выбран после потолка %3 при ожидаемом 0';
       NoAnswerTxt@1000000082 : TextConst 'ENU=bench run: no road answered;RUS=мерный прогон: ни одна дорога не ответила';
@@ -100,6 +100,12 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CovFreshTxt@1000000097 : TextConst 'ENU=waits %1 of %2, ms %3 of %4, escalations %5 of %6;RUS=ожиданий %1 из %2, мс %3 из %4, эскалаций %5 из %6';
       ChkCovBaselineTxt@1000000098 : TextConst 'ENU=a baseline-only reading ignores prehistory and adds nothing;RUS=замер только как база игнорирует предысторию и ничего не добавляет';
       CovBaselineTxt@1000000099 : TextConst 'ENU=waits %1, ms %2, escalations %3, expected 0 each;RUS=ожиданий %1, мс %2, эскалаций %3, ожидалось по 0';
+      ChkPurgeZeroTxt@1000000100 : TextConst 'ENU=a zero term purges nothing from history;RUS=нулевой срок не удаляет из истории ничего';
+      PurgeZeroTxt@1000000101 : TextConst 'ENU=purged %1 of the expected 0 at term zero, own rows in history %2 before and %3 after;RUS=вычищено %1 при ожидаемом 0 на нулевом сроке, своих строк в истории %2 до и %3 после';
+      ChkPurgeCapTxt@1000000102 : TextConst 'ENU=the per-call row cap limits the history purge instead of taking everything at once;RUS=потолок строк на вызов ограничивает очистку истории, а не даёт снести всё разом';
+      PurgeCapTxt@1000000103 : TextConst 'ENU=purged %1 at the cap %2, own rows older than the term %3 of the %4 aged;RUS=вычищено %1 при потолке %2, своих старше срока %3 из %4 состаренных';
+      ChkPurgeAgeTxt@1000000104 : TextConst 'ENU=the term takes everything older from history and leaves everything younger;RUS=срок уносит из истории всё старшее и оставляет всё младшее';
+      PurgeAgeTxt@1000000105 : TextConst 'ENU=purged %1, own rows older than the term %2, left older %3, younger stayed %4;RUS=вычищено %1, своих старше срока %2, осталось старше %3, моложе осталось %4';
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
@@ -121,6 +127,12 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     LOCAL PROCEDURE RunBench@2(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
     VAR
       Setup@1000000003 : Record 110230;
+      Line@1000000018 : TEMPORARY Record 110234;
+      Reading@1000000025 : TEMPORARY Record 110235;
+      Cov@1000000026 : Record 110235;
+      AlertEp@1000000030 : Record 110231;
+      Alert@1000000031 : Record 110236;
+      NamePending@1000000036 : TEMPORARY Record 110231;
       Waiters@1000000004 : Integer;
       Opened@1000000005 : Integer;
       Updated@1000000006 : Integer;
@@ -136,7 +148,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Removed@1000000016 : Integer;
       BenchDropped@1000000075 : Integer;
       BenchInCoverage@1000000076 : Integer;
-      BenchInCoverageMs@1000000077 : BigInteger;
       MovedByDrop@1000000078 : Integer;
       InHistoryBefore@1000000047 : Integer;
       HeldNo@1000000065 : Integer;
@@ -145,10 +156,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       MovedByCeiling@1000000068 : Integer;
       CovEpBefore@1000000069 : Integer;
       CovEpAfter@1000000070 : Integer;
-      CovMsBefore@1000000071 : BigInteger;
-      CovMsAfter@1000000072 : BigInteger;
-      MirrorNote@1000000053 : Text;
-      MirrorOther@1000000054 : Text;
       SweepRows@1000000055 : Integer;
       Rounds@1000000056 : Integer;
       PickedAfter@1000000057 : Integer;
@@ -156,25 +163,18 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       SummedBoth@1000000063 : Integer;
       InHistoryNow@1000000064 : Integer;
       Worst@1000000017 : Integer;
-      Line@1000000018 : TEMPORARY Record 110234;
       Lines@1000000019 : Integer;
       Summed@1000000020 : Integer;
       OverLow@1000000021 : Integer;
       OverHigh@1000000022 : Integer;
       FutureLines@1000000023 : Integer;
-      TotalWait@1000000024 : BigInteger;
-      Reading@1000000025 : TEMPORARY Record 110235;
-      Cov@1000000026 : Record 110235;
       CovAdded@1000000027 : Integer;
       CovChanged@1000000028 : Integer;
       CovResets@1000000029 : Integer;
-      AlertEp@1000000030 : Record 110231;
-      Alert@1000000031 : Record 110236;
       AlertRaised@1000000032 : Integer;
       AlertLatched@1000000033 : Integer;
       AlertRows@1000000034 : Integer;
       AlertEpisodes@1000000035 : Integer;
-      NamePending@1000000036 : TEMPORARY Record 110231;
       NameA@1000000037 : Integer;
       NameB@1000000038 : Integer;
       NamePickedFirst@1000000039 : Integer;
@@ -188,8 +188,22 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       RegLongOutcome@1000000083 : Integer;
       RegShortOutcome@1000000084 : Integer;
       RegHugeOutcome@1000000085 : Integer;
+      PurgedZero@1000000090 : Integer;
+      PurgedCap@1000000091 : Integer;
+      PurgedAge@1000000092 : Integer;
+      HistoryAged@1000000093 : Integer;
+      OwnOldBefore@1000000094 : Integer;
+      OwnYoungBefore@1000000095 : Integer;
+      BenchInCoverageMs@1000000077 : BigInteger;
+      CovMsBefore@1000000071 : BigInteger;
+      CovMsAfter@1000000072 : BigInteger;
+      TotalWait@1000000024 : BigInteger;
+      MirrorNote@1000000053 : Text;
+      MirrorOther@1000000054 : Text;
       RegHugeGap@1000000086 : Duration;
+      TermAge@1000000088 : Duration;
       CovFound@1000000087 : Boolean;
+      TermCutoff@1000000089 : DateTime;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -468,6 +482,49 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // накопленный до него.
       UnplantDropped;
 
+      // История чистится ТОЛЬКО сроком хранения, и назначает этот срок человек: ноль
+      // означает "бессрочно", а после обновления в настройке стоит именно ноль.
+      // Проверяются три утверждения, и каждое ловит свою поломку: ноль не удаляет
+      // ничего, потолок строк режет порцию, а срок уносит старшее и не трогает младшее.
+      //
+      // Срок сцены взят заведомо глубже всего, что может лежать на стенде: строки
+      // эпизодов пишутся текущим временем, и десятилетних среди них не бывает, - значит
+      // настоящая история под срок не попадает и прогон её не стирает. Свои строки
+      // поэтому состариваются ещё глубже. Считается всё по СВОИМ строкам, по той же
+      // отрицательной метке, что и в уборке: настоящий номер сессии отрицательным не
+      // бывает.
+      HistoryAged := BackdateHistory(BackdateRows,HistoryBackdateDays);
+      TermAge := HistoryRetentionUnderTest * Parse.MsPerDay;
+      TermCutoff := CURRENTDATETIME - TermAge;
+      InHistoryBefore := MovedRowCount;
+      PurgedZero := Journal.PurgeHistory(0,Waiters);
+      Check(Passed,Total,Report,ChkPurgeZeroTxt,
+            (PurgedZero = 0) AND (MovedRowCount = InHistoryBefore),
+            STRSUBSTNO(PurgeZeroTxt,PurgedZero,InHistoryBefore,MovedRowCount));
+
+      // Порция ограничена потолком строк за проход, и потолок здесь МЕНЬШЕ числа
+      // состаренных: иначе сцена не отличила бы потолок от срока, который один уносит
+      // всё. Забота та же, что и у переезда: годовая история, снесённая одним DELETEALL,
+      // держала бы блокировку своей таблицы столько же, сколько её собирали.
+      OwnOldBefore := HistoryOwnOlderThan(TermCutoff);
+      PurgedCap := Journal.PurgeHistory(HistoryRetentionUnderTest,PurgeCapUnderTest);
+      Check(Passed,Total,Report,ChkPurgeCapTxt,
+            (PurgedCap = PurgeCapUnderTest) AND (HistoryAged = BackdateRows) AND
+            (OwnOldBefore = BackdateRows),
+            STRSUBSTNO(PurgeCapTxt,PurgedCap,PurgeCapUnderTest,OwnOldBefore,BackdateRows));
+
+      // Остаток забирает тот же срок: старшее уходит всё, младшее остаётся целиком.
+      // Младшее - свои строки, переехавшие по потолку минуту назад: проверка не прошла
+      // бы на пустой сцене, где удалять нечего, а сохранять некого.
+      OwnOldBefore := HistoryOwnOlderThan(TermCutoff);
+      OwnYoungBefore := MovedRowCount - OwnOldBefore;
+      PurgedAge := Journal.PurgeHistory(HistoryRetentionUnderTest,HistoryRowsUpTo(CURRENTDATETIME));
+      Check(Passed,Total,Report,ChkPurgeAgeTxt,
+            (PurgedAge = OwnOldBefore) AND (OwnOldBefore > 0) AND (OwnYoungBefore > 0) AND
+            (HistoryOwnOlderThan(TermCutoff) = 0) AND (MovedRowCount = OwnYoungBefore),
+            STRSUBSTNO(PurgeAgeTxt,PurgedAge,OwnOldBefore,
+                       HistoryOwnOlderThan(TermCutoff),OwnYoungBefore));
+
       // Зеркало сверяется КАЖДЫМ прогоном, а не глазами при правке. Список полей истории
       // списан с журнала, и разойтись он может только молча: добавленное поле просто не
       // доедет при переезде, и заметят это через месяц, когда понадобится.
@@ -520,8 +577,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // есть то, что забирает вызывающий; число рядом с ним - только его опись.
       NamePickedFirst := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
       NameBufferFirst := NamePending.COUNT;
-      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'','');
-      Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'','');
+      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'','',0,'');
+      Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'','',0,'');
       NamePickedAgain := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
       NameBufferAgain := NamePending.COUNT;
       Check(Passed,Total,Report,ChkNameAgainTxt,
@@ -534,7 +591,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       NamePass(NameIndexA,NameIndexB);
       Episode.GET(NameA);
       NameAttemptsA := Episode."Name Attempts";
-      Journal.SetDocument(NameA,NameDocument,NameCulprit,Parse.DocSourceFromMark,'',NameVictim,NameDocument);
+      Journal.SetDocument(NameA,NameDocument,NameCulprit,Parse.DocSourceFromMark,'',NameVictim,
+                          NameDocument,Parse.UserSourceFromMark,'17');
       Episode.GET(NameA);
       Check(Passed,Total,Report,ChkNameLateTxt,
             (NameAttemptsA = 1) AND (Episode."User Name" = NameCulprit) AND
@@ -542,7 +600,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             STRSUBSTNO(NameLateTxt,NameAttemptsA,Episode."User Name",
                        Episode."Victim User Name",Episode."Document No."));
 
-      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'','');
+      Journal.SetDocument(NameA,'','',Parse.DocSourceNone,NoAnswerReason,'','',0,'');
       Episode.GET(NameA);
       Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
       NamePickedNamed := 0;
@@ -550,9 +608,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         NamePickedNamed := 1;
       Check(Passed,Total,Report,ChkNameHeldTxt,
             (Episode."User Name" = NameCulprit) AND (Episode."Victim User Name" = NameVictim) AND
-            (Episode."Document No." = NameDocument) AND (NamePickedNamed = 0),
+            (Episode."Document No." = NameDocument) AND
+            (Episode."Culprit NAV Sessions" = '17') AND (NamePickedNamed = 0),
             STRSUBSTNO(NameHeldTxt,Episode."User Name",Episode."Victim User Name",
-                       Episode."Document No.",NamePickedNamed));
+                       Episode."Document No.",Episode."Culprit NAV Sessions",NamePickedNamed));
 
       // Второй эпизод так и остался без ответа: на нём и проверяется потолок. Без него
       // вопрос повторялся бы столько же, сколько живёт эпизод, а живёт он и по часу.
@@ -565,7 +624,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Rounds := 0;
       REPEAT
         Rounds := Rounds + 1;
-        Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'','');
+        Journal.SetDocument(NameB,'','',Parse.DocSourceNone,NoAnswerReason,'','',0,'');
         PickedAfter := PickNameNow(NameB);
       UNTIL (PickedAfter = 0) OR (Rounds >= NameAttemptRoundCeiling);
       Episode.GET(NameB);
@@ -673,8 +732,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Observed."Victim SPID" := -Index;
       Observed."Victim Transaction Id" := 4000000000 + Index;
       Observed."Victim Is NAV" := Observed."Victim Is NAV"::Yes;
-      Observed."Victim Host" := 'STAND-HOST';
-      Observed."Victim Process Id" := 4000 + Index;
       Observed."Blocker SPID" := -Index - 1;
       Observed."Blocker Transaction Id" := 5000000000 + Index;
       Observed."Head SPID" := -1;
@@ -683,13 +740,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Observed."Resource Kind" := 'KEYLOCK';
       Observed."Hobt Id" := SampleHobt + Index;
       Observed."Database Id" := 7;
-      Observed."Held Mode" := 'X';
-      Observed."Wait Type" := 'LCK_M_U';
       Observed."SQL Object Name" := 'Company Name$Sales Line';
       Observed."NAV Table Name" := 'Sales Line';
       Observed."NAV Key No." := 1;
       Observed."Last Wait (ms)" := WaitMs;
-      Observed."Blocker Tran Began At" := CURRENTDATETIME;
       Observed."Blocker Statement" := 'UPDATE "Company Name$Sales Line" SET "Quantity" ' +
         'WHERE "Document Type" AND "Document No_" AND "Line No_"';
     END;
@@ -731,6 +785,30 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         UNTIL (Moved >= Rows) OR (Episode.NEXT = 0);
       COMMIT;
       EXIT(Moved);
+    END;
+
+    LOCAL PROCEDURE BackdateHistory@82(Rows@1000000000 : Integer;Days@1000000001 : Integer) : Integer;
+    VAR
+      Row@1000000002 : Record 110238;
+      Done@1000000003 : Integer;
+      Back@1000000004 : Duration;
+    BEGIN
+      // Состаривание истории идёт правкой поля, как и у журнала, и по той же метке:
+      // трогаются только свои строки. Ключ "Started At" листается в том же порядке, в
+      // каком их берёт очистка, поэтому состариваются самые старые свои строки - те, что
+      // переехали раньше всех, - а младшие, переехавшие по потолку, остаются младшими.
+      Back := Days * Parse.MsPerDay;
+      Row.RESET;
+      Row.SETFILTER("Victim SPID",'<%1',0);
+      Row.SETCURRENTKEY("Started At");
+      IF Row.FINDSET(TRUE) THEN
+        REPEAT
+          Row."Started At" := CURRENTDATETIME - Back;
+          Row.MODIFY;
+          Done := Done + 1;
+        UNTIL (Done >= Rows) OR (Row.NEXT = 0);
+      COMMIT;
+      EXIT(Done);
     END;
 
     LOCAL PROCEDURE Sweep@6() : Integer;
@@ -795,6 +873,17 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // и мерка обязана считать ту же величину, что и он.
       Moved.RESET;
       Moved.SETFILTER("Started At",'<=%1',ToAt);
+      EXIT(Moved.COUNT);
+    END;
+
+    LOCAL PROCEDURE HistoryOwnOlderThan@81(Mark@1000000000 : DateTime) : Integer;
+    BEGIN
+      // Свои строки истории старше отметки - по той же отрицательной метке, что и в
+      // уборке. История целиком здесь не считается: на стенде в ней могут лежать
+      // настоящие эпизоды, и проверка начала бы зависеть от того, сколько их накопилось.
+      Moved.RESET;
+      Moved.SETFILTER("Victim SPID",'<%1',0);
+      Moved.SETFILTER("Started At",'<%1',Mark);
       EXIT(Moved.COUNT);
     END;
 
@@ -1063,6 +1152,32 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       EXIT(30);
     END;
 
+    LOCAL PROCEDURE HistoryRetentionUnderTest@78() : Integer;
+    BEGIN
+      // Десять лет. Срок этот не про удобство, а про сохранность стенда: строки
+      // эпизодов пишутся текущим временем, и строк старше десяти лет в истории взяться
+      // неоткуда, - значит настоящая история под срок не попадает, и очистка её не
+      // трогает. Свои строки сцена состаривает ГЛУБЖЕ срока, поэтому проверяемое
+      // правило работает как на бою.
+      EXIT(3650);
+    END;
+
+    LOCAL PROCEDURE HistoryBackdateDays@79() : Integer;
+    BEGIN
+      // Одиннадцать лет - глубже срока из HistoryRetentionUnderTest, но всё ещё в
+      // пределах DateTime. Год запаса отделяет сцену от границы: строк ровно на ней не
+      // бывает, а ошибка в дне не покрасит проверку.
+      EXIT(4000);
+    END;
+
+    LOCAL PROCEDURE PurgeCapUnderTest@80() : Integer;
+    BEGIN
+      // Три строки. Меньше десятка состаренных, чтобы потолок заведомо сработал, и не
+      // столько, сколько увозят соседние сцены (семь по потолку и пять по порогу):
+      // совпади числа - проверка прошла бы на чужом остатке.
+      EXIT(3);
+    END;
+
     LOCAL PROCEDURE MakeAlertEpisode@25(VAR Episode@1000000000 : Record 110231;HeadSpid@1000000001 : Integer;WaitMs@1000000002 : Integer);
     BEGIN
       Episode.INIT;
@@ -1317,11 +1432,17 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
                     открытым навсегда;
         срок      - что чистка убирает состаренные и не переполняется на месяце: 30 суток
                     в миллисекундах больше предельного Integer, и в целых числах здесь
-                    было бы отрицательное время.
+                    было бы отрицательное время;
+        история   - что срок хранения истории уносит старшее, оставляет младшее, не
+                    удаляет ничего при нуле и режет порцию по потолку строк за проход.
 
       Мерный прогон работает только на пустом журнале и только при выключенном стороже:
       его собственный проход закрыл бы чужие открытые эпизоды, а чистка по сроку удалила
       бы чужие старые. Обе беды тихие, поэтому прогон на них не надеется, а отказывается.
+
+      Историю он тоже трогает, но только СВОЮ: сцена срока хранения состаривает собственные
+      строки глубже проверяемого срока и удаляет их, а настоящая история под такой срок не
+      попадает.
 
       Свои строки метятся отрицательным номером сессии - настоящий spid отрицательным не
       бывает. По этой же метке идёт уборка, и она идёт всегда, даже если прогон падал.
@@ -1358,8 +1479,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         0"; переспрашивание - "выбрано в первый раз 2, после пустого ответа 2, в буфере
         0 и 0". На целом коде 19 из 19.
 
-      Проверок с тех пор стало 22, и четыре из них добавлены потому, что прежние молчали
-      бы на сломанном коде:
+      Проверок с тех пор стало 30 (счёт на 18.10.2026), и четыре из них добавлены потому,
+      что прежние молчали бы на сломанном коде:
 
         непустой итог      - первым утверждением, а не следствием константы: пустой журнал
                              сошёлся бы сам с собой;
@@ -1370,6 +1491,15 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
                              отвечающая "списки совпадают", ловится только ею;
         потолок кругов     - у переспрашивания свой счёт кругов, а не колонка журнала:
                              цикл по счётчику проверяемого кода не кончился бы никогда.
+
+      Проверки хранения истории добавлены 18.10.2026, и каждая непустая по-своему:
+
+        ноль на сроке     - удаление при нуле означало бы, что обновление молча стирает
+                            историю, ради которой инструмент и держат;
+        потолок порции    - без него годовая история сносилась бы одной транзакцией и
+                            сама стала бы поводом для тревоги;
+        срок и молодость  - уходит только старшее, младшее остаётся: проверка на одном
+                            удалении прошла бы и на простом DELETEALL.
 
       Ещё три места приведены в правду без смены числа проверок: у цены появился ПОЛ
       (замер в ноль проходил зелёным), мкс на строку считаются дробно (целое деление с

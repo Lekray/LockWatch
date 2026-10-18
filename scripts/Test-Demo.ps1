@@ -252,7 +252,7 @@ try {
     # соединением, был бы уже не показом инструмента, а показом sqlcmd.
     $appeared = Wait-For { (DemoEpisodes) -gt 0 } (DemoWaitSeconds)
     $seen = Scalar @"
-SELECT TOP 1 [NAV Table Name] + '|' + [Victim Program] + '|' + [Blocker Program]
+SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[Victim Is NAV]) + '|' + [Blocker Program]
 FROM $episode WHERE [NAV Table Name] = N'$demoName' ORDER BY [Entry No_] DESC;
 "@
     # Скобки @() тут не украшение. Пустой ответ SQL режется на ОДНУ строку, и без них
@@ -262,9 +262,11 @@ FROM $episode WHERE [NAV Table Name] = N'$demoName' ORDER BY [Entry No_] DESC;
     # 10.09.2026, сорок минут молчания на пустом журнале.
     $f = @(($seen -split '\|') | ForEach-Object { $_.Trim() })
     while ($f.Count -lt 3) { $f += '' }
+    # Жертва спрашивается признаком сессии NAV, а не программой: программу жертвы из
+    # журнала убрали - у сеанса NAV она всегда одна, «Microsoft Dynamics NAV Server».
     Check 'показ поднимает настоящее ожидание, и сторож записывает его сам' `
-        ($appeared -and ($f[0] -eq $demoName) -and ($f[1] -match '(?i)dynamics nav') -and ($f[2] -match '(?i)dynamics nav')) `
-        "эпизодов показа $(DemoEpisodes), таблица [$($f[0])] при ожидаемой [$demoName], ждал [$($f[1])], держал [$($f[2])]"
+        ($appeared -and ($f[0] -eq $demoName) -and ($f[1] -eq '1') -and ($f[2] -match '(?i)dynamics nav')) `
+        "эпизодов показа $(DemoEpisodes), таблица [$($f[0])] при ожидаемой [$demoName], жертва NAV $($f[1]), держал [$($f[2])]"
     if (-not $appeared) { Fail 'эпизода от показа нет - дальше проверять нечего' }
 
     # Второе: показ кончается САМ и обычным эпизодом, а не отказом по пределу ожидания.

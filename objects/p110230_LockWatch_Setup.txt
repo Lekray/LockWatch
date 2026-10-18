@@ -249,10 +249,19 @@ OBJECT Page 110230 LockWatch Setup
                 Name=Retention;
                 CaptionML=[ENU=Days before an episode moves to history;
                            RUS=Через сколько дней эпизод уезжает в историю];
-                ToolTipML=[ENU=Specifies how long an episode stays in the journal. Older than that it MOVES to history and is not deleted - nothing in the tool deletes history except a person pressing the button.;
-                           RUS=Определяет, сколько эпизод живёт в журнале. Старше срока он ПЕРЕЕЗЖАЕТ в историю, а не удаляется: историю не чистит ничто, кроме человека с кнопкой.];
+                ToolTipML=[ENU=Specifies how long an episode stays in the journal. Older than that it MOVES to history and is not deleted there: history lives until its own retention expires, and that term is named separately below.;
+                           RUS=Определяет, сколько эпизод живёт в журнале. Старше срока он ПЕРЕЕЗЖАЕТ в историю и не удаляется там: история живёт до истечения собственного срока хранения, и он задаётся отдельным полем ниже.];
                 ApplicationArea=#All;
                 SourceExpr="Retention (Days)" }
+
+    { 62  ;2   ;Field     ;
+                Name=HistoryRetention;
+                CaptionML=[ENU=Days to keep history;
+                           RUS=Хранить историю, дней];
+                ToolTipML=[ENU=Specifies how long an episode stays in history after it has moved there from the journal. Older entries are deleted by the background pass in portions. Zero means keep forever - and after the update the setup holds exactly zero, so the term has to be set by hand.;
+                           RUS=Определяет, сколько эпизод живёт в истории после переезда туда из журнала. Записи старше срока удаляет фоновый проход, порциями. Ноль означает хранить бессрочно, - и после обновления в настройке стоит именно ноль, поэтому срок надо выставить руками.];
+                ApplicationArea=#All;
+                SourceExpr="History Retention (Days)" }
 
     { 57  ;2   ;Field     ;
                 Name=JournalRowsCeiling;
@@ -333,6 +342,13 @@ OBJECT Page 110230 LockWatch Setup
                 MultiLine=Yes;
                 Editable=FALSE;
                 SourceExpr="Platform Road Status" }
+
+    { 61  ;2   ;Field     ;
+                Name=NamesFromCulpritRows;
+                ToolTipML=[ENU=Specifies whether the tool may read the culprit's name from the culprit's own row. When the context mark still has not named anybody, the tool takes the tables the culprit holds locked and reads the user fields of those very rows - only fields that point at a NAV account, and only rows the culprit itself writes. It stays silent when NAV has not yet sent a deferred insert, when the culprit is only waiting and holds no locked row of its own, when the table has no user field at all, and when the accounts found in different rows disagree. It never guesses: a plausible wrong name is worse than an empty cell.;
+                           RUS=Определяет, вправе ли инструмент читать имя виновника из его собственной строки. Когда отметка контекста так и не назвала никого, инструмент берёт таблицы, заблокированные виновником, и читает поля-пользователи именно этих строк - только поля, указывающие на учётную запись NAV, и только строки, которые пишет сам виновник. Молчит он, когда NAV ещё не отправил отложенную вставку, когда виновник только ждёт и своей заблокированной строки не держит, когда в таблице вовсе нет поля-пользователя и когда учётки в разных строках расходятся. Он не гадает: правдоподобное чужое имя хуже пустой клетки.];
+                ApplicationArea=#All;
+                SourceExpr="Names From Culprit Rows" }
 
     { 58  ;2   ;Field     ;
                 Name=DemoEnabled;

@@ -2,7 +2,7 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
 {
   OBJECT-PROPERTIES
   {
-    Date=08.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -15,6 +15,8 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
     VAR
       HeldTxt@1000000000 : TextConst 'ENU=LOCKHOLD user %1 session %2 ms %3 ownrows %4 laterows %5;RUS=LOCKHOLD user %1 session %2 ms %3 ownrows %4 laterows %5';
       NoRowErr@1000000001 : TextConst 'ENU=The bench mark row is not there. It is put down by the run itself, and holding a lock on a row that does not exist would measure nothing.;RUS=Строки-мишени нет. Её кладёт сам прогон, и держать блокировку на несуществующей строке значит не мерить ничего.';
+      LockRowHeldTxt@1000000002 : TextConst 'ENU=LOCKROWHELD user %1 session %2;RUS=LOCKROWHELD user %1 session %2';
+      LockRowTookTxt@1000000003 : TextConst 'ENU=LOCKROWTOOK user %1 session %2;RUS=LOCKROWTOOK user %1 session %2';
 
     [External]
     PROCEDURE Hold@1();
@@ -78,6 +80,92 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
       EXIT('HELD-BY-NAV');
     END;
 
+    [External]
+    PROCEDURE HoldWithUserRow@6();
+    VAR
+      Register@1000000000 : Record 45;
+      Account@1000000001 : Record 15;
+    BEGIN
+      // Держатель, в чьей транзакции лежит ИМЯ. Дорога "по строке виновника" читает
+      // учётку из деловых полей той строки, которую виновник сам записал, и проверять её
+      // можно только так: пока транзакция открыта, в G/L Register лежит строка с USERID,
+      // а G/L Account держит X-блокировку ключа. Ни одного нового права дороге не нужно -
+      // обе таблицы штатные, а имя стоит в той же транзакции, что и спор.
+      Register.INIT;
+      Register."No." := HeldRegisterNo;
+      Register."User ID" := USERID;
+      Register.INSERT;
+      // Чтение той же строки - не ради ответа, а ради того, чтобы отложенная вставка
+      // ушла в SQL: дорога читает её ДРУГИМ соединением, и буфер сессии ей не виден.
+      // Ответ здесь ничего не решает, поэтому и проверять его нечего.
+      Register.GET(HeldRegisterNo);
+      Account.LOCKTABLE;
+      IF Account.FINDFIRST THEN
+        Account.MODIFY;
+      SLEEP(HeldRowMs);
+      // ERROR, а не MESSAGE: им кончается и вызов, и транзакция - обе строки откатываются,
+      // блокировки отпускаются, и следующий прогон начинает с чистого места. MESSAGE
+      // зафиксировал бы след из чужой таблицы учёта в базе заказчика.
+      ERROR(LockRowHeldTxt,USERID,SESSIONID);
+    END;
+
+    [External]
+    PROCEDURE WaitWithUserRow@7();
+    VAR
+      Register@1000000000 : Record 45;
+      Account@1000000001 : Record 15;
+    BEGIN
+      // Ждущий. Его собственная строка помечена чужой учёткой нарочно: если дорога
+      // когда-нибудь перепутает стороны спора и прочтёт строку ЖДУЩЕГО, ответ будет
+      // "LOCKWATCH-VICTIM" - именем, которого в системе нет, и прогон это увидит сразу.
+      // Своей учёткой он не подписывается: подпись жертвы не должна совпасть с подписью
+      // виновника ни при какой ошибке разбора.
+      Register.INIT;
+      Register."No." := VictimRegisterNo;
+      Register."User ID" := VictimUserID;
+      Register.INSERT;
+      Register.GET(VictimRegisterNo);
+      Account.LOCKTABLE;
+      // Здесь ждущий УПИРАЕТСЯ в блокировку держателя и стоит на ней до предела ожидания
+      // NAV (10 000 мс). Дошёл до MODIFY - значит блокировки не было вовсе, и это
+      // отдельный ответ, а не успех: прогон обязан покраснеть.
+      IF Account.FINDFIRST THEN
+        Account.MODIFY;
+      ERROR(LockRowTookTxt,USERID,SESSIONID);
+    END;
+
+    LOCAL PROCEDURE HeldRegisterNo@8() : Integer;
+    BEGIN
+      // Номер строки-мишени в G/L Register. Он же ключ: номер у таблицы первичный, и
+      // строка гарантированно одна. 2000000001 не бывает настоящим номером регистра -
+      // регистр нумеруется с единицы, - поэтому столкнуться с чужой строкой неоткуда.
+      EXIT(2000000001);
+    END;
+
+    LOCAL PROCEDURE VictimRegisterNo@9() : Integer;
+    BEGIN
+      // Вторая мишень, тем же доводом. Разные номера у сторон спора нужны затем, чтобы
+      // дорога, прочитавшая не ту транзакцию, не могла случайно наткнуться на строку
+      // держателя: у неё другой ключ и другая учётка.
+      EXIT(2000000002);
+    END;
+
+    LOCAL PROCEDURE VictimUserID@10() : Code[50];
+    BEGIN
+      // Учётки с таким именем нет и быть не может: оно нужно как метка, а не как
+      // пользователь. Настоящая учётка здесь означала бы, что жертву можно спутать с
+      // виновником, - а весь опыт затем и ставится, чтобы этого не случилось.
+      EXIT('LOCKWATCH-VICTIM');
+    END;
+
+    LOCAL PROCEDURE HeldRowMs@11() : Integer;
+    BEGIN
+      // Тридцать секунд - втрое больше предела ожидания блокировки у NAV (10 000 мс).
+      // Ждущий обязан упереться в СВОЙ предел и отвалиться, пока держатель ещё здесь:
+      // отпусти держатель блокировку раньше - и прогон прочитал бы тишину вместо спора.
+      EXIT(30000);
+    END;
+
     BEGIN
     {
       Держатель блокировки для проверки дороги к имени ЧЕЛОВЕКА.
@@ -92,6 +180,13 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
 
       Объект мерный, как и Codeunit 110233: в бою он не нужен и вреда не приносит - без
       строки-мишени он просто отказывается работать.
+
+      Две мишени - HoldWithUserRow и WaitWithUserRow - ставят опыт для дороги "по строке
+      виновника". Держатель пишет в G/L Register свою учётку и держит X-блокировку ключа
+      G/L Account; ждущий пишет подставную и упирается в ту же строку. Дорога обязана
+      назвать держателя по его собственной строке, а подставную учётку ждущего - не
+      назвать никогда. Оба вызова кончаются ERROR: опыт кончается полным откатом, и
+      следов в базе заказчика не остаётся.
     }
     END.
   }

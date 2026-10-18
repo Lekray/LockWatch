@@ -548,11 +548,11 @@ SELECT TOP 1 1 FROM [$sqlTableName] WITH (XLOCK, ROWLOCK) WHERE [$docColumn] = N
 SELECT TOP 1 [NAV Table Name] + '|' + [Document No_] + '|' +
   CONVERT(varchar(11),[Document Source]) + '|' + [User Name] + '|' +
   CONVERT(varchar(11),[User Source]) + '|' + [Victim User Name] + '|' +
-  [Blocker Login] + '|' + [Victim Login] + '|' + [No Document Reason]
+  [Blocker Login] + '|' + [No Document Reason]
 FROM $episode WHERE [NAV Table Name] = N'$navTable' ORDER BY [Entry No_] DESC;
 "@
     $f = @(($row -split '\|') | ForEach-Object { $_.Trim() })
-    while ($f.Count -lt 9) { $f += '' }
+    while ($f.Count -lt 8) { $f += '' }
 
     Check 'эпизод заведён на той самой таблице' ($f[0] -eq $navTable) `
         "таблица в журнале [$($f[0])] при ожидаемой [$navTable]"
@@ -561,7 +561,7 @@ FROM $episode WHERE [NAV Table Name] = N'$navTable' ORDER BY [Entry No_] DESC;
     # отметке СВОЙ документ - тот, которым он занимался, - а спор идёт за чужой.
     Check 'в журнале спорный документ, а не тот, которым занималась жертва' `
         (($f[1] -eq $holdDoc) -and ($f[1] -ne $waitDoc)) `
-        "документ [$($f[1])] при ожидаемом [$holdDoc], причина пустоты [$($f[8])]"
+        "документ [$($f[1])] при ожидаемом [$holdDoc], причина пустоты [$($f[7])]"
 
     # ЧЬЮ отметку прочитал инструмент - вопрос, на который ни одна проверка выше не
     # отвечает, и это выяснилось поломкой. Отметок в этот миг две, у держателя и у
@@ -605,9 +605,13 @@ FROM $episode WHERE [NAV Table Name] = N'$navTable' ORDER BY [Entry No_] DESC;
         (($s[3] -ne '') -and ($s[3] -eq $br[0])) "съёмка [$($s[3])], журнал [$($br[0])]"
     Check 'и один и тот же номер ключа NAV' `
         (($s[4] -ne '') -and ($s[4] -eq $br[1])) "съёмка [$($s[4])], журнал [$($br[1])]"
+    # Логин жертвы из журнала убран: у сеанса NAV он всегда один - учётка службы, - и
+    # различать там нечего. У виновника логин настоящий, и рядом с его учётной записью
+    # он обязан остаться СВОИМ: совпал - значит колонка «Пользователь» перестала
+    # называть человека.
     Check 'логин SQL стоит рядом с учётной записью и не подменяет её' `
-        (($f[6] -ne '') -and ($f[7] -ne '') -and ($f[6] -ne $f[3]) -and ($f[7] -ne $f[5])) `
-        "логины [$($f[6])] и [$($f[7])], учётные записи [$($f[3])] и [$($f[5])]"
+        (($f[6] -ne '') -and ($f[6] -ne $f[3])) `
+        "логин держателя [$($f[6])], учётная запись [$($f[3])]"
 }
 finally {
     Write-Host ''

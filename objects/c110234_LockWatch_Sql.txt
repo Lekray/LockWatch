@@ -23,6 +23,26 @@ OBJECT Codeunit 110234 LockWatch Sql
       LocksTruncated@1000000007 : Boolean;
       MarkSuffix@1000000009 : Text;
       LockListCutTxt@1000000008 : TextConst 'ENU=The list of interesting locks was cut at %1: the episodes left out of it are not named, and that is a cut, not silence.;RUS=Список интересных блокировок обрезан на %1: у эпизодов, что в него не влезли, документ и имя не названы - это обрезка, а не молчание.';
+      // Блокировки виновников, из которых дорога "по строке виновника" берёт таблицы и хэши.
+      // Массивы у объекта, а не в теле разбора, потому что читает их тот же проход, что и
+      // заполняет, но уже после возврата из TryFunction: локальные переменные того вызова
+      // к этому мигу не существуют. Размер - MaxCulpritLocks (см. довод там).
+      CulpritTran@1000000010 : ARRAY [300] OF BigInteger;
+      CulpritObject@1000000011 : ARRAY [300] OF Text[128];
+      CulpritIndex@1000000012 : ARRAY [300] OF Text[128];
+      CulpritHash@1000000013 : ARRAY [300] OF Text[64];
+      CulpritRows@1000000014 : ARRAY [300] OF BigInteger;
+      CulpritCount@1000000015 : Integer;
+      // Кэш "таблица SQL -> номер таблицы NAV, поля-пользователи и ключ" на проход. Без него
+      // один и тот же справочник спрашивался бы заново на каждом эпизоде и каждом хэше.
+      // Размер - произведение MaxCulpritTables и MaxDocumentsPerPass: больше разных таблиц
+      // за проход SQL не отдаст.
+      CulpritCached@1000000016 : Integer;
+      CulpritCacheName@1000000017 : ARRAY [100] OF Text[128];
+      CulpritCacheTableNo@1000000018 : ARRAY [100] OF Integer;
+      CulpritCacheColumns@1000000019 : ARRAY [100] OF Text[1024];
+      CulpritCacheKeys@1000000020 : ARRAY [100] OF Text[1024];
+      CulpritCacheFields@1000000021 : ARRAY [100] OF Integer;
 
     [External]
     PROCEDURE ReadQueue@1(MaxRows@1000000000 : Integer;WantStatements@1000000008 : Boolean;VAR Observed@1000000001 : TEMPORARY Record 110231;VAR Waiter@1000000002 : ARRAY [500] OF Integer;VAR Blocker@1000000003 : ARRAY [500] OF Integer;VAR BlockerIsNav@1000000004 : ARRAY [500] OF Boolean;VAR RowCount@1000000005 : Integer;VAR ObservedAt@1000000006 : DateTime;VAR OtherDatabase@1000000007 : Integer) : Boolean;
@@ -169,17 +189,16 @@ OBJECT Codeunit 110234 LockWatch Sql
     VAR
       SqlCmd@1000000009 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
       OurDatabaseId@1000000011 : Integer;
-      Kind@1000000012 : Text;
-      HobtId@1000000013 : BigInteger;
       ObjectId@1000000014 : Integer;
       DatabaseId@1000000015 : Integer;
-      HeldMode@1000000016 : Text;
+      Kind@1000000012 : Text;
       ResourceText@1000000017 : Text;
+      VictimBody@1000000021 : Text;
+      BlockerBody@1000000022 : Text;
+      HobtId@1000000013 : BigInteger;
       Parsed@1000000018 : Boolean;
       Nameless@1000000029 : Boolean;
       OutStr@1000000020 : OutStream;
-      VictimBody@1000000021 : Text;
-      BlockerBody@1000000022 : Text;
     BEGIN
       SqlConn := SqlConn.SqlConnection(ConnString);
       SqlConn.Open;
@@ -198,7 +217,7 @@ OBJECT Codeunit 110234 LockWatch Sql
 
       WHILE SqlReader.Read DO BEGIN
         ResourceText := ReaderText(SqlReader,4);
-        Parsed := Parse.ParseWaitResource(ResourceText,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+        Parsed := Parse.ParseWaitResource(ResourceText,Kind,HobtId,ObjectId,DatabaseId);
         // Чужая база на том же сервере - не наша беда и не наш журнал. Считается
         // отдельно: пустая колонка без объяснения читается как "блокировок не было".
         IF Parsed AND (DatabaseId <> OurDatabaseId) AND (OurDatabaseId <> 0) THEN
@@ -214,8 +233,6 @@ OBJECT Codeunit 110234 LockWatch Sql
           Observed."Victim SPID" := Waiter[RowCount];
           Observed."Victim Transaction Id" := ReaderBigInt(SqlReader,8);
           Observed."Victim Is NAV" := NavFlag(ReaderText(SqlReader,7));
-          Observed."Victim Host" := COPYSTR(ReaderText(SqlReader,5),1,MAXSTRLEN(Observed."Victim Host"));
-          Observed."Victim Process Id" := ReaderInt(SqlReader,6);
           Observed."Blocker SPID" := Blocker[RowCount];
           Observed."Blocker Transaction Id" := ReaderBigInt(SqlReader,9);
           // Кто держит - тем, что о нём знает сам сервер. Соединение с sys.dm_exec_sessions
@@ -231,39 +248,25 @@ OBJECT Codeunit 110234 LockWatch Sql
             COPYSTR(ReaderText(SqlReader,22),1,MAXSTRLEN(Observed."Blocker Host"));
           Observed."Blocker Program" :=
             COPYSTR(ReaderText(SqlReader,11),1,MAXSTRLEN(Observed."Blocker Program"));
-          // Жертву сервер знает ровно так же, и соединение с её сеансом в запросе стоит
-          // ПЕРВЫМ - им берутся узел, процесс и программа. Логин из той же строки не стоит
-          // ничего, а без него жертва названа хуже виновника: у виновника три ответа, у
-          // жертвы был один узел. Программа уже читается колонкой 7 (по ней решается, наш
-          // ли это сеанс), и выбрасывать её после одной проверки было бы расточительством.
-          Observed."Victim Login" :=
-            COPYSTR(ReaderText(SqlReader,23),1,MAXSTRLEN(Observed."Victim Login"));
-          Observed."Victim Program" :=
-            COPYSTR(ReaderText(SqlReader,7),1,MAXSTRLEN(Observed."Victim Program"));
-          // Колонки 15 и 16, а не 14 и 15. На единицу раньше лежит признак "у виновника
-          // есть исполняемый запрос", и он уходил в ДНИ: журнал показывал начало
-          // транзакции 1900-01-02, а класс эпизода считался по миллисекундам вместо
-          // признака. Ни одна проверка этого не ловила - обе величины целые, обе
-          // правдоподобные, и отказа не было ни разу.
-          Observed."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,15),ReaderInt(SqlReader,16));
-          Observed."Wait Type" := COPYSTR(ReaderText(SqlReader,3),1,MAXSTRLEN(Observed."Wait Type"));
+          // Колонки 5, 6 и 23 (узел, процесс и логин жертвы), а также 3, 15 и 16 (тип
+          // ожидания и начало транзакции виновника) остаются в запросе, но в строку не
+          // ложатся: номера остальных столбцов от этого не съезжают. Программа жертвы
+          // читается колонкой 7 один раз - по ней решается, наш ли это сеанс.
           Observed."Last Wait (ms)" := SqlReader.GetInt32(2);
           Observed."Resource Kind" := COPYSTR(UPPERCASE(Kind),1,MAXSTRLEN(Observed."Resource Kind"));
-          Observed."Held Mode" := COPYSTR(HeldMode,1,MAXSTRLEN(Observed."Held Mode"));
           Observed."Hobt Id" := HobtId;
           Observed."Database Id" := DatabaseId;
           Observed."SQL Object Id" := ObjectId;
           Observed."NAV Key No." := Parse.UnknownKeyNo;
           // У ресурса, за которым нет НИ hobt, НИ номера объекта (pagelock, ridlock), назвать
-          // таблицу NAV нечем: в каталог за таким ресурсом не сходить вовсе. Помечается он
-          // неопознанным, и рядом ложится его СЫРОЕ описание: пустая колонка без пометки
-          // читалась бы как "сервер таблицы не назвал", хотя сервер назвал ровно то, что
-          // сказал. Сырое описание тут ещё и РАЗЛИЧИТЕЛЬ: у двух таких ожиданий одной жертвы
-          // (разные страницы, разные файлы) различающего имени, кроме него, нет, а ключ
-          // эпизода его спрашивает (SQL Object Name в FindOpen журнала) - иначе оба ожидания
-          // слились бы в один эпизод, правдоподобно и молча.
+          // таблицу NAV нечем: в каталог за таким ресурсом не сходить вовсе. Рядом ложится
+          // его СЫРОЕ описание: пустая колонка читалась бы как "сервер таблицы не назвал",
+          // хотя сервер назвал ровно то, что сказал. Сырое описание тут ещё и РАЗЛИЧИТЕЛЬ:
+          // у двух таких ожиданий одной жертвы (разные страницы, разные файлы) различающего
+          // имени, кроме него, нет, а ключ эпизода его спрашивает (SQL Object Name в
+          // FindOpen журнала) - иначе оба ожидания слились бы в один эпизод, правдоподобно
+          // и молча.
           Nameless := Parsed AND (HobtId = 0) AND (ObjectId = 0);
-          Observed."Resource Unresolved" := (NOT Parsed) OR Nameless;
           IF (NOT Parsed) OR Nameless THEN
             // Ресурс, который мы не поняли, показывается СЫРЫМ. Выбросить строку значило
             // бы соврать тишиной, а показать пустую - соврать дважды.
@@ -341,14 +344,53 @@ OBJECT Codeunit 110234 LockWatch Sql
     END;
 
     [External]
-    PROCEDURE ResolveDocuments@30(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR Context@1000000013 : TEMPORARY Record 110232) : Boolean;
+    PROCEDURE ResolveDocuments@30(VAR Buffer@1000000000 : TEMPORARY Record 110231;VAR Context@1000000013 : TEMPORARY Record 110232;WantCulpritRow@1000000015 : Boolean) : Boolean;
     VAR
       Done@1000000027 : Boolean;
+      Connected@1000000029 : Boolean;
+      RoadErr@1000000028 : Text;
     BEGIN
       LastError := '';
+      RoadErr := '';
+      Connected := FALSE;
+      // Кэш живёт проход: его ключ - имя таблицы SQL, и в пределах одного разбора оно
+      // означает одну и ту же таблицу. Между проходами кэш обнуляется, иначе переименование
+      // объекта в базе не доехало бы до дороги до перезапуска задачи.
+      CulpritCached := 0;
       Done := TryResolveDocuments(Buffer,Context);
       IF NOT Done THEN
-        LastError := COPYSTR(GETLASTERRORTEXT,1,1024);
+        LastError := COPYSTR(GETLASTERRORTEXT,1,1024)
+      ELSE
+        IF WantCulpritRow THEN BEGIN
+          // Дорога идёт ПОСЛЕ разбора документов и только для тех эпизодов, где имя ещё
+          // пусто. Она не роняет разбор: каждый эпизод ловится своим TryFunction, а отказ
+          // уходит в LastError строкой, которую проход произносит вслух. Документ, уже
+          // названный, от отказа этой дороги не теряется.
+          Buffer.RESET;
+          IF Buffer.FINDSET THEN
+            REPEAT
+              IF (Buffer."User Name" = '') AND (Buffer."Blocker Transaction Id" <> 0) THEN BEGIN
+                IF NOT Connected THEN BEGIN
+                  SqlConn := SqlConn.SqlConnection(ConnString);
+                  SqlConn.Open;
+                  Connected := TRUE;
+                END;
+                IF NOT TryCulpritRow(SqlConn,Buffer) THEN BEGIN
+                  IF RoadErr = '' THEN
+                    RoadErr := COPYSTR(GETLASTERRORTEXT,1,1024);
+                  // После отказа чтение могло остаться открытым, а соединение - в чужом
+                  // состоянии. Следующий эпизод начинает с чистого: иначе одна битая
+                  // таблица унесла бы с собой имена всех остальных.
+                  CloseSession;
+                  Connected := FALSE;
+                  CulpritCached := 0;
+                END;
+              END;
+            UNTIL Buffer.NEXT = 0;
+          Buffer.RESET;
+          IF RoadErr <> '' THEN
+            LastError := RoadErr;
+        END;
       CloseSession;
       EXIT(Done);
     END;
@@ -362,14 +404,15 @@ OBJECT Codeunit 110234 LockWatch Sql
       LockObject@1000000006 : ARRAY [40] OF Text;
       LockIndex@1000000007 : ARRAY [40] OF Text;
       LockHash@1000000008 : ARRAY [40] OF Text;
-      LockSpid@1000000015 : ARRAY [40] OF Integer;
-      LockKind@1000000016 : ARRAY [40] OF Integer;
-      Locks@1000000009 : Integer;
       TranList@1000000010 : Text;
       HobtList@1000000011 : Text;
       SpidList@1000000017 : Text;
       MarkSpidList@1000000018 : Text;
+      LockSpid@1000000015 : ARRAY [40] OF Integer;
+      LockKind@1000000016 : ARRAY [40] OF Integer;
+      Locks@1000000009 : Integer;
       Slot@1000000012 : Integer;
+      Kind@1000000019 : Integer;
       Answered@1000000013 : Boolean;
     BEGIN
       // Одно чтение dm_tran_locks на весь проход, и оно приносит блокировки для ОБЕИХ
@@ -382,6 +425,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       // Отметка обрезки - своя у каждого разбора, и обнуляется она ДО решения "разбирать
       // нечего": разбирать и вправду нечего, а вчерашнее "обрезано" осталось бы стоять.
       LocksTruncated := FALSE;
+      CulpritCount := 0;
       IF (TranList = '') AND (SpidList = '') AND (MarkSpidList = '') THEN
         EXIT;
 
@@ -391,20 +435,35 @@ OBJECT Codeunit 110234 LockWatch Sql
       SqlCmd.CommandTimeout := ReadTimeoutSec;
       SqlCmd.CommandText := LocksOfInterestSql(TranList,HobtList,SpidList,MarkSpidList);
       SqlReader := SqlCmd.ExecuteReader;
-      // Читается на одну строку БОЛЬШЕ потолка нарочно: лишняя строка и есть улика обрезки
-      // (см. MaxLocks). Оборвать чтение на потолке и промолчать значило бы выдать неполный
-      // список за полный: у эпизодов, чьи блокировки в него не влезли, и документ, и имя
-      // остались бы пустыми без единого слова о причине.
-      WHILE SqlReader.Read AND (Locks <= MaxLocks) DO BEGIN
-        Locks := Locks + 1;
-        IF Locks <= MaxLocks THEN BEGIN
-          LockKind[Locks] := ReaderInt(SqlReader,0);
-          LockSpid[Locks] := ReaderInt(SqlReader,1);
-          LockTran[Locks] := SqlReader.GetInt64(2);
-          LockHobt[Locks] := SqlReader.GetInt64(3);
-          LockObject[Locks] := ReaderText(SqlReader,4);
-          LockIndex[Locks] := ReaderText(SqlReader,5);
-          LockHash[Locks] := Parse.TrimLockHash(ReaderText(SqlReader,6));
+      // Читается ВЕСЬ ответ, а не только первые MaxLocks строк: тот же запрос приносит и
+      // блокировки виновников для дороги по строке. Предел и признак обрезки считаются
+      // по-прежнему ТОЛЬКО по строкам двух старых видов - иначе строки новой дороги
+      // вытеснили бы из списка спорные строки и пометили бы полный список обрезанным.
+      WHILE SqlReader.Read DO BEGIN
+        Kind := ReaderInt(SqlReader,0);
+        IF Kind = KindCulpritRow THEN BEGIN
+          // Свои таблицы дороге не нужны: она читает деловые поля, а имя таблицы
+          // инструмента начинается с LockWatch. Отбор стоит здесь, а не только в SQL,
+          // потому что имя NAV в SQL лежит с префиксом компании.
+          IF (CulpritCount < MaxCulpritLocks) AND NOT SkipCulpritTable(ReaderText(SqlReader,4)) THEN BEGIN
+            CulpritCount := CulpritCount + 1;
+            CulpritTran[CulpritCount] := SqlReader.GetInt64(2);
+            CulpritObject[CulpritCount] := ReaderText(SqlReader,4);
+            CulpritIndex[CulpritCount] := ReaderText(SqlReader,5);
+            CulpritHash[CulpritCount] := Parse.TrimLockHash(ReaderText(SqlReader,6));
+            CulpritRows[CulpritCount] := ReaderBigInt(SqlReader,7);
+          END;
+        END ELSE BEGIN
+          Locks := Locks + 1;
+          IF Locks <= MaxLocks THEN BEGIN
+            LockKind[Locks] := Kind;
+            LockSpid[Locks] := ReaderInt(SqlReader,1);
+            LockTran[Locks] := SqlReader.GetInt64(2);
+            LockHobt[Locks] := SqlReader.GetInt64(3);
+            LockObject[Locks] := ReaderText(SqlReader,4);
+            LockIndex[Locks] := ReaderText(SqlReader,5);
+            LockHash[Locks] := Parse.TrimLockHash(ReaderText(SqlReader,6));
+          END;
         END;
       END;
       LocksTruncated := Locks > MaxLocks;
@@ -487,6 +546,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       SqlReader@1000000006 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
       DocumentNo@1000000007 : Text;
       UserId@1000000008 : Text;
+      SessionNo@1000000010 : Integer;
     BEGIN
       // Дорога вторая: отметка, которую подписчик положил В ТОЙ ЖЕ транзакции. Это не
       // совпадение по времени, а факт: транзакция виновника держит на отметке монопольную
@@ -500,6 +560,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       IF SqlReader.Read THEN BEGIN
         DocumentNo := ReaderText(SqlReader,0);
         UserId := ReaderText(SqlReader,1);
+        SessionNo := ReaderInt(SqlReader,2);
       END;
       SqlReader.Close;
       IF (DocumentNo = '') AND (UserId = '') THEN
@@ -507,9 +568,18 @@ OBJECT Codeunit 110234 LockWatch Sql
 
       // Имя человека берётся ВСЕГДА, даже когда документ уже назван первой дорогой:
       // другой дороги к имени у инструмента нет вовсе. Отметку положил сам виновник в
-      // своей же транзакции - это его имя, а не догадка по времени.
-      IF UserId <> '' THEN
+      // своей же транзакции - это его имя, а не догадка по времени. Признак источника
+      // ставится здесь же: имя и дорога, которая его дала, записываются вместе.
+      IF UserId <> '' THEN BEGIN
         Buffer."User Name" := COPYSTR(UserId,1,MAXSTRLEN(Buffer."User Name"));
+        Buffer."User Source" := Parse.UserSourceFromMark;
+      END;
+      // Сеанс из отметки - ответ не менее точный, чем имя: отметку кладёт сеанс, который
+      // держит строку, и номер этот однозначен. Он едет в свою колонку и переживает
+      // закрытие эпизода; дорога по строке виновника, если она потом назовёт имя, сеанс
+      // не переписывает - см. NameDocuments в Codeunit 110235.
+      IF SessionNo <> 0 THEN
+        Buffer."Culprit NAV Sessions" := FORMAT(SessionNo);
 
       // Документ ОТМЕТКИ - это то, чем занят виновник: последняя строка таблицы документа,
       // которую он тронул в ЭТОЙ транзакции. Спорная строка бывает другой, и потому у него
@@ -560,6 +630,344 @@ OBJECT Codeunit 110234 LockWatch Sql
       Buffer."Victim User Name" := COPYSTR(UserId,1,MAXSTRLEN(Buffer."Victim User Name"));
       Buffer.MODIFY;
       EXIT(TRUE);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryCulpritRow@69(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";VAR Buffer@1000000001 : TEMPORARY Record 110231);
+    VAR
+      TranId@1000000002 : BigInteger;
+      ObjectName@1000000003 : Text;
+      IndexName@1000000004 : Text;
+      Tables@1000000005 : ARRAY [10] OF Text[128];
+      Hashes@1000000006 : ARRAY [3] OF Text[64];
+      FirstValue@1000000012 : Text;
+      Columns@1000000016 : Text;
+      Keys@1000000017 : Text;
+      TablesSeen@1000000007 : Integer;
+      HashCount@1000000008 : Integer;
+      Index@1000000009 : Integer;
+      Inner@1000000010 : Integer;
+      TableNo@1000000015 : Integer;
+      CacheNo@1000000018 : Integer;
+      Seen@1000000011 : Boolean;
+      ValueFound@1000000013 : Boolean;
+      Disagrees@1000000014 : Boolean;
+    BEGIN
+      // Дорога по строке виновника. Виновник держит монопольную блокировку на строке,
+      // которую сам же и пишет, - в его таблице, а не в таблице документа. У такой строки
+      // почти всегда есть поле-пользователь: "User ID", "Created By", "Approved By".
+      // Отсюда и ответ: имя берётся из ДЕЛОВОГО поля, а не из отметки, которой может не
+      // быть вовсе (отложенная вставка NAV, чужое соединение, таблица без переходника).
+      //
+      // Имя НЕ УГАДЫВАЕТСЯ. Найденные значения собираются, и ответом становится только
+      // единственное различное: два разных человека в строках одной транзакции - это
+      // довод не в пользу любого из них, а правдоподобное чужое имя хуже пустой клетки.
+      TranId := Buffer."Blocker Transaction Id";
+      IF TranId = 0 THEN
+        EXIT;
+      ValueFound := FALSE;
+      Disagrees := FALSE;
+      TablesSeen := 0;
+      FOR Index := 1 TO CulpritCount DO
+        IF CulpritTran[Index] = TranId THEN BEGIN
+          ObjectName := CulpritObject[Index];
+          Seen := FALSE;
+          FOR Inner := 1 TO TablesSeen DO
+            IF Tables[Inner] = ObjectName THEN
+              Seen := TRUE;
+          IF NOT Seen THEN
+            IF TablesSeen < 10 THEN BEGIN
+              // Таблицы одной транзакции: первая встреча задаёт группу, остальные хэши
+              // добираются по всему списку - порядок строк в ответе SQL не обещан.
+              TablesSeen := TablesSeen + 1;
+              Tables[TablesSeen] := ObjectName;
+              IndexName := CulpritIndex[Index];
+              HashCount := 0;
+              FOR Inner := 1 TO CulpritCount DO
+                IF (CulpritTran[Inner] = TranId) AND (CulpritObject[Inner] = ObjectName) AND
+                   (HashCount < Parse.MaxCulpritHashesPerTable) THEN BEGIN
+                  HashCount := HashCount + 1;
+                  Hashes[HashCount] := CulpritHash[Inner];
+                END;
+
+              CacheNo := 0;
+              FOR Inner := 1 TO CulpritCached DO
+                IF CulpritCacheName[Inner] = ObjectName THEN
+                  CacheNo := Inner;
+              IF CacheNo = 0 THEN
+                IF CulpritCached < 100 THEN BEGIN
+                  CulpritCached := CulpritCached + 1;
+                  CacheNo := CulpritCached;
+                  CulpritCacheName[CacheNo] := ObjectName;
+                  CulpritTableInfo(SqlConn,ObjectName,CulpritCacheTableNo[CacheNo],
+                                   CulpritCacheColumns[CacheNo],CulpritCacheKeys[CacheNo],
+                                   CulpritCacheFields[CacheNo]);
+                END;
+              IF CacheNo > 0 THEN BEGIN
+                TableNo := CulpritCacheTableNo[CacheNo];
+                Columns := CulpritCacheColumns[CacheNo];
+                Keys := CulpritCacheKeys[CacheNo];
+                // Пустой список столбцов - в таблице нет полей-пользователей, и спрашивать
+                // в ней некого. Пустой ключ у большой таблицы - читать её хвост нечем;
+                // полный скан миллионов строк дороже пустой клетки.
+                IF (TableNo <> 0) AND (Columns <> '') THEN
+                  IF (CulpritRows[Index] <= Parse.CulpritFullScanMaxRows) OR (Keys <> '') THEN
+                    ReadCulpritRows(SqlConn,ObjectName,IndexName,Columns,Keys,
+                                    CulpritCacheFields[CacheNo],Hashes,HashCount,CulpritRows[Index],
+                                    FirstValue,ValueFound,Disagrees);
+              END;
+            END;
+        END;
+      IF ValueFound AND NOT Disagrees THEN BEGIN
+        Buffer."User Name" := COPYSTR(FirstValue,1,MAXSTRLEN(Buffer."User Name"));
+        Buffer."User Source" := Parse.UserSourceFromCulpritRow;
+        Buffer.MODIFY;
+      END;
+      EXIT;
+    END;
+
+    LOCAL PROCEDURE CulpritTableInfo@70(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";ObjectName@1000000001 : Text;VAR TableNo@1000000002 : Integer;VAR Columns@1000000003 : Text;VAR Keys@1000000004 : Text;VAR FieldCount@1000000005 : Integer);
+    VAR
+      Field@1000000006 : Record 2000000041;
+      UserRec@1000000007 : Record 2000000120;
+      ColumnName@1000000008 : Text;
+      Pattern@1000000009 : Text;
+      Cols@1000000010 : Text;
+      NavNo@1000000011 : Integer;
+    BEGIN
+      TableNo := 0;
+      Columns := '';
+      Keys := '';
+      FieldCount := 0;
+      NavNo := NavTableNoBySqlName(ObjectName);
+      IF NavNo = 0 THEN
+        EXIT;
+      // Поля-пользователи - те, что объявлены СВЯЗЬЮ с "User"."User Name". Именно связь,
+      // а не имя поля: имена бывают разные ("User ID", "Created By", "Approved By"), а
+      // связь говорит, что в поле лежит учётная запись NAV, и только такие поля отвечают
+      // на вопрос "кто". Остальные поля строки к имени отношения не имеют.
+      Field.RESET;
+      Field.SETRANGE(TableNo,NavNo);
+      Field.SETRANGE(Class,Field.Class::Normal);
+      Field.SETRANGE(Enabled,TRUE);
+      Field.SETRANGE(RelationTableNo,DATABASE::User);
+      Field.SETRANGE(RelationFieldNo,UserRec.FIELDNO("User Name"));
+      IF Field.FINDSET THEN
+        REPEAT
+          Pattern := Parse.SqlNamePattern(Field.FieldName);
+          // Имя столбца СПРАШИВАЕТСЯ у сервера: правило платформы нигде не объявлено, и
+          // повторять его по памяти - значит однажды промахнуться молча. Совпадение
+          // обязано быть ровно одно, иначе поле выбрасывается.
+          IF ColumnByPattern(SqlConn,ObjectName,Pattern,ColumnName) THEN BEGIN
+            Cols := Cols + ',CONVERT(nvarchar(250),' + Bracket(ColumnName) + ')';
+            FieldCount := FieldCount + 1;
+          END;
+        UNTIL Field.NEXT = 0;
+      TableNo := NavNo;
+      IF Cols <> '' THEN
+        Columns := COPYSTR(Cols,2);
+      // Ключ нужен только чтению хвоста большой таблицы, но спрашивается здесь же, один
+      // раз на проход: отдельный поход к серверу за ним стоил бы дороже самого ключа.
+      Keys := ClusteredKeyList(SqlConn,ObjectName);
+    END;
+
+    LOCAL PROCEDURE NavTableNoBySqlName@71(SqlObjectName@1000000000 : Text) : Integer;
+    VAR
+      AllObj@1000000001 : Record 2000000058;
+      TableName@1000000002 : Text;
+      CompanyName@1000000003 : Text;
+      Pattern@1000000005 : Text;
+      SiftKeyNo@1000000004 : Integer;
+      FoundNo@1000000006 : Integer;
+    BEGIN
+      // Имя таблицы NAV по имени объекта SQL. Номер нужен, чтобы спросить у платформы ПОЛЯ
+      // таблицы: в SQL номеров полей NAV нет вовсе, и без номера дорога не началась бы.
+      //
+      // Совпадение обязано быть РОВНО ОДНО. Правило перевода имени в имя нигде не
+      // объявлено, и под образец подходят имена, различающиеся ровно тем знаком, который
+      // платформа могла заменить: выбрать из двух - значит назвать чужую таблицу.
+      FoundNo := 0;
+      IF NOT Parse.SplitSqlObjectName(SqlObjectName,CompanyName,TableName,SiftKeyNo) THEN
+        EXIT(0);
+      // Образец строится для LIKE, где подчёркивание - любой знак. В фильтре NAV
+      // подчёркивание буквальное, и "G_L Register" не нашёл бы "G/L Register" вовсе:
+      // любой знак здесь - вопрос. Прочие знаки образца - буквы, цифры и пробел.
+      Pattern := CONVERTSTR(Parse.SqlNamePattern(TableName),'_','?');
+      AllObj.RESET;
+      AllObj.SETRANGE("Object Type",AllObj."Object Type"::Table);
+      AllObj.SETFILTER("Object Name",Pattern);
+      IF AllObj.FINDSET THEN
+        REPEAT
+          IF Parse.SameSqlName(TableName,AllObj."Object Name") THEN BEGIN
+            IF FoundNo <> 0 THEN
+              EXIT(0);
+            FoundNo := AllObj."Object ID";
+          END;
+        UNTIL AllObj.NEXT = 0;
+      EXIT(FoundNo);
+    END;
+
+    LOCAL PROCEDURE ColumnByPattern@72(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";ObjectName@1000000001 : Text;Pattern@1000000002 : Text;VAR ColumnName@1000000003 : Text) : Boolean;
+    VAR
+      SqlCmd@1000000004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      Name@1000000005 : Text;
+    BEGIN
+      ColumnName := '';
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      // Двух подходящих столбцов быть не должно: выбранный наугад дал бы правдоподобное,
+      // но чужое значение. Отсюда TOP 2 и проверка счёта, как в RowByHashSql.
+      SqlCmd.CommandText :=
+        'DECLARE @hits int, @col sysname;' +
+        'SELECT @hits ' + Eq + ' COUNT(*) FROM (SELECT TOP 2 c.name FROM sys.columns c' +
+        ' WHERE c.object_id ' + Eq + ' OBJECT_ID(' + Q + Bracket(ObjectName) + Q + ')' +
+        ' AND c.name LIKE ' + Q + Pattern + Q + ') x;' +
+        'SELECT TOP 1 @col ' + Eq + ' c.name FROM sys.columns c' +
+        ' WHERE c.object_id ' + Eq + ' OBJECT_ID(' + Q + Bracket(ObjectName) + Q + ')' +
+        ' AND c.name LIKE ' + Q + Pattern + Q + ';' +
+        'SELECT CASE WHEN @hits ' + Eq + ' 1 THEN @col END;';
+      SqlReader := SqlCmd.ExecuteReader;
+      IF SqlReader.Read THEN
+        Name := ReaderText(SqlReader,0);
+      SqlReader.Close;
+      IF Name = '' THEN
+        EXIT(FALSE);
+      ColumnName := Name;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ClusteredKeyList@73(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";ObjectName@1000000001 : Text) : Text;
+    VAR
+      SqlCmd@1000000002 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      KeyList@1000000003 : Text;
+    BEGIN
+      // Список столбцов кластерного ключа в том виде, в каком он войдёт в ORDER BY:
+      // каждый с "DESC", потому что читается ХВОСТ таблицы - последние строки ключа.
+      // Собирается на сервере и через FOR XML PATH, а не STRING_AGG: STRING_AGG появился
+      // в SQL 2017, а NAV 2018 живёт и на SQL 2012. Список столбцов не склеивается на
+      // стороне C/AL ещё и потому, что имя столбца может содержать запятую.
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText :=
+        'SELECT STUFF((SELECT ' + Q + ',' + Q + ' + QUOTENAME(c.name) + ' + Q + ' DESC' + Q +
+        ' FROM sys.index_columns ic' +
+        ' JOIN sys.columns c ON c.object_id ' + Eq + ' ic.object_id' +
+        ' AND c.column_id ' + Eq + ' ic.column_id' +
+        ' WHERE ic.object_id ' + Eq + ' OBJECT_ID(' + Q + Bracket(ObjectName) + Q + ')' +
+        ' AND ic.index_id ' + Eq + ' 1 AND ic.is_included_column ' + Eq + ' 0' +
+        ' ORDER BY ic.key_ordinal' +
+        ' FOR XML PATH(' + Q + Q + '), TYPE).value(' + Q + '.' + Q + ',' + Q + 'nvarchar(max)' + Q +
+        '),1,1,' + Q + Q + ');';
+      SqlReader := SqlCmd.ExecuteReader;
+      IF SqlReader.Read THEN
+        KeyList := ReaderText(SqlReader,0);
+      SqlReader.Close;
+      EXIT(KeyList);
+    END;
+
+    LOCAL PROCEDURE CulpritRowsSql@74(ObjectName@1000000000 : Text;IndexName@1000000001 : Text;Columns@1000000002 : Text;Keys@1000000003 : Text;VAR Hashes@1000000004 : ARRAY [3] OF Text[64];HashCount@1000000005 : Integer;Tail@1000000006 : Boolean) : Text;
+    VAR
+      Sql@1000000007 : Text;
+      Params@1000000008 : Text;
+      Values@1000000009 : Text;
+      InList@1000000010 : Text;
+      Param@1000000012 : Text;
+      Index@1000000011 : Integer;
+    BEGIN
+      // Хэши едут ПАРАМЕТРАМИ sp_executesql, а не склейкой в текст запроса: хэш - это
+      // чужое значение из представления, и его место в объявлении параметров, а не в коде.
+      Params := '';
+      Values := '';
+      InList := '';
+      FOR Index := 1 TO HashCount DO BEGIN
+        Param := '@h' + FORMAT(Index - 1);
+        IF Params <> '' THEN BEGIN
+          Params := Params + ',';
+          Values := Values + ',';
+          InList := InList + ',';
+        END;
+        Params := Params + Param + ' nvarchar(64)';
+        Values := Values + Param + ' ' + Eq + ' ' + Q + Hashes[Index] + Q;
+        InList := InList + Param;
+      END;
+      // Небольшая таблица читается по хэшам целиком: индекса по %%lockres%% нет, и отбор
+      // по нему всё равно означает скан - скан небольшой таблицы дешевле любой хитрости.
+      // Большая - только хвост ключа: проводка пишет свежие строки, и номера записей
+      // растут, то есть нужная строка стоит в конце кластерного ключа.
+      IF Tail THEN
+        Sql :=
+          'SELECT ' + Columns + ' FROM (' +
+          'SELECT TOP (' + FORMAT(Parse.CulpritTailRows) + ') ' + Columns + ', ' +
+          LockResColumn + ' AS LockRes FROM ' + Bracket(ObjectName) +
+          ' WITH (INDEX(' + Bracket(IndexName) + '), NOLOCK) ORDER BY ' + Keys + ') t' +
+          ' WHERE t.LockRes IN (' + InList + ')'
+      ELSE
+        Sql :=
+          'SELECT ' + Columns + ' FROM ' + Bracket(ObjectName) +
+          ' WITH (INDEX(' + Bracket(IndexName) + '), NOLOCK) WHERE ' + LockResColumn +
+          ' IN (' + InList + ')';
+      EXIT('DECLARE @sql nvarchar(max);SET @sql ' + Eq + ' N' + Q + Sql + Q +
+           ';EXEC sp_executesql @sql, N' + Q + Params + Q + ', ' + Values + ';');
+    END;
+
+    LOCAL PROCEDURE ReadCulpritRows@75(VAR SqlConn@1000000000 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";ObjectName@1000000001 : Text;IndexName@1000000002 : Text;Columns@1000000003 : Text;Keys@1000000004 : Text;FieldCount@1000000005 : Integer;VAR Hashes@1000000006 : ARRAY [3] OF Text[64];HashCount@1000000007 : Integer;RowCount@1000000008 : BigInteger;VAR FirstValue@1000000009 : Text;VAR ValueFound@1000000010 : Boolean;VAR Disagrees@1000000011 : Boolean);
+    VAR
+      SqlCmd@1000000012 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlCommand";
+      Index@1000000013 : Integer;
+      Value@1000000014 : Text;
+    BEGIN
+      SqlCmd := SqlConn.CreateCommand;
+      SqlCmd.CommandTimeout := ReadTimeoutSec;
+      SqlCmd.CommandText :=
+        CulpritRowsSql(ObjectName,IndexName,Columns,Keys,Hashes,HashCount,
+                       RowCount > Parse.CulpritFullScanMaxRows);
+      SqlReader := SqlCmd.ExecuteReader;
+      // Читаются ВСЕ найденные строки и все поля: значения собираются по эпизоду целиком,
+      // и решение "одно имя или разные" принимается после, а не по первой строке.
+      WHILE SqlReader.Read DO
+        FOR Index := 0 TO FieldCount - 1 DO BEGIN
+          Value := ReaderText(SqlReader,Index);
+          IF Value <> '' THEN
+            IF NOT ValueFound THEN BEGIN
+              FirstValue := Value;
+              ValueFound := TRUE;
+            END ELSE
+              IF Value <> FirstValue THEN
+                Disagrees := TRUE;
+        END;
+      SqlReader.Close;
+    END;
+
+    LOCAL PROCEDURE KindCulpritRow@76() : Integer;
+    BEGIN
+      // Строка ответа, за которой стоит выданная блокировка виновника на КЛАСТЕРНОМ
+      // индексе: из неё дорога берёт таблицу и хэш строки. Вторичные индексы сюда не
+      // входят - блокировка на них не говорит, какая строка таблицы тронута.
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE MaxCulpritLocks@77() : Integer;
+    BEGIN
+      // Размер массивов дороги. Произведение трёх пределов прохода: десять транзакций
+      // (Parse.MaxDocumentsPerPass) по десять таблиц (Parse.MaxCulpritTables) по три
+      // хэша (Parse.MaxCulpritHashesPerTable). Больше SQL не отдаст по построению:
+      // пределы стоят в самом запросе, и массив, равный произведению, ничего не теряет.
+      EXIT(300);
+    END;
+
+    LOCAL PROCEDURE SkipCulpritTable@78(SqlObjectName@1000000000 : Text) : Boolean;
+    VAR
+      CompanyName@1000000001 : Text;
+      TableName@1000000002 : Text;
+      SiftKeyNo@1000000003 : Integer;
+    BEGIN
+      // Свои таблицы дороге не нужны: она читает деловые поля, а имя таблицы инструмента
+      // начинается с LockWatch. Платформенные объекты ($ndo$...) сюда же: в них нет ни
+      // полей NAV, ни учётных записей. Отбор стоит и здесь, а не только в SQL, потому что
+      // в SQL имя NAV лежит с префиксом компании.
+      IF NOT Parse.SplitSqlObjectName(SqlObjectName,CompanyName,TableName,SiftKeyNo) THEN
+        EXIT(TRUE);
+      EXIT(COPYSTR(UPPERCASE(TableName),1,10) = 'LOCKWATCH ');
     END;
 
     LOCAL PROCEDURE FindContext@34(VAR Context@1000000000 : TEMPORARY Record 110232;NavTableName@1000000001 : Text) : Boolean;
@@ -705,17 +1113,30 @@ OBJECT Codeunit 110234 LockWatch Sql
       Heads := MarkSpidList;
       IF Heads = '' THEN
         Heads := '-1';
+      // В одном ответе едут ТРИ вида строк, и это по-прежнему ОДНО чтение представления.
       // Первая половина условия - НЕВЫПОЛНЕННЫЕ просьбы жертв: они называют спорную строку.
       // Вторая - ВЫДАННЫЕ блокировки виновников на таблице отметок. Знак "не равно" в
       // тексте запроса собран отрицанием равенства: равенство здесь и без того живёт
       // функцией, а два способа написать одно и то же в одном запросе - лишний повод
       // ошибиться.
+      //
+      // Третий вид - выданные блокировки виновников на КЛАСТЕРНОМ индексе их таблиц; из них
+      // дорога "по строке виновника" берёт таблицу, ключ и хэш строки, которую виновник
+      // пишет. Пределы (десять таблиц на транзакцию, три хэша на таблицу) стоят в самом
+      // запросе: иначе одна большая проводка принесла бы тысячи строк и вытеснила бы из
+      // ответа то, ради чего он читается. Свои таблицы отсеиваются по имени NAV: дороге
+      // нужны деловые поля, а в таблицах инструмента учётных записей нет.
       Sql :=
-        'SELECT DISTINCT CONVERT(int,CASE WHEN l.request_status ' + Eq + ' ' + Q + 'GRANT' + Q +
-        ' THEN ' + FORMAT(KindGranted) + ' ELSE ' + FORMAT(KindWaited) + ' END),' +
-        ' CONVERT(int,l.request_session_id), CONVERT(bigint,l.request_owner_id),' +
-        ' CONVERT(bigint,l.resource_associated_entity_id), o.name, i.name,' +
-        ' RTRIM(l.resource_description)' +
+        'SELECT x.Kind, x.Spid, x.TranId, x.Hobt, x.ObjectName, x.IndexName, x.LockHash, x.RowsTotal' +
+        ' FROM (SELECT DISTINCT' +
+        ' CONVERT(int,CASE WHEN l.request_status ' + Eq + ' ' + Q + 'GRANT' + Q +
+        ' THEN ' + FORMAT(KindGranted) + ' ELSE ' + FORMAT(KindWaited) + ' END) AS Kind,' +
+        ' CONVERT(int,l.request_session_id) AS Spid,' +
+        ' CONVERT(bigint,l.request_owner_id) AS TranId,' +
+        ' CONVERT(bigint,l.resource_associated_entity_id) AS Hobt,' +
+        ' o.name AS ObjectName, i.name AS IndexName,' +
+        ' RTRIM(l.resource_description) AS LockHash,' +
+        ' CONVERT(bigint,NULL) AS RowsTotal' +
         ' FROM sys.dm_tran_locks l' +
         ' JOIN sys.partitions p ON p.hobt_id ' + Eq + ' l.resource_associated_entity_id' +
         ' JOIN sys.objects o ON o.object_id ' + Eq + ' p.object_id' +
@@ -729,7 +1150,28 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' AND l.request_owner_type ' + Eq + ' ' + Q + 'TRANSACTION' + Q +
         ' AND (l.request_owner_id IN (' + Trans + ')' +
         ' OR l.request_session_id IN (' + Heads + '))' +
-        ' AND o.name LIKE ' + Q + Wildcard + MarkTableSuffix + Q + '));';
+        ' AND o.name LIKE ' + Q + Wildcard + MarkTableSuffix + Q + '))' +
+        ' UNION ALL SELECT ' + FORMAT(KindCulpritRow) + ', CONVERT(int,c.request_session_id),' +
+        ' CONVERT(bigint,c.request_owner_id), CONVERT(bigint,c.resource_associated_entity_id),' +
+        ' c.ObjectName, c.IndexName, RTRIM(c.LockHash), CONVERT(bigint,c.RowsTotal)' +
+        ' FROM (SELECT l.request_session_id, l.request_owner_id, l.resource_associated_entity_id,' +
+        ' o.name AS ObjectName, i.name AS IndexName, l.resource_description AS LockHash,' +
+        ' p.rows AS RowsTotal,' +
+        ' ROW_NUMBER() OVER (PARTITION BY l.request_owner_id, o.name ORDER BY l.resource_description) AS HashNo,' +
+        ' DENSE_RANK() OVER (PARTITION BY l.request_owner_id ORDER BY o.name) AS TableNo' +
+        ' FROM sys.dm_tran_locks l' +
+        ' JOIN sys.partitions p ON p.hobt_id ' + Eq + ' l.resource_associated_entity_id' +
+        ' JOIN sys.objects o ON o.object_id ' + Eq + ' p.object_id' +
+        ' JOIN sys.indexes i ON i.object_id ' + Eq + ' p.object_id' +
+        ' AND i.index_id ' + Eq + ' p.index_id' +
+        ' WHERE l.resource_type ' + Eq + ' ' + Q + 'KEY' + Q +
+        ' AND l.request_status ' + Eq + ' ' + Q + 'GRANT' + Q +
+        ' AND l.request_owner_type ' + Eq + ' ' + Q + 'TRANSACTION' + Q +
+        ' AND l.request_owner_id IN (' + Trans + ')' +
+        ' AND i.index_id ' + Eq + ' 1' +
+        ' AND o.name NOT LIKE ' + Q + Wildcard + 'LockWatch ' + Wildcard + Q + ') c' +
+        ' WHERE c.HashNo <= ' + FORMAT(Parse.MaxCulpritHashesPerTable) +
+        ' AND c.TableNo <= ' + FORMAT(Parse.MaxCulpritTables) + ') x;';
       EXIT(Sql);
     END;
 
@@ -766,8 +1208,11 @@ OBJECT Codeunit 110234 LockWatch Sql
     VAR
       Sql@1000000003 : Text;
     BEGIN
+      // Третий столбец - сеанс из самой отметки, второй половины её ключа ("экземпляр +
+      // сеанс", Table 110233). Номер сеанса в отметке - это сеанс ПОЛОЖИВШЕГО её, то есть
+      // сеанс виновника, и он однозначен даже там, где учётка открыта в нескольких окнах.
       Sql :=
-        'SELECT TOP 1 [Document No_], [User Id] FROM ' + Bracket(ObjectName) +
+        'SELECT TOP 1 [Document No_], [User Id], [Session Id] FROM ' + Bracket(ObjectName) +
         ' WITH (INDEX(' + Bracket(IndexName) + '), NOLOCK)' +
         ' WHERE ' + LockResColumn + ' ' + Eq + ' ' + Q + LockHash + Q + ';';
       EXIT(Sql);
@@ -909,8 +1354,7 @@ OBJECT Codeunit 110234 LockWatch Sql
         Found.INIT;
         Found."Entry No." := Rows;
         Found."Victim SPID" := ReaderInt(SqlReader,2);
-        Found."Victim Host" := COPYSTR(ReaderText(SqlReader,3),1,MAXSTRLEN(Found."Victim Host"));
-        Found."Victim Process Id" := ReaderInt(SqlReader,4);
+        // Колонки 3 и 4 (узел и процесс жертвы) остаются в запросе ради нумерации.
         Found."Victim Is NAV" := NavFlag(ReaderText(SqlReader,5));
         Found."Victim Transaction Id" := ReaderBigInt(SqlReader,6);
         Found."Last Wait (ms)" := ReaderInt(SqlReader,7);
@@ -926,21 +1370,15 @@ OBJECT Codeunit 110234 LockWatch Sql
           COPYSTR(ReaderText(SqlReader,24),1,MAXSTRLEN(Found."Blocker Host"));
         Found."Blocker Login" :=
           COPYSTR(ReaderText(SqlReader,25),1,MAXSTRLEN(Found."Blocker Login"));
-        // Жертву граф называет тем же узлом процесса, из которого уже взяты машина, процесс
-        // и программа. Логин оттуда же и стоит столько же - нисколько.
-        Found."Victim Login" :=
-          COPYSTR(ReaderText(SqlReader,26),1,MAXSTRLEN(Found."Victim Login"));
-        Found."Victim Program" :=
-          COPYSTR(ReaderText(SqlReader,5),1,MAXSTRLEN(Found."Victim Program"));
+        // Колонки 5, 11, 12, 18 да 19 и 26 (программа, начало транзакции, режим, тип
+        // ожидания и логин жертвы) остаются в запросе ради нумерации, но в строку не
+        // ложатся: столбцы 16, 17 и 20 читаются по прежним номерам.
         Found."Blocker Transaction Id" := ReaderBigInt(SqlReader,10);
-        Found."Blocker Tran Began At" := SqlMoment(ReaderInt(SqlReader,11),ReaderInt(SqlReader,12));
         Found."Resource Kind" := COPYSTR(UPPERCASE(ReaderText(SqlReader,13)),1,MAXSTRLEN(Found."Resource Kind"));
         Found."Hobt Id" := ReaderBigInt(SqlReader,14);
         Found."Database Id" := ReaderInt(SqlReader,15);
         ObjectName := ReaderText(SqlReader,16);
         IndexName := ReaderText(SqlReader,17);
-        Found."Held Mode" := COPYSTR(ReaderText(SqlReader,18),1,MAXSTRLEN(Found."Held Mode"));
-        Found."Wait Type" := COPYSTR(LockWaitPrefix + ReaderText(SqlReader,19),1,MAXSTRLEN(Found."Wait Type"));
         Found."Deadlock Id" := Parse.TextFingerprint(ReaderText(SqlReader,20));
         Found."Blocker Statement" := COPYSTR(ReaderText(SqlReader,21),1,MAXSTRLEN(Found."Blocker Statement"));
         StatementBody := Parse.StatementWithMark(ReaderText(SqlReader,22),ReaderInt(SqlReader,23));
@@ -1141,8 +1579,8 @@ OBJECT Codeunit 110234 LockWatch Sql
 
     LOCAL PROCEDURE UnnamedRow@64(VAR Row@1000000000 : Record 110231;ObjectName@1000000001 : Text);
     BEGIN
-      // Место, парное первому: имя, которое разбор НЕ понял, показывается сырым и метится
-      // непонятым. Дороги сюда те же две, и расходиться им нельзя - а они расходились:
+      // Место, парное первому: имя, которое разбор НЕ понял, показывается сырым.
+      // Дороги сюда те же две, и расходиться им нельзя - а они расходились:
       // граф показывал сырое имя, очередь молчала, и строка выходила без имени вовсе.
       //
       // Пустое имя здесь не мелочь. У ожидания ОБЪЕКТА целиком hobt равен нулю, и имя
@@ -1154,7 +1592,6 @@ OBJECT Codeunit 110234 LockWatch Sql
       Row."NAV Table Name" := '';
       Row."NAV Key No." := Parse.UnknownKeyNo;
       Row."On SIFT" := FALSE;
-      Row."Resource Unresolved" := TRUE;
     END;
 
     LOCAL PROCEDURE MomentDays@54(At@1000000000 : DateTime) : Integer;
@@ -1185,14 +1622,6 @@ OBJECT Codeunit 110234 LockWatch Sql
         EXIT(0);
       Elapsed := At - CREATEDATETIME(DT2DATE(At),0T);
       EXIT(Elapsed);
-    END;
-
-    LOCAL PROCEDURE LockWaitPrefix@56() : Text;
-    BEGIN
-      // Очередь называет ожидание как LCK_M_U, а граф - одной буквой режима. В журнале
-      // колонка одна, и заполнять её двумя разными словарями значило бы сделать отбор по
-      // ней бесполезным.
-      EXIT('LCK_M_');
     END;
 
     LOCAL PROCEDURE XVal@57(Path@1000000000 : Text;Kind@1000000001 : Text) : Text;

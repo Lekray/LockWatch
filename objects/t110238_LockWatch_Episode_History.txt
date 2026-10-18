@@ -2,7 +2,7 @@ OBJECT Table 110238 LockWatch Episode History
 {
   OBJECT-PROPERTIES
   {
-    Date=08.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -25,10 +25,6 @@ OBJECT Table 110238 LockWatch Episode History
                                                    OptionCaptionML=[ENU=Unknown,Yes,No;
                                                                     RUS=Не опознана,Да,Нет];
                                                    OptionString=Unknown,Yes,No }
-    { 13  ;   ;Victim Host         ;Text128       ;CaptionML=[ENU=Victim Host;
-                                                              RUS=Жертва, машина] }
-    { 14  ;   ;Victim Process Id   ;Integer       ;CaptionML=[ENU=Victim Process Id;
-                                                              RUS=Жертва, процесс] }
     { 20  ;   ;Blocker SPID        ;Integer       ;CaptionML=[ENU=Blocker SPID;
                                                               RUS=Непосредственный блокирующий, spid] }
     { 21  ;   ;Blocker Transaction Id;BigInteger  ;CaptionML=[ENU=Blocker Transaction Id;
@@ -51,10 +47,6 @@ OBJECT Table 110238 LockWatch Episode History
                                                               RUS=Hobt] }
     { 32  ;   ;Database Id         ;Integer       ;CaptionML=[ENU=Database Id;
                                                               RUS=Номер базы] }
-    { 33  ;   ;Held Mode           ;Code10        ;CaptionML=[ENU=Held Mode;
-                                                              RUS=Режим держимой блокировки] }
-    { 34  ;   ;Wait Type           ;Code60        ;CaptionML=[ENU=Wait Type;
-                                                              RUS=Чего ждёт жертва] }
     { 35  ;   ;SQL Object Name     ;Text250       ;CaptionML=[ENU=SQL Object Name;
                                                               RUS=Имя объекта SQL] }
     { 36  ;   ;NAV Table Name      ;Text250       ;CaptionML=[ENU=NAV Table Name;
@@ -64,8 +56,6 @@ OBJECT Table 110238 LockWatch Episode History
                                                    BlankNumbers=DontBlank }
     { 38  ;   ;On SIFT             ;Boolean       ;CaptionML=[ENU=On SIFT;
                                                               RUS=На SIFT-агрегате] }
-    { 39  ;   ;Resource Unresolved ;Boolean       ;CaptionML=[ENU=Resource Unresolved;
-                                                              RUS=Ресурс не опознан] }
     { 40  ;   ;Started At          ;DateTime      ;CaptionML=[ENU=Started At;
                                                               RUS=Начало] }
     { 41  ;   ;Ended At            ;DateTime      ;CaptionML=[ENU=Ended At;
@@ -76,8 +66,6 @@ OBJECT Table 110238 LockWatch Episode History
                                                               RUS=Длительность, мс] }
     { 44  ;   ;Last Wait (ms)      ;Integer       ;CaptionML=[ENU=Last Wait (ms);
                                                               RUS=Последняя наблюдённая, мс] }
-    { 45  ;   ;Blocker Tran Began At;DateTime     ;CaptionML=[ENU=Blocker Tran Began At;
-                                                              RUS=Транзакция виновника начата] }
     { 46  ;   ;Open                ;Boolean       ;CaptionML=[ENU=Open;
                                                               RUS=Эпизод открыт] }
     { 47  ;   ;Outcome             ;Option        ;CaptionML=[ENU=Outcome;
@@ -109,9 +97,9 @@ OBJECT Table 110238 LockWatch Episode History
                                                               RUS=Пользователь] }
     { 61  ;   ;User Source         ;Option        ;CaptionML=[ENU=User Source;
                                                               RUS=Откуда имя];
-                                                   OptionCaptionML=[ENU=None,From context mark,From platform;
-                                                                    RUS=Нет,По отметке контекста,От платформы];
-                                                   OptionString=None,FromMark,FromPlatform }
+                                                   OptionCaptionML=[ENU=None,From context mark,From platform,From culprit row;
+                                                                    RUS=Нет,По отметке контекста,От платформы,По строке виновника];
+                                                   OptionString=None,FromMark,FromPlatform,FromCulpritRow }
     { 62  ;   ;Victim User Name    ;Code50        ;CaptionML=[ENU=Victim User Name;
                                                               RUS=Кто ждал];
                                                    Editable=No }
@@ -127,18 +115,8 @@ OBJECT Table 110238 LockWatch Episode History
     { 66  ;   ;Blocker Program     ;Text128       ;CaptionML=[ENU=Blocker Program;
                                                               RUS=Программа виновника];
                                                    Editable=No }
-    { 67  ;   ;Victim Login        ;Text128       ;CaptionML=[ENU=Victim SQL Login;
-                                                              RUS=Логин SQL жертвы];
-                                                   Editable=No }
-    { 68  ;   ;Victim Program      ;Text128       ;CaptionML=[ENU=Victim Program;
-                                                              RUS=Программа жертвы];
-                                                   Editable=No }
     { 70  ;   ;Blocker Statement   ;Text250       ;CaptionML=[ENU=Blocker Statement;
                                                               RUS=Последний оператор виновника] }
-    { 71  ;   ;NAV Object No.      ;Integer       ;CaptionML=[ENU=NAV Object No.;
-                                                              RUS=Номер объекта NAV] }
-    { 72  ;   ;Blocker AL Scope    ;Text250       ;CaptionML=[ENU=Where the culprit runs now;
-                                                              RUS=Где виновник исполняется сейчас] }
     { 73  ;   ;Victim Statement    ;BLOB          ;CaptionML=[ENU=Victim Statement;
                                                               RUS=Запрос жертвы];
                                                    SubType=Memo;
@@ -149,8 +127,9 @@ OBJECT Table 110238 LockWatch Episode History
                                                    Compressed=No }
     { 80  ;   ;Advice              ;Text250       ;CaptionML=[ENU=Advice;
                                                               RUS=Совет] }
-    { 81  ;   ;Advice Evidence     ;Text250       ;CaptionML=[ENU=Advice Evidence;
-                                                              RUS=Улика, по которой совет выдан] }
+    { 82  ;   ;Culprit NAV Sessions;Text250       ;CaptionML=[ENU=Culprit NAV Sessions;
+                                                              RUS=Сеансы NAV виновника];
+                                                   Editable=No }
   }
   KEYS
   {
@@ -171,9 +150,11 @@ OBJECT Table 110238 LockWatch Episode History
       приезжает ПОЗЖЕ самого эпизода, пока он открыт (раздел 32 в FINDINGS). Снимок,
       сделанный в миг закрытия, врал бы ровно в том, ради чего журнал и заведён.
 
-      Отсюда не удаляет НИЧТО. Ни проход, ни задача, ни срок: удаление истории - решение
-      человека, и делается оно кнопкой, а не фоном. Инструмент, тихо стирающий то, ради
-      чего его поставили, стоит меньше, чем ничего.
+      Отсюда удаляет только СРОК, и назначает его человек: после обновления он равен нулю,
+      то есть бессрочно, и сама история не пропадает. Выставленный срок проход держит
+      порциями, чтобы годовая история не чистилась одной транзакцией. Кнопка ручной
+      очистки остаётся. Умолчание выбрано в честь прежнего правила: инструмент, тихо
+      стирающий то, ради чего его поставили, стоит меньше, чем ничего.
 
       Зачем отдельная таблица, если можно было признаком в журнале:
 
@@ -181,8 +162,9 @@ OBJECT Table 110238 LockWatch Episode History
           инструмент ищет открытые эпизоды. Таблица, которая только растёт, - плохое
           место для того, что перечитывается постоянно.
         - Разрушительные действия до истории не дотягиваются. Показ и мерные прогоны
-          чистят ЖУРНАЛ, потому что им нужна чистая доска; истории они не касаются
-          вовсе. Признак в общей таблице такой защиты не даёт: DELETE сносит и его.
+          чистят ЖУРНАЛ, потому что им нужна чистая доска; историю трогает только её
+          срок, а мерный прогон, проверяющий срок, состаривает и удаляет лишь СВОИ
+          строки. Признак в общей таблице такой защиты не даёт: DELETE сносит и его.
         - Читают их по-разному. Журнал смотрят, чтобы понять, что происходит СЕЙЧАС;
           историю - чтобы понять, что было и повторяется ли. Ключей поэтому три: сквозной
           номер, по которому строка находится и переезжает, время начала - порядок обоих

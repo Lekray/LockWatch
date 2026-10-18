@@ -2,7 +2,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -23,8 +23,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // "пройдено", и имя проверки в отчёте стоит в одной колонке у обеих строк.
       FailedTxt@1000000002 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ  ';
       VerdictTxt@1000000003 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
-      ChkWaitKeyTxt@1000000010 : TextConst 'ENU=a keylock line of the wait queue splits into kind, hobt, database and mode;RUS=строка keylock из очереди ожиданий разбирается на род, hobt, базу и режим';
-      WaitKeyTxt@1000000011 : TextConst 'ENU=kind %1, hobt %2, database %3, mode %4, object %5;RUS=род %1, hobt %2, база %3, режим %4, объект %5';
+      ChkWaitKeyTxt@1000000010 : TextConst 'ENU=a keylock line of the wait queue splits into kind, hobt, database and object;RUS=строка keylock из очереди ожиданий разбирается на род, hobt, базу и объект';
+      WaitKeyTxt@1000000011 : TextConst 'ENU=kind %1, hobt %2, database %3, object %4;RUS=род %1, hobt %2, база %3, объект %4';
       ChkWaitObjTxt@1000000012 : TextConst 'ENU=an objectlock line gives the object and leaves hobt empty;RUS=строка objectlock отдаёт объект и оставляет hobt пустым';
       WaitObjTxt@1000000013 : TextConst 'ENU=object %1, hobt %2;RUS=объект %1, hobt %2';
       ChkWaitBoundTxt@1000000014 : TextConst 'ENU=names are matched on a word boundary, not as a substring;RUS=имена ищутся на границе слова, а не подстрокой';
@@ -62,8 +62,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       SameNameTxt@1000000047 : TextConst 'ENU=dot against underscore %1, slash %2, another letter %3, other length %4;RUS=точка против подчёркивания %1, косая черта %2, другая буква %3, другая длина %4';
       ChkAdviceOrderTxt@1000000048 : TextConst 'ENU=the advice follows the order of cures, not the order of signs;RUS=совет следует порядку лечений, а не порядку признаков';
       AdviceOrderTxt@1000000049 : TextConst 'ENU=whole table %1, foreign head %2, SIFT %3, queue %4, deadlock %5;RUS=таблица целиком %1, чужая голова %2, SIFT %3, очередь %4, взаимоблокировка %5';
-      ChkAdviceEvidenceTxt@1000000050 : TextConst 'ENU=the evidence names the very number the advice was given for;RUS=улика называет то самое число, по которому совет выдан';
-      AdviceEvidenceTxt@1000000051 : TextConst 'ENU=queue [%1], SIFT [%2], long wait [%3];RUS=очередь [%1], SIFT [%2], долгое ожидание [%3]';
+      ChkAdviceNumbersTxt@1000000050 : TextConst 'ENU=the advice switches on at the very number it declares as its threshold, and stays silent one short of it;RUS=совет включается на том самом числе, которое объявлено его порогом, и молчит на единицу раньше';
+      AdviceNumbersTxt@1000000051 : TextConst 'ENU=queue at %1, silent at %2, long at %3 of %4;RUS=очередь при %1, молчание при %2, долгое при %3 из %4';
       ChkAdviceQuietTxt@1000000052 : TextConst 'ENU=below the threshold the advice is silent, and a zero threshold is not an alert on everything;RUS=ниже порога советчик молчит, а нулевой порог - не тревога на всём';
       AdviceQuietTxt@1000000053 : TextConst 'ENU=quiet %1, zero threshold %2, right on the threshold %3;RUS=тихо %1, нулевой порог %2, ровно на пороге %3';
       ChkCounterDeltaTxt@1000000054 : TextConst 'ENU=a counter that went backwards is read as a reset, not as a negative gain;RUS=пошедший назад счётчик читается как обнуление, а не как отрицательный прирост';
@@ -124,7 +124,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckSqlNamePattern(Passed,Total,Report);
       CheckSameSqlName(Passed,Total,Report);
       CheckAdviceOrder(Passed,Total,Report);
-      CheckAdviceEvidence(Passed,Total,Report);
+      CheckAdviceNumbers(Passed,Total,Report);
       CheckAdviceQuiet(Passed,Total,Report);
       CheckCounterDelta(Passed,Total,Report);
       CheckStatementCut(Passed,Total,Report);
@@ -139,14 +139,13 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       HobtId@1000000004 : BigInteger;
       ObjectId@1000000005 : Integer;
       DatabaseId@1000000006 : Integer;
-      HeldMode@1000000007 : Text;
       Ok@1000000008 : Boolean;
     BEGIN
       // Строка снята с живого ожидания на стенде 07.09.2026, не придумана.
-      Ok := Parse.ParseWaitResource(SampleKeyLock,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Ok := Parse.ParseWaitResource(SampleKeyLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitKeyTxt,
-        Ok AND (Kind = 'keylock') AND (HobtId = SampleHobt) AND (DatabaseId = 7) AND (HeldMode = 'X'),
-        STRSUBSTNO(WaitKeyTxt,Kind,HobtId,DatabaseId,HeldMode,ObjectId));
+        Ok AND (Kind = 'keylock') AND (HobtId = SampleHobt) AND (DatabaseId = 7),
+        STRSUBSTNO(WaitKeyTxt,Kind,HobtId,DatabaseId,ObjectId));
     END;
 
     LOCAL PROCEDURE CheckWaitObject@11(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -155,12 +154,11 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       HobtId@1000000004 : BigInteger;
       ObjectId@1000000005 : Integer;
       DatabaseId@1000000006 : Integer;
-      HeldMode@1000000007 : Text;
       Ok@1000000008 : Boolean;
     BEGIN
       // У блокировки на объект hobt нет вовсе: там objid. Отдать чужое число за hobt
       // значит разрешить его в постороннюю таблицу - и это будет выглядеть правдоподобно.
-      Ok := Parse.ParseWaitResource(SampleObjectLock,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Ok := Parse.ParseWaitResource(SampleObjectLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitObjTxt,
         Ok AND (Kind = 'objectlock') AND (ObjectId = 1115203073) AND (HobtId = 0),
         STRSUBSTNO(WaitObjTxt,ObjectId,HobtId));
@@ -172,12 +170,11 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       HobtId@1000000004 : BigInteger;
       ObjectId@1000000005 : Integer;
       DatabaseId@1000000006 : Integer;
-      HeldMode@1000000007 : Text;
     BEGIN
       // В строке keylock рядом стоят hobtid=, id=lock... и associatedObjectId=.
       // Поиск подстрокой без границы слова взял бы id= внутри hobtid=, а objid -
       // из associatedObjectId. Обе подмены беззвучны: числа выглядят настоящими.
-      Parse.ParseWaitResource(CraftedKeyLock,Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Parse.ParseWaitResource(CraftedKeyLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitBoundTxt,
         (HobtId = SampleHobt) AND (ObjectId = 0),
         STRSUBSTNO(WaitBoundTxt,HobtId,ObjectId));
@@ -189,10 +186,9 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       HobtId@1000000004 : BigInteger;
       ObjectId@1000000005 : Integer;
       DatabaseId@1000000006 : Integer;
-      HeldMode@1000000007 : Text;
       Ok@1000000008 : Boolean;
     BEGIN
-      Ok := Parse.ParseWaitResource('something else entirely',Kind,HobtId,ObjectId,DatabaseId,HeldMode);
+      Ok := Parse.ParseWaitResource('something else entirely',Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitJunkTxt,NOT Ok,STRSUBSTNO(WaitJunkTxt,Ok));
     END;
 
@@ -516,7 +512,6 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     LOCAL PROCEDURE CheckAdviceOrder@59(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
     VAR
       AdviceText@1000000003 : Text;
-      Evidence@1000000004 : Text;
       WholeTable@1000000005 : Integer;
       Foreign@1000000006 : Integer;
       Sift@1000000007 : Integer;
@@ -528,16 +523,16 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // обязан быть один, и именно тот, у которого лечение точнее. Проверка на случае с
       // ОДНИМ признаком прошла бы и на коде, где правила переставлены местами, - то есть
       // была бы пустой.
-      WholeTable := Parse.Advise(Parse.ClassWholeTable,Parse.OutcomeTimedOut,9000,5000,7,TRUE,3,TRUE,
-                                 AdviceText,Evidence);
-      Foreign := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,TRUE,3,TRUE,
-                              AdviceText,Evidence);
-      Sift := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,TRUE,3,FALSE,
-                           AdviceText,Evidence);
-      Queue := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,FALSE,3,FALSE,
-                            AdviceText,Evidence);
-      Deadlock := Parse.Advise(Parse.ClassDeadlock,Parse.OutcomeDeadlocked,9000,5000,7,TRUE,3,TRUE,
-                               AdviceText,Evidence);
+      WholeTable := Parse.Advise(Parse.ClassWholeTable,Parse.OutcomeTimedOut,9000,5000,7,TRUE,TRUE,
+                                 AdviceText);
+      Foreign := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,TRUE,TRUE,
+                              AdviceText);
+      Sift := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,TRUE,FALSE,
+                           AdviceText);
+      Queue := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,FALSE,FALSE,
+                            AdviceText);
+      Deadlock := Parse.Advise(Parse.ClassDeadlock,Parse.OutcomeDeadlocked,9000,5000,7,TRUE,TRUE,
+                               AdviceText);
       Check(Passed,Total,Report,ChkAdviceOrderTxt,
         (WholeTable = Parse.AdviceWholeTable) AND (Foreign = Parse.AdviceForeignHead) AND
         (Sift = Parse.AdviceSift) AND (Queue = Parse.AdviceQueue) AND
@@ -545,77 +540,39 @@ OBJECT Codeunit 110231 LockWatch Parse Test
         STRSUBSTNO(AdviceOrderTxt,WholeTable,Foreign,Sift,Queue,Deadlock));
     END;
 
-    LOCAL PROCEDURE CheckAdviceEvidence@60(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckAdviceNumbers@60(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
     VAR
       AdviceText@1000000003 : Text;
-      QueueEv@1000000005 : Text;
-      SiftEv@1000000006 : Text;
-      LongEv@1000000007 : Text;
       QueueOk@1000000008 : Boolean;
-      SiftOk@1000000009 : Boolean;
+      ShortOk@1000000009 : Boolean;
       LongOk@1000000010 : Boolean;
       Victims@1000000011 : Integer;
-      SiftKey@1000000012 : Integer;
       WaitMs@1000000013 : Integer;
       AlertMs@1000000014 : Integer;
     BEGIN
-      // Улика обязана назвать ТО САМОЕ число, по которому совет выдан. Без этого совет и
-      // улика расходятся молча: подпись остаётся верной, а число под ней - от другого
-      // признака, и оспорить совет становится нечем.
-      //
-      // Числа держатся в переменных нарочно: одно и то же число подаётся разбору и ищется
-      // в улике. Разойдись эти два - проверка искала бы не то, что подала, и была бы
-      // зелёной над уликой от другого признака.
-      Victims := 7;
-      SiftKey := 3;
+      // Совет обязан включаться на ТОМ САМОМ числе, которое объявлено его порогом: очередь -
+      // с AdviceQueueWaiters жертв, долгое ожидание - с порога тревоги, - и молчать на
+      // единицу раньше. Числа держатся в переменных нарочно: порог подаётся разбору и
+      // проверяется рядом, а не переписывается в проверку цифрой.
+      Victims := Parse.AdviceQueueWaiters;
       WaitMs := 7100;
       AlertMs := 5000;
-      // И ищется число ЦЕЛИКОМ, а не цифрой: поиск подстрокой нашёл бы "семь" и в
-      // семнадцати, и в семидесяти - улика назвала бы другое число, а проверка смолчала.
-      QueueOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,Victims,FALSE,0,FALSE,
-                              AdviceText,QueueEv) = Parse.AdviceQueue;
-      QueueOk := QueueOk AND HoldsNumber(QueueEv,Victims) AND (AdviceText <> '');
-      SiftOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,1,TRUE,SiftKey,FALSE,
-                             AdviceText,SiftEv) = Parse.AdviceSift;
-      SiftOk := SiftOk AND HoldsNumber(SiftEv,SiftKey);
-      LongOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,WaitMs,AlertMs,1,FALSE,0,FALSE,
-                             AdviceText,LongEv) = Parse.AdviceLongWait;
-      LongOk := LongOk AND HoldsNumber(LongEv,WaitMs) AND HoldsNumber(LongEv,AlertMs);
-      Check(Passed,Total,Report,ChkAdviceEvidenceTxt,
-        QueueOk AND SiftOk AND LongOk,
-        STRSUBSTNO(AdviceEvidenceTxt,QueueEv,SiftEv,LongEv));
-    END;
-
-    LOCAL PROCEDURE HoldsNumber@78(Evidence@1000000000 : Text;Expected@1000000001 : Integer) : Boolean;
-    VAR
-      ExpectedTxt@1000000002 : Text;
-      Pos@1000000003 : Integer;
-      Before@1000000004 : Text[1];
-      After@1000000005 : Text[1];
-    BEGIN
-      // Число стоит в улике ЦЕЛИКОМ: по бокам от него - пробел или край строки. Проверка на
-      // "цифра где-то в строке" ловит подмену только случайно: подставь вместо семи
-      // семнадцать или семьдесят - цифра на месте, а число другое, и улика врёт молча.
-      //
-      // Край строки разделителя не требует: за цифрой там ничего нет по определению, и
-      // значение, оставленное до проверки, - пробел.
-      ExpectedTxt := FORMAT(Expected);
-      Pos := STRPOS(Evidence,ExpectedTxt);
-      IF Pos = 0 THEN
-        EXIT(FALSE);
-      Before := ' ';
-      After := ' ';
-      IF Pos > 1 THEN
-        Before := COPYSTR(Evidence,Pos - 1,1);
-      IF (Pos + STRLEN(ExpectedTxt)) <= STRLEN(Evidence) THEN
-        After := COPYSTR(Evidence,Pos + STRLEN(ExpectedTxt),1);
-      EXIT((Before = ' ') AND (After = ' '));
+      QueueOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,Victims,FALSE,FALSE,
+                              AdviceText) = Parse.AdviceQueue;
+      ShortOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,Victims - 1,FALSE,FALSE,
+                              AdviceText) = Parse.AdviceNone;
+      LongOk := (Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,WaitMs,AlertMs,1,FALSE,FALSE,
+                              AdviceText) = Parse.AdviceLongWait) AND
+                (Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AlertMs - 1,AlertMs,1,FALSE,FALSE,
+                              AdviceText) = Parse.AdviceNone);
+      Check(Passed,Total,Report,ChkAdviceNumbersTxt,
+        QueueOk AND ShortOk AND LongOk,
+        STRSUBSTNO(AdviceNumbersTxt,Victims,Victims - 1,WaitMs,AlertMs));
     END;
 
     LOCAL PROCEDURE CheckAdviceQuiet@61(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
     VAR
       AdviceText@1000000003 : Text;
-      Evidence@1000000004 : Text;
       Quiet@1000000005 : Integer;
       Zero@1000000006 : Integer;
       Edge@1000000007 : Integer;
@@ -624,13 +581,13 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Три случая молчания и один случай речи. Ноль в пороге означает "не тревожить
       // вовсе": без этой оговорки выключенная тревога дала бы совет КАЖДОМУ эпизоду.
       // Граница проверяется ровно на пороге - там, где ошибка на единицу и живёт.
-      Quiet := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,900,5000,1,FALSE,0,FALSE,
-                            AdviceText,Evidence);
-      QuietOk := (Quiet = Parse.AdviceNone) AND (AdviceText = '') AND (Evidence = '');
-      Zero := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,900000,0,1,FALSE,0,FALSE,
-                           AdviceText,Evidence);
-      Edge := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,5000,5000,1,FALSE,0,FALSE,
-                           AdviceText,Evidence);
+      Quiet := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,900,5000,1,FALSE,FALSE,
+                            AdviceText);
+      QuietOk := (Quiet = Parse.AdviceNone) AND (AdviceText = '');
+      Zero := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,900000,0,1,FALSE,FALSE,
+                           AdviceText);
+      Edge := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,5000,5000,1,FALSE,FALSE,
+                           AdviceText);
       Check(Passed,Total,Report,ChkAdviceQuietTxt,
         QuietOk AND (Zero = Parse.AdviceNone) AND (Edge = Parse.AdviceLongWait),
         STRSUBSTNO(AdviceQuietTxt,Quiet,Zero,Edge));

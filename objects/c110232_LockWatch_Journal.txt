@@ -210,7 +210,7 @@ OBJECT Codeunit 110232 LockWatch Journal
     END;
 
     [External]
-    PROCEDURE SetDocument@13(EntryNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20];UserName@1000000002 : Code[50];Source@1000000003 : Integer;Reason@1000000004 : Text;VictimUserName@1000000005 : Code[50];CulpritDocumentNo@1000000006 : Code[20]);
+    PROCEDURE SetDocument@13(EntryNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20];UserName@1000000002 : Code[50];Source@1000000003 : Integer;Reason@1000000004 : Text;VictimUserName@1000000005 : Code[50];CulpritDocumentNo@1000000006 : Code[20];UserSource@1000000007 : Integer;CulpritSessions@1000000008 : Text);
     BEGIN
       Journal.RESET;
       IF NOT Journal.GET(EntryNo) THEN
@@ -236,12 +236,19 @@ OBJECT Codeunit 110232 LockWatch Journal
       IF CulpritDocumentNo <> '' THEN
         Journal."Culprit Document No." := CulpritDocumentNo;
       IF UserName <> '' THEN BEGIN
-        // Имя приходит из отметки контекста, то есть от самой транзакции виновника, а не
-        // от платформы. Это НЕ то имя, которое обещано в разделе про EnableDeadlockMonitoring:
-        // здесь оно про виновника и получено без единого нового права.
+        // Имя приходит ВМЕСТЕ С ДОРОГОЙ, которая его назвала: отметка контекста или
+        // собственная строка виновника. Признак поэтому параметр, а не "FromMark" по
+        // умолчанию: источник, приписанный чужой дорогой, делает верное имя недоказуемым
+        // ровно так же, как неверное. Это по-прежнему НЕ то имя, что обещано в разделе
+        // про EnableDeadlockMonitoring: оно про виновника и добыто без новых прав.
         Journal."User Name" := UserName;
-        Journal."User Source" := Journal."User Source"::FromMark;
+        Journal."User Source" := UserSource;
       END;
+      // Номер сеанса - такой же ответ, как имя, и переживает закрытие эпизода. У дороги
+      // отметки он лежит в самой отметке, у дороги строки - собирается из живых сеансов
+      // учётки; пустота поверх найденного не кладётся, как и у прочих ответов.
+      IF CulpritSessions <> '' THEN
+        Journal."Culprit NAV Sessions" := COPYSTR(CulpritSessions,1,MAXSTRLEN(Journal."Culprit NAV Sessions"));
       // Имя жертвы кладётся отдельным полем и БЕЗ признака источника: источник у него
       // ровно один - её собственная отметка. Появится второй - будет и признак.
       IF VictimUserName <> '' THEN
@@ -382,16 +389,14 @@ OBJECT Codeunit 110232 LockWatch Journal
     LOCAL PROCEDURE ApplyAdvice@11(VAR Row@1000000000 : Record 110231);
     VAR
       AdviceText@1000000001 : Text;
-      Evidence@1000000002 : Text;
     BEGIN
       // Совет - чистая функция от полей строки, и живёт он в разборе: журнал только
       // относит ему то, что уже знает, и кладёт ответ обратно. Никакого своего суждения
       // здесь нет, и потому советчик проверяется без базы вовсе.
       Parse.Advise(Row.Class,Row.Outcome,Row."Max Wait (ms)",PassAlertMs,
-                   Row."Victims Behind Head",Row."On SIFT",Row."NAV Key No.",
-                   Row."Head Is Foreign",AdviceText,Evidence);
+                   Row."Victims Behind Head",Row."On SIFT",
+                   Row."Head Is Foreign",AdviceText);
       Row.Advice := COPYSTR(AdviceText,1,MAXSTRLEN(Row.Advice));
-      Row."Advice Evidence" := COPYSTR(Evidence,1,MAXSTRLEN(Row."Advice Evidence"));
     END;
 
     [External]
@@ -469,8 +474,8 @@ OBJECT Codeunit 110232 LockWatch Journal
       InCoverageMs := 0;
       // Строка не уничтожается, а ПЕРЕЕЗЖАЕТ в историю. Из журнала она уходит затем, что
       // журнал горячий: в него пишет каждый проход и в нём же ищутся открытые эпизоды.
-      // Из истории её не удаляет ничто - ни проход, ни задача, ни срок; инструмент, тихо
-      // стирающий то, ради чего его поставили, стоит меньше, чем ничего.
+      // Историю чистит её собственный срок хранения (PurgeHistory), и только он: срок
+      // назначает человек, а порция за проход не даёт годовой истории уйти одной транзакцией.
       //
       // Пределов ДВА, и оба нужны. Срок отвечает на "давно ли", потолок - на "сколько их",
       // и подменить один другим нельзя: тридцать дней на тихой базе это сотня строк, а в
@@ -604,6 +609,35 @@ OBJECT Codeunit 110232 LockWatch Journal
         History.MODIFY;
       Journal.DELETE;
       EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE PurgeHistory@29(RetentionDays@1000000000 : Integer;MaxRows@1000000001 : Integer) : Integer;
+    VAR
+      Threshold@1000000002 : DateTime;
+      Age@1000000003 : Duration;
+      Purged@1000000004 : Integer;
+    BEGIN
+      // Срок хранения истории назначает человек в настройке, и ноль означает "бессрочно".
+      // После обновления там стоит ноль: обновление не стирает историю молча.
+      //
+      // Удаление порционное, как и переезд. Годовая история, снесённая одним DELETEALL,
+      // держала бы блокировку собственной таблицы столько же, сколько её собирали, -
+      // и проход, который её чистит, сам стал бы поводом для тревоги.
+      IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
+        EXIT(0);
+      Age := RetentionDays * Parse.MsPerDay;
+      Threshold := CURRENTDATETIME - Age;
+
+      History.RESET;
+      History.SETCURRENTKEY("Started At");
+      History.SETFILTER("Started At",'<%1',Threshold);
+      IF History.FINDSET(TRUE) THEN
+        REPEAT
+          History.DELETE;
+          Purged := Purged + 1;
+        UNTIL (Purged >= MaxRows) OR (History.NEXT = 0);
+      EXIT(Purged);
     END;
 
     LOCAL PROCEDURE FoldJournal@22(VAR Line@1000000000 : Record 110234;FromAt@1000000001 : DateTime;ToAt@1000000002 : DateTime;AlertMs@1000000003 : Integer) : Integer;
@@ -749,11 +783,9 @@ OBJECT Codeunit 110232 LockWatch Journal
       Journal."No Document Reason" := Keep."No Document Reason";
       Journal."User Name" := Keep."User Name";
       Journal."User Source" := Keep."User Source";
-      // Где виновник исполняется сейчас - из того же списка, и довод тот же, что у имён:
-      // поле пишет дорога ПЛАТФОРМЫ (Codeunit 110241), а съём о нём не знает вовсе и
-      // приносит пустоту. Пустота, положенная поверх добытого, стирала бы ответ каждым
-      // проходом - а стоит он похода в таблицу блокировок платформы.
-      Journal."Blocker AL Scope" := Keep."Blocker AL Scope";
+      // Сеансы виновника - из того же списка. Съём о них не знает и приносит пустоту, а
+      // пустота, положенная поверх найденного, стирала бы ответ каждым проходом.
+      Journal."Culprit NAV Sessions" := Keep."Culprit NAV Sessions";
       // Имя жертвы - из того же списка, и забыть его тут стоило дороже всего: оно
       // писалось исправно и затиралось следующим же проходом через три секунды, а
       // выглядело это как "дорога к имени жертвы не работает вовсе".

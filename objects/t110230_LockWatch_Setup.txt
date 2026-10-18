@@ -2,7 +2,7 @@ OBJECT Table 110230 LockWatch Setup
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=18.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -42,6 +42,9 @@ OBJECT Table 110230 LockWatch Setup
                                                    MinValue=0 }
     { 17  ;   ;History Threshold (ms);Integer     ;CaptionML=[ENU=Wait worth keeping in history (ms);
                                                               RUS=Какое ожидание стоит хранить в истории, мс];
+                                                   MinValue=0 }
+    { 18  ;   ;History Retention (Days);Integer   ;CaptionML=[ENU=Days to keep history;
+                                                              RUS=Хранить историю, дней];
                                                    MinValue=0 }
     { 20  ;   ;Collect Statement Values;Boolean   ;CaptionML=[ENU=Collect Statement Values;
                                                               RUS=Собирать значения в операторах] }
@@ -124,6 +127,9 @@ OBJECT Table 110230 LockWatch Setup
                                                    CaptionML=[ENU=Watchdog Message;
                                                               RUS=Сообщение сторожа];
                                                    Editable=No }
+    { 51  ;   ;Names From Culprit Rows;Boolean    ;InitValue=Yes;
+                                                   CaptionML=[ENU=Names from Culprit Rows;
+                                                              RUS=Имена по строкам виновника] }
   }
   KEYS
   {
@@ -166,6 +172,7 @@ OBJECT Table 110230 LockWatch Setup
       "Retention (Days)" := DefaultRetentionDays;
       "Journal Rows Ceiling" := DefaultJournalRows;
       "History Threshold (ms)" := DefaultHistoryMs;
+      "History Retention (Days)" := DefaultHistoryRetentionDays;
       "Alert Threshold (ms)" := DefaultAlertMs;
       "Collect Statement Values" := FALSE;
       "Deadlocks Enabled" := TRUE;
@@ -180,6 +187,11 @@ OBJECT Table 110230 LockWatch Setup
       // включение стоит правки конфига, перезапуска экземпляра, обоих прав SQL и постоянной
       // серверной сессии XE, переживающей снятие инструмента. Решение это заказчика.
       "Platform Names Enabled" := FALSE;
+      // Строки виновника по умолчанию ВКЛЮЧЕНЫ: дорога читает обычные поля самой базы,
+      // не правит конфиг и не требует прав SQL, а стоит один запрос на эпизод, у которого
+      // имя ещё не нашлось. Пустое имя при этом не выдаётся за ответ - но и отказываться
+      // от бесплатной улики незачем.
+      "Names From Culprit Rows" := TRUE;
       "Alert Channel" := "Alert Channel"::Journal;
       "Alert Event Source" := DefaultEventSource;
       INSERT;
@@ -238,17 +250,29 @@ OBJECT Table 110230 LockWatch Setup
     LOCAL PROCEDURE DefaultRetentionDays@6() : Integer;
     BEGIN
       // Срок ПЕРЕЕЗДА, а не уничтожения: старше него эпизод уходит в историю
-      // (таблица 110238), и оттуда его не удаляет ничто - ни проход, ни задача, ни срок.
+      // (таблица 110238) и живёт там до срока хранения истории, который назначает человек.
       // Из журнала он уходит затем, что журнал горячий: в него пишет каждый проход и в нём
       // же ищутся открытые эпизоды.
       //
       // Тридцать дней - столько живёт "недавнее": за месяц становится видно, повторяется
       // ли ожидание, и месячного окна хватает, чтобы смотреть журнал, а не историю.
       //
-      // Инструмент показывает чужие учётные записи, и бессрочное хранение - разговор со
-      // службой безопасности. Раньше этот разговор решался за них тихим удалением; теперь
-      // он решается ими: историю чистит человек кнопкой, зная, что именно стирает.
+      // Инструмент показывает чужие учётные записи, и срок хранения - разговор со службой
+      // безопасности. Здесь срок ПЕРЕЕЗДА: сколько эпизод лежит в горячем журнале. У истории
+      // свой срок, и его человек назначает отдельно - поле "Хранить историю, дней".
       EXIT(30);
+    END;
+
+    LOCAL PROCEDURE DefaultHistoryRetentionDays@31() : Integer;
+    BEGIN
+      // Год. История отвечает на вопрос "было ли раньше и повторяется ли", и годовая
+      // сверка - обычный повод в неё заглянуть: месячное окно на такой вопрос не отвечает.
+      //
+      // Ноль означает "хранить бессрочно". Существующая строка настройки после обновления
+      // получит именно ноль (так ложится новое поле в уже заведённую запись), а не это
+      // умолчание: умолчание ставится только при заведении строки. Так обновление не
+      // стирает историю молча - срок назначает человек.
+      EXIT(365);
     END;
 
     LOCAL PROCEDURE DefaultJournalRows@9() : Integer;
