@@ -2,7 +2,7 @@ OBJECT Codeunit 110234 LockWatch Sql
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -965,9 +965,24 @@ OBJECT Codeunit 110234 LockWatch Sql
       // начинается с LockWatch. Платформенные объекты ($ndo$...) сюда же: в них нет ни
       // полей NAV, ни учётных записей. Отбор стоит и здесь, а не только в SQL, потому что
       // в SQL имя NAV лежит с префиксом компании.
+      //
+      // Исключение одно - строка показа: за неё спорит кнопка "Демо", и показ обязан
+      // назвать держателя той же дорогой, что и в деловой таблице.
       IF NOT Parse.SplitSqlObjectName(SqlObjectName,CompanyName,TableName,SiftKeyNo) THEN
         EXIT(TRUE);
+      IF Parse.SameSqlName(TableName,DemoTableName) THEN
+        EXIT(FALSE);
       EXIT(COPYSTR(UPPERCASE(TableName),1,10) = 'LOCKWATCH ');
+    END;
+
+    LOCAL PROCEDURE DemoTableName@80() : Text;
+    VAR
+      DemoRef@1000000000 : RecordRef;
+    BEGIN
+      // Имя берётся у самой таблицы, а не набирается строкой: переименуют объект - имя
+      // переедет вместе с ним, и исключение не отвалится молча.
+      DemoRef.OPEN(DATABASE::"LockWatch Demo Row");
+      EXIT(DemoRef.NAME);
     END;
 
     LOCAL PROCEDURE FindContext@34(VAR Context@1000000000 : TEMPORARY Record 110232;NavTableName@1000000001 : Text) : Boolean;
@@ -1169,7 +1184,8 @@ OBJECT Codeunit 110234 LockWatch Sql
         ' AND l.request_owner_type ' + Eq + ' ' + Q + 'TRANSACTION' + Q +
         ' AND l.request_owner_id IN (' + Trans + ')' +
         ' AND i.index_id ' + Eq + ' 1' +
-        ' AND o.name NOT LIKE ' + Q + Wildcard + 'LockWatch ' + Wildcard + Q + ') c' +
+        ' AND (o.name NOT LIKE ' + Q + Wildcard + 'LockWatch ' + Wildcard + Q +
+        ' OR o.name LIKE ' + Q + Wildcard + DemoTableName + Q + ')) c' +
         ' WHERE c.HashNo <= ' + FORMAT(Parse.MaxCulpritHashesPerTable) +
         ' AND c.TableNo <= ' + FORMAT(Parse.MaxCulpritTables) + ') x;';
       EXIT(Sql);
@@ -1609,7 +1625,7 @@ OBJECT Codeunit 110234 LockWatch Sql
       // непустом значении отметки - то есть на втором проходе, а не на первом.
       IF At = 0DT THEN
         EXIT(0);
-      Elapsed := At - CREATEDATETIME(SqlEpoch,0T);
+      Elapsed := At - CREATEDATETIME(SqlEpoch,0T) - SessionShift;
       Days := ROUND(Elapsed / Parse.MsPerDay,1,'<');
       EXIT(Days);
     END;
@@ -1620,7 +1636,7 @@ OBJECT Codeunit 110234 LockWatch Sql
     BEGIN
       IF At = 0DT THEN
         EXIT(0);
-      Elapsed := At - CREATEDATETIME(DT2DATE(At),0T);
+      Elapsed := At - CREATEDATETIME(SqlEpoch + MomentDays(At),0T) - SessionShift;
       EXIT(Elapsed);
     END;
 
@@ -1885,16 +1901,31 @@ OBJECT Codeunit 110234 LockWatch Sql
       // зависит от языка сеанса и от языка сервера, и ошибётся он не отказом, а сдвигом.
       // Сутки от начала отсчёта SQL плюс миллисекунды внутри суток врать не умеют.
       //
-      // Части обязаны приезжать по UTC. Часы серверной сессии NAV идут по UTC, и в колонку
-      // момент ложится как есть - перевода при записи нет; в пояс читателя его переводит
-      // клиент, при показе. Момент, собранный здесь из МЕСТНЫХ частей, лёг бы в колонку
-      // местным временем, и клиент прибавил бы пояс к нему ещё раз. Проверено замером
-      // 10.09.2026, и цена ошибки - три часа вранья в каждой строке журнала на сервере с
-      // московским поясом.
+      // Части приезжают по UTC, а CREATEDATETIME читает дату и время в поясе СЕССИИ. В
+      // фоновой сессии это UTC, и поправка не нужна. В сессии клиента - пояс его машины:
+      // проход, запущенный кнопкой ("Один проход сейчас", "Демо"), без поправки собрал бы на
+      // московском клиенте момент на три часа раньше настоящего, и сторож назвал бы идущую
+      // цепочку замолчавшей 180 минут назад (FINDINGS, раздел 102).
       IF Days <= 0 THEN
         EXIT(0DT);
       Offset := Milliseconds;
-      EXIT(CREATEDATETIME(SqlEpoch + Days,0T) + Offset);
+      EXIT(CREATEDATETIME(SqlEpoch + Days,0T) + Offset + SessionShift);
+    END;
+
+    LOCAL PROCEDURE SessionShift@79() : Duration;
+    VAR
+      TypeHelper@1000000000 : Codeunit 10;
+      TimeZoneInfo@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.TimeZoneInfo";
+      Shift@1000000002 : Duration;
+    BEGIN
+      // Насколько CREATEDATETIME этой сессии отстаёт от UTC. Фоновая сессия и командлет
+      // идут по UTC - сдвига нет. Сессия клиента идёт по поясу машины пользователя; узнать
+      // его из C/AL нельзя, и берётся пояс машины службы: клиенты установки сидят в том же
+      // поясе, что и сервер NAV.
+      IF NOT GUIALLOWED THEN
+        EXIT(0);
+      TypeHelper.GetTimezoneOffset(Shift,TimeZoneInfo.Local.Id);
+      EXIT(Shift);
     END;
 
     [TryFunction]

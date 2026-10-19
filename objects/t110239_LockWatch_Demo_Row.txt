@@ -2,7 +2,7 @@ OBJECT Table 110239 LockWatch Demo Row
 {
   OBJECT-PROPERTIES
   {
-    Date=10.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -20,6 +20,11 @@ OBJECT Table 110239 LockWatch Demo Row
                                                               RUS=Что с ней делали] }
     { 11  ;   ;Touched At          ;DateTime      ;CaptionML=[ENU=Touched At;
                                                               RUS=Когда трогали] }
+    { 12  ;   ;Held By             ;Code50        ;TableRelation=User."User Name";
+                                                   ValidateTableRelation=No;
+                                                   TestTableRelation=No;
+                                                   CaptionML=[ENU=Held By;
+                                                              RUS=Кто держит] }
   }
   KEYS
   {

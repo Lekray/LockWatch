@@ -307,6 +307,10 @@ try {
     # его выключенным. Значит и возвращается он НАЙДЕННЫМ - иначе прогон оставил бы за собой
     # чужую правку, а следующий за ним мерил бы не сторожа, а то, чем кончился этот.
     $wasCoverage = Scalar "SELECT CONVERT(varchar(2),[Coverage Enabled]) FROM $setup;"
+    # Порог записи в журнал опыт снимает: сцены ловят ожидание первым же проходом, когда
+    # оно ещё короче двух секунд заводского порога, и без нуля эпизода бы не было вовсе.
+    # Возвращается он найденным - порог выбирает установка.
+    $wasMinWait = Scalar "SELECT CONVERT(varchar(11),[Journal Min Wait (ms)]) FROM $setup;"
     # Источник событий - СТРОКА, и пустое его значение это значение настройки, а не признак
     # нечитанной строки: строка тут одна, и нашлась ли она, видно по числовым полям выше -
     # пустыми они не приходят. Имя источника выбирает установка, и возвращается оно тоже её.
@@ -315,7 +319,7 @@ try {
     # и возвращать их в уборке будет нечем: молчание тут означало бы полную уборку, которой
     # не было. Поэтому о неполном чтении говорится вслух, а беда копится к отчёту.
     $setupRead = [bool]($wasDeadlocks -and $wasStatements -and $wasAlertChannel -and
-                        $wasAlertThreshold -and $wasCoverage)
+                        $wasAlertThreshold -and $wasCoverage -and $wasMinWait)
     if (-not $setupRead) {
         $cleanupWarn += 'настройка прочиталась не вся - возвращать её поля в уборке нечем'
     }
@@ -330,7 +334,7 @@ try {
     # Текст запроса снимается только при включённом признаке, и признак этот по умолчанию
     # выключен: в операторе едут ЗНАЧЕНИЯ, а это решение заказчика, а не наше умолчание.
     # Прогон включает его сам и возвращает как было.
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Collect Statement Values] = 1; UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Collect Statement Values] = 1, [Journal Min Wait (ms)] = 0; UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
     # Накопительный слой, наоборот, чистится и остаётся ВКЛЮЧЁННЫМ: без чистки проверка
     # прошла бы на строках прошлого прогона, то есть не проверяла бы ничего.
     Invoke-Sql "DELETE FROM $coverage; UPDATE $setup SET [Coverage Enabled] = 1; UPDATE $state SET [Coverage Since] = $blankDate;" | Out-Null
@@ -1270,6 +1274,7 @@ finally {
     # Охват возвращается найденным, а не включённым: выключенным его держит установка, и
     # оставленный включённым он был бы чужой правкой - и правкой, след которой не виден.
     if ($wasCoverage) { $cleanup += " UPDATE $setup SET [Coverage Enabled] = $wasCoverage;" }
+    if ($wasMinWait) { $cleanup += " UPDATE $setup SET [Journal Min Wait (ms)] = $wasMinWait;" }
     $cleanup += " DELETE FROM $coverage; UPDATE $state SET [Coverage Since] = $blankDate;"
     # Настройка уведомлений у каждой установки своя, и возвращается она найденной: подставленное
     # число 5000 стирало бы чужой порог, а канал - чужой способ оповещения.

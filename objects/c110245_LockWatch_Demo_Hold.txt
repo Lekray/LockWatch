@@ -2,7 +2,7 @@ OBJECT Codeunit 110245 LockWatch Demo Hold
 {
   OBJECT-PROPERTIES
   {
-    Date=10.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -38,6 +38,11 @@ OBJECT Codeunit 110245 LockWatch Demo Hold
         EXIT;
       Demo.Note := HeldTxt;
       Demo."Touched At" := CURRENTDATETIME;
+      // Учётная запись держателя - в поле-связи с "User": по нему дорога "по строке
+      // виновника" назовёт того, кто держит, тем же путём, что и в деловой таблице.
+      // Без такого поля показ ловил бы ожидание, но имя оставлял бы пустым, и человек
+      // унёс бы вывод, что имена инструмент не находит вовсе.
+      Demo."Held By" := COPYSTR(USERID,1,MAXSTRLEN(Demo."Held By"));
       Demo.MODIFY;
       SLEEP(Control.HoldMs);
     END;

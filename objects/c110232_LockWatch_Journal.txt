@@ -741,7 +741,25 @@ OBJECT Codeunit 110232 LockWatch Journal
       // прохода, - поэтому позднее открытие не сдвигает начало.
       //
       // Ноль означает "порога нет": открывается всё, как было до появления поля.
-      EXIT((PassMinWaitMs <= 0) OR (Observed."Last Wait (ms)" >= PassMinWaitMs));
+      //
+      // Ожидание ПОКАЗА порога не знает. Кнопка "Демо" держит строку шесть секунд, а
+      // ждущий подключается позже держателя, и в журнал ожидание попало бы только тогда,
+      // когда проход случился в окно между порогом и концом ожидания - то есть через раз.
+      // Показ, который через раз показывает пустой журнал, учит, что инструмент не
+      // работает. Порог против шума, а показ - не шум: его нажали нарочно.
+      IF (PassMinWaitMs <= 0) OR (Observed."Last Wait (ms)" >= PassMinWaitMs) THEN
+        EXIT(TRUE);
+      EXIT(OnDeliberateShow(Observed));
+    END;
+
+    LOCAL PROCEDURE OnDeliberateShow@31(VAR Observed@1000000000 : Record 110231) : Boolean;
+    VAR
+      DemoRef@1000000001 : RecordRef;
+    BEGIN
+      // Признак показа - ТАБЛИЦА мишени, как и у уведомлений (Codeunit 110240): имя берётся
+      // у самой таблицы, а не набирается строкой.
+      DemoRef.OPEN(DATABASE::"LockWatch Demo Row");
+      EXIT(Parse.SameSqlName(Observed."NAV Table Name",DemoRef.NAME));
     END;
 
     LOCAL PROCEDURE FindOpen@6(VAR Observed@1000000000 : Record 110231) : Boolean;

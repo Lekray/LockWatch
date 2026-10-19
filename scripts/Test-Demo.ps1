@@ -282,6 +282,24 @@ FROM $episode WHERE [NAV Table Name] = N'$demoName' ORDER BY [Entry No_] DESC;
         ($closed -and ($waited -gt 0) -and ($waited -lt (NavLockTimeoutMs)) -and ($note -match 'Waited for it and got it|Дождался и взял')) `
         "ожидание $waited мс при пределе $(NavLockTimeoutMs), строка показа говорит [$note], эпизод $(if ($closed) { 'закрыт' } else { 'ОТКРЫТ' })"
 
+    # Имя того, кто держит. Держатель пишет свою учётную запись в поле-связь с "User" строки
+    # показа, и дорога "по строке виновника" обязана назвать его по этому полю - тем же
+    # путём, что и в деловой таблице. Сверяется с тем, что держатель записал сам, а не
+    # с учётной записью прогона: держит фоновая сессия, и подставлять за неё имя опыта
+    # значило бы проверять ожидание, а не инструмент. Источник - строка виновника (3).
+    $named = Wait-For { (Scalar "SELECT COUNT(*) FROM $episode WHERE [NAV Table Name] = N'$demoName' AND [User Name] <> N'';") -gt 0 } 15
+    $heldBy = Scalar "SELECT TOP 1 [Held By] FROM $demoRow;"
+    $who = Scalar @"
+SELECT TOP 1 [User Name] + '|' + CONVERT(varchar(11),[User Source]) + '|' + ISNULL([Culprit NAV Sessions],N'') +
+  '|' + CONVERT(varchar(11),[Name Attempts]) + '|' + CONVERT(varchar(20),[Blocker Transaction Id])
+FROM $episode WHERE [NAV Table Name] = N'$demoName' ORDER BY [Entry No_] DESC;
+"@
+    $w = @(($who -split '\|') | ForEach-Object { $_.Trim() })
+    while ($w.Count -lt 5) { $w += '' }
+    Check 'показ называет того, кто держит строку, по строке виновника' `
+        ($named -and ($heldBy -ne '') -and ($w[0] -eq $heldBy) -and ($w[1] -eq '3') -and ($w[2] -ne '')) `
+        "имя [$($w[0])] при записанном держателем [$heldBy], источник $($w[1]) при ожидаемом 3, сеансы виновника [$($w[2])], попыток разбора $($w[3]), транзакция виновника $($w[4])"
+
     # Третье: показ уведомлений НЕ создаёт. Показ держит свою строку дольше порога НАРОЧНО,
     # и уведомление по нему звало бы человека на нажатие кнопки - ровно то уведомление,
     # после которого перестают читать настоящие. Спрашивается журнал уведомлений, а не
