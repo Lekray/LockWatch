@@ -2,7 +2,7 @@ OBJECT Page 110234 LockWatch Coverage
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -312,7 +312,7 @@ OBJECT Page 110234 LockWatch Coverage
 
     LOCAL PROCEDURE SetShareStyle@2();
     BEGIN
-      // Красится НИЗКАЯ доля, и порог у неё свой - не порог тревоги из настройки. Тот про
+      // Красится НИЗКАЯ доля, и порог у неё свой - не порог уведомления из настройки. Тот про
       // длительность одного эпизода, этот про то, можно ли вообще верить сводке.
       ShareStyle := StandardStyle;
       IF (CounterMs > 0) AND (SharePct < LowShare) THEN

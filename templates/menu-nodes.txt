@@ -60,7 +60,7 @@
                                                                 NextNodeID=[{09E55B83-8AC5-4E00-AB86-679CBF05716D}] }
     { MenuItem       ;[{09E55B83-8AC5-4E00-AB86-679CBF05716D}] ;Name=Alerts;
                                                                 CaptionML=[ENU=Alerts;
-                                                                           RUS=Тревоги];
+                                                                           RUS=Уведомления];
                                                                 ApplicationArea=#All;
                                                                 MemberOfMenu=[{E7B801BA-33D6-4F3A-B984-0937536E2F21}];
                                                                 RunObjectType=Page;

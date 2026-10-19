@@ -2,7 +2,7 @@ OBJECT Page 110230 LockWatch Setup
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -281,12 +281,21 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="History Threshold (ms)" }
 
+    { 63  ;2   ;Field     ;
+                Name=JournalMinWait;
+                CaptionML=[ENU=Journal waits from (ms);
+                           RUS=Писать в журнал ожидание от, мс];
+                ToolTipML=[ENU=Specifies how long a wait must last for a new episode to be written to the journal. Shorter waits open no episode. An episode already open is updated and closed as before, whatever the threshold, so a wait caught above it does not disappear on a pass where the next wait of the same victim is short. Zero means no threshold: everything is written. After the update the setup holds exactly zero, so the threshold has to be set by hand.;
+                           RUS=Определяет, сколько должно длиться ожидание, чтобы новый эпизод попал в журнал. Более короткие ожидания эпизода не открывают. Уже открытый эпизод обновляется и закрывается как прежде, каким бы ни был порог, - иначе пойманное длинное ожидание пропало бы на проходе, где следующее ожидание той же жертвы короче. Ноль означает, что порога нет: пишется всё. После обновления в настройке стоит именно ноль, поэтому порог надо выставить руками.];
+                ApplicationArea=#All;
+                SourceExpr="Journal Min Wait (ms)" }
+
     { 10  ;2   ;Field     ;
                 Name=AlertThreshold;
                 CaptionML=[ENU=Alert Threshold (ms);
-                           RUS=Порог тревоги, мс];
-                ToolTipML=[ENU=Specifies the wait length worth shouting about.;
-                           RUS=Определяет длительность ожидания, о которой стоит кричать.];
+                           RUS=Порог уведомления, мс];
+                ToolTipML=[ENU=Specifies how long a wait must last for a notification to be created. Zero means that no notifications are created.;
+                           RUS=Определяет, сколько должно длиться ожидание, чтобы было создано уведомление. Ноль - уведомления не создаются.];
                 ApplicationArea=#All;
                 SourceExpr="Alert Threshold (ms)" }
 
@@ -315,15 +324,22 @@ OBJECT Page 110230 LockWatch Setup
 
     { 50  ;2   ;Field     ;
                 Name=AlertChannel;
-                ToolTipML=[ENU=Specifies where an alert goes when a wait crosses the threshold. Off writes no alert at all. Journal only writes the alert journal. Windows event log writes the alert journal and the Windows event log, which monitoring on the server already reads.;
-                           RUS=Определяет, куда уходит тревога, когда ожидание переваливает порог. Выключена - тревога не пишется никуда. Только журнал - только в журнал тревог. Журнал событий Windows - в журнал тревог и в журнал событий Windows, который мониторинг на сервере уже читает.];
+                ToolTipML=[ENU=Specifies where a notification goes when a wait crosses the threshold. Off writes no notification at all. Journal only writes the notification journal. Windows event log writes the notification journal and the Windows event log, which monitoring on the server already reads. Mail writes the notification journal and raises an event that the installation''s subscriber sends as mail.;
+                           RUS=Определяет, куда уходит уведомление, когда ожидание переваливает порог. Выключено - уведомление не пишется никуда. Только журнал - только в журнал уведомлений. Журнал событий Windows - в журнал уведомлений и в журнал событий Windows, который мониторинг на сервере уже читает. Почта - в журнал уведомлений и письмом через подписчика установки.];
                 ApplicationArea=#All;
                 SourceExpr="Alert Channel" }
+
+    { 64  ;2   ;Field     ;
+                Name=AlertNotifGroupID;
+                ToolTipML=[ENU=Specifies the number of the recipient group. The number is understood by the installation''s mail subscriber, not by LockWatch itself. Mail is sent only when the channel is Mail. Empty (0) means no mail is sent, and the notification row stays with a note saying so.;
+                           RUS=Определяет номер группы получателей. Номер понимает подписчик установки, а не сам LockWatch. Письмо уходит только при канале "Почта". Пусто (0) - письмо не отправляется, и строка уведомления остаётся с пометкой об этом.];
+                ApplicationArea=#All;
+                SourceExpr="Alert Notif. Group ID" }
 
     { 51  ;2   ;Field     ;
                 Name=AlertEventSource;
                 ToolTipML=[ENU=Specifies the name of the Windows event source. An administrator registers it once per machine, and until then the channel outwards stays silent - but it says so in words, in the alert row itself.;
-                           RUS=Определяет имя источника событий Windows. Администратор заводит его один раз на машину, и до тех пор канал наружу молчит - но молчит словами, в самой строке тревоги.];
+                           RUS=Определяет имя источника событий Windows. Администратор заводит его один раз на машину, и до тех пор канал наружу молчит - но молчит словами, в самой строке уведомления.];
                 ApplicationArea=#All;
                 SourceExpr="Alert Event Source" }
 

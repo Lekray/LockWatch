@@ -107,6 +107,10 @@ $crowd = $null
 $ceilingWas = 0
 # Пусто - "не прочиталось": тогда возвращается единица, но об этом говорится вслух.
 $deadlocksWas = ''
+# Порог записи в журнал на время опыта снимается: толпа встаёт в очередь постепенно, и
+# последние ждущие к первому проходу ждали меньше двух секунд. С порогом по умолчанию
+# они не дали бы строк вовсе, а проверки считают ЭПИЗОДЫ, а не увиденную очередь.
+$minWaitWas = ''
 
 # Один процесс на всю толпу. Сотня процессов sqlcmd съела бы память рабочей станции, а
 # память на этом стенде уже однажды уронила SQL Server: он перестал выдавать рабочие
@@ -179,7 +183,8 @@ try {
     # Выключатель сбора взаимоблокировок гасится на время опыта и возвращается ТЕМ, каким
     # его нашли: единица тут - догадка о чужой настройке, а не находка.
     $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Max Pass (ms)] = $(CeilingProbeMs);" | Out-Null
+    $minWaitWas = Scalar "SELECT CONVERT(varchar(11),[Journal Min Wait (ms)]) FROM $setup;"
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Journal Min Wait (ms)] = 0, [Max Pass (ms)] = $(CeilingProbeMs);" | Out-Null
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
     Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
     Invoke-Sql @"
@@ -312,6 +317,13 @@ finally {
     }
     $restore = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; UPDATE $setup SET [Deadlocks Enabled] = $deadlocksSet"
     if ($ceilingWas -gt 0) { $restore += ", [Max Pass (ms)] = $ceilingWas" }
+    # Порог записи возвращается найденным, как и прочие поля настроек: ноль вернуть вместо
+    # него значило бы оставить установку писать всё после прогона, который его снял.
+    if ($minWaitWas -match '^\d+$') {
+        $restore += ", [Journal Min Wait (ms)] = $minWaitWas"
+    } else {
+        Warn-Cleanup 'прежнее значение [Journal Min Wait (ms)] прочитать не удалось - порог оставлен нулём'
+    }
     Invoke-CleanupSql "$restore;" 'уборка за прогоном'
     if (Test-Path $stopFile) { Remove-Item $stopFile -Force }
     if ($StopInstance) { Stop-Service $service -Force }

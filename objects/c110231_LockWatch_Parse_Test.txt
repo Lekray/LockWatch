@@ -2,7 +2,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -64,7 +64,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       AdviceOrderTxt@1000000049 : TextConst 'ENU=whole table %1, foreign head %2, SIFT %3, queue %4, deadlock %5;RUS=таблица целиком %1, чужая голова %2, SIFT %3, очередь %4, взаимоблокировка %5';
       ChkAdviceNumbersTxt@1000000050 : TextConst 'ENU=the advice switches on at the very number it declares as its threshold, and stays silent one short of it;RUS=совет включается на том самом числе, которое объявлено его порогом, и молчит на единицу раньше';
       AdviceNumbersTxt@1000000051 : TextConst 'ENU=queue at %1, silent at %2, long at %3 of %4;RUS=очередь при %1, молчание при %2, долгое при %3 из %4';
-      ChkAdviceQuietTxt@1000000052 : TextConst 'ENU=below the threshold the advice is silent, and a zero threshold is not an alert on everything;RUS=ниже порога советчик молчит, а нулевой порог - не тревога на всём';
+      ChkAdviceQuietTxt@1000000052 : TextConst 'ENU=below the threshold the advice is silent, and a zero threshold is not an alert on everything;RUS=ниже порога советчик молчит, а нулевой порог - не уведомление на всём';
       AdviceQuietTxt@1000000053 : TextConst 'ENU=quiet %1, zero threshold %2, right on the threshold %3;RUS=тихо %1, нулевой порог %2, ровно на пороге %3';
       ChkCounterDeltaTxt@1000000054 : TextConst 'ENU=a counter that went backwards is read as a reset, not as a negative gain;RUS=пошедший назад счётчик читается как обнуление, а не как отрицательный прирост';
       CounterDeltaTxt@1000000055 : TextConst 'ENU=gain %1, no move %2, after a reset %3, reset seen %4;RUS=прирост %1, без движения %2, после обнуления %3, обнуление замечено %4';
@@ -551,7 +551,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       AlertMs@1000000014 : Integer;
     BEGIN
       // Совет обязан включаться на ТОМ САМОМ числе, которое объявлено его порогом: очередь -
-      // с AdviceQueueWaiters жертв, долгое ожидание - с порога тревоги, - и молчать на
+      // с AdviceQueueWaiters жертв, долгое ожидание - с порога уведомления, - и молчать на
       // единицу раньше. Числа держатся в переменных нарочно: порог подаётся разбору и
       // проверяется рядом, а не переписывается в проверку цифрой.
       Victims := Parse.AdviceQueueWaiters;
@@ -578,8 +578,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Edge@1000000007 : Integer;
       QuietOk@1000000008 : Boolean;
     BEGIN
-      // Три случая молчания и один случай речи. Ноль в пороге означает "не тревожить
-      // вовсе": без этой оговорки выключенная тревога дала бы совет КАЖДОМУ эпизоду.
+      // Три случая молчания и один случай речи. Ноль в пороге означает "не уведомлять
+      // вовсе": без этой оговорки совет получил бы КАЖДЫЙ эпизод.
       // Граница проверяется ровно на пороге - там, где ошибка на единицу и живёт.
       Quiet := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,900,5000,1,FALSE,FALSE,
                             AdviceText);
@@ -794,7 +794,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // а прохода нет. Говорит поэтому страница, и спрашиваются тут все четыре ответа.
       //
       // Свежий: молчание РОВНО в порог - ещё не беда. Граница обязана лежать там, где
-      // названа, иначе тревога поднимается на ровном месте.
+      // названа, иначе уведомление создаётся на ровном месте.
       //
       // Молчит: за порогом слово обязано быть, и в нём обязано стоять ЧИСЛО минут - без
       // числа "давно" не отличить от "только что".

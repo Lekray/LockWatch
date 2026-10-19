@@ -2,7 +2,7 @@ OBJECT Page 110233 LockWatch Summary
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -159,7 +159,7 @@ OBJECT Page 110233 LockWatch Summary
                       CaptionML=[ENU=Setup;
                                  RUS=Настройка];
                       ToolTipML=[ENU=Open the setup, where the alert threshold and the retention term live.;
-                                 RUS=Открыть настройку, где живут порог тревоги и срок хранения.];
+                                 RUS=Открыть настройку, где живут порог уведомления и срок хранения.];
                       ApplicationArea=#All;
                       Image=Setup;
                       PromotedCategory=Process;
@@ -201,9 +201,9 @@ OBJECT Page 110233 LockWatch Summary
     { 5   ;2   ;Field     ;
                 Name=AlertMs;
                 CaptionML=[ENU=Alert Threshold (ms);
-                           RUS=Порог тревоги, мс];
+                           RUS=Порог уведомления, мс];
                 ToolTipML=[ENU=Specifies the threshold the column of episodes above it is counted against. It is taken from the setup, and zero there means do not alert at all rather than alert on everything.;
-                           RUS=Определяет порог, по которому считается колонка "из них выше порога". Берётся из настройки, и ноль в ней означает "не тревожить вовсе", а не "тревожить на всём".];
+                           RUS=Определяет порог, по которому считается колонка "из них выше порога". Берётся из настройки, и ноль в ней означает "не уведомлять вовсе", а не "уведомлять на всём".];
                 ApplicationArea=#All;
                 SourceExpr=AlertMs }
 
@@ -260,7 +260,7 @@ OBJECT Page 110233 LockWatch Summary
     { 15  ;2   ;Field     ;
                 Name=OverThreshold;
                 ToolTipML=[ENU=Specifies how many of those episodes crossed the alert threshold. One long wait hurts more than a hundred short ones, and this column tells them apart.;
-                           RUS=Определяет, сколько из этих эпизодов перевалило порог тревоги. Одно долгое ожидание больнее сотни коротких, и эта колонка их различает.];
+                           RUS=Определяет, сколько из этих эпизодов перевалило порог уведомления. Одно долгое ожидание больнее сотни коротких, и эта колонка их различает.];
                 ApplicationArea=#All;
                 StyleExpr=OverThresholdStyle;
                 SourceExpr="Over Threshold" }
@@ -421,8 +421,8 @@ OBJECT Page 110233 LockWatch Summary
     LOCAL PROCEDURE SetStyle@10();
     BEGIN
       // Строка, где есть хоть один эпизод выше порога, красится. Порог ноль означает
-      // "не тревожить вовсе", и тогда не красится ничего: цвет не должен появляться
-      // сам собой у того, кто тревогу выключил.
+      // "не уведомлять вовсе", и тогда не красится ничего: цвет не должен появляться
+      // сам собой у того, у кого уведомления выключены.
       OverThresholdStyle := StandardStyle;
       IF (AlertMs > 0) AND ("Over Threshold" > 0) THEN
         OverThresholdStyle := AlarmStyle;

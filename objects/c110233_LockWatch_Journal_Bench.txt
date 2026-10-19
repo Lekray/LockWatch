@@ -2,13 +2,14 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
   }
   PROPERTIES
   {
+    EventSubscriberInstance=Manual;
     OnRun=BEGIN
             Bench;
           END;
@@ -23,6 +24,11 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Alerts@1000000033 : Codeunit 110240;
       Episode@1000000002 : Record 110231;
       Moved@1000000046 : Record 110238;
+      MailGroup@1000000118 : Integer;
+      MailCalls@1000000119 : Integer;
+      MailMode@1000000120 : Integer;
+      MailSubject@1000000121 : Text;
+      MailBody@1000000122 : Text;
       PassedTxt@1000000003 : TextConst 'ENU=PASS;RUS=пройдено';
       // Два пробела после "ПРОВАЛ" - как и в обкатке разбора: слово занимает те же восемь
       // знаков, что "пройдено", и имена проверок стоят в отчёте одной колонкой.
@@ -70,10 +76,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       CoverageTxt@1000000030 : TextConst 'ENU=waits %1 of the expected %2, milliseconds %3 of the expected %4, escalations %5 of the expected %6;RUS=ожиданий %1 при ожидаемых %2, миллисекунд %3 при ожидаемых %4, эскалаций %5 при ожидаемых %6';
       ChkCoverageResetTxt@1000000031 : TextConst 'ENU=a counter that went backwards is counted as a reset and does not drag the total back;RUS=пошедший назад счётчик считается обнулением и не тянет итог назад';
       CoverageResetTxt@1000000032 : TextConst 'ENU=resets %1, waits %2 of the expected %3, milliseconds %4 of the expected %5;RUS=обнулений %1, ожиданий %2 при ожидаемых %3, миллисекунд %4 при ожидаемых %5';
-      ChkLatchTxt@1000000034 : TextConst 'ENU=the latch keeps one alert per head of a chain, and counts the episodes behind it;RUS=защёлка держит одну тревогу на голову цепочки и считает эпизоды за ней';
+      ChkLatchTxt@1000000034 : TextConst 'ENU=the latch keeps one alert per head of a chain, and counts the episodes behind it;RUS=защёлка держит одно уведомление на голову цепочки и считает эпизоды за ним';
       LatchTxt@1000000035 : TextConst 'ENU=raised %1 of the expected %2, held back %3 of the expected %4, rows %5, episodes behind the first %6;RUS=поднято %1 при ожидаемых %2, придержано %3 при ожидаемых %4, строк %5, эпизодов за первой %6';
-      ChkLatchWindowTxt@1000000036 : TextConst 'ENU=an alert older than the latch window does not hold back the next one;RUS=тревога старше окна защёлки следующую не придерживает';
-      LatchWindowTxt@1000000037 : TextConst 'ENU=rows after the aged alert %1 of the expected %2;RUS=строк после состаренной тревоги %1 при ожидаемых %2';
+      ChkLatchWindowTxt@1000000036 : TextConst 'ENU=an alert older than the latch window does not hold back the next one;RUS=уведомление старше окна защёлки следующее не придерживает';
+      LatchWindowTxt@1000000037 : TextConst 'ENU=rows after the aged alert %1 of the expected %2;RUS=строк после состаренного уведомления %1 при ожидаемых %2';
       ChkNameAgainTxt@1000000038 : TextConst 'ENU=an episode left without a name is asked again while it is still running;RUS=эпизод, оставшийся без имени, переспрашивается, пока идёт';
       NameAgainTxt@1000000039 : TextConst 'ENU=picked the first time %1, picked again after an empty answer %2, in the buffer %3 and %4, expected 2 each;RUS=выбрано в первый раз %1, после пустого ответа %2, в буфере %3 и %4, ожидалось по 2';
       ChkNameLateTxt@1000000040 : TextConst 'ENU=the attempt count survives the next observation, and a late name reaches the row;RUS=счёт попыток переживает следующий съём, а позднее имя доезжает до строки';
@@ -106,7 +112,32 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       PurgeCapTxt@1000000103 : TextConst 'ENU=purged %1 at the cap %2, own rows older than the term %3 of the %4 aged;RUS=вычищено %1 при потолке %2, своих старше срока %3 из %4 состаренных';
       ChkPurgeAgeTxt@1000000104 : TextConst 'ENU=the term takes everything older from history and leaves everything younger;RUS=срок уносит из истории всё старшее и оставляет всё младшее';
       PurgeAgeTxt@1000000105 : TextConst 'ENU=purged %1, own rows older than the term %2, left older %3, younger stayed %4;RUS=вычищено %1, своих старше срока %2, осталось старше %3, моложе осталось %4';
+      ChkMinWaitNewTxt@1000000106 : TextConst 'ENU=a wait shorter than the journal threshold opens no episode;RUS=ожидание короче порога записи не открывает эпизода';
+      MinWaitNewTxt@1000000107 : TextConst 'ENU=threshold %1 ms, wait %2 ms, opened %3, rows in the journal %4;RUS=порог %1 мс, ожидание %2 мс, открыто %3, строк в журнале %4';
+      ChkMinWaitBoundTxt@1000000108 : TextConst 'ENU=a wait equal to the threshold opens the episode;RUS=ожидание, равное порогу, открывает эпизод';
+      MinWaitBoundTxt@1000000109 : TextConst 'ENU=threshold %1 ms, wait %2 ms, opened %3, rows in the journal %4;RUS=порог %1 мс, ожидание %2 мс, открыто %3, строк в журнале %4';
+      ChkMinWaitUpdateTxt@1000000110 : TextConst 'ENU=an open episode is updated below the threshold and is not opened again;RUS=открытый эпизод обновляется и ниже порога, и заново не открывается';
+      MinWaitUpdateTxt@1000000111 : TextConst 'ENU=threshold %1 ms, new wait %2 ms, updated %3, opened %4, stored wait %5;RUS=порог %1 мс, новое ожидание %2 мс, обновлено %3, открыто %4, записанное ожидание %5';
+      ChkMinWaitOffTxt@1000000112 : TextConst 'ENU=a zero threshold writes the shortest wait too;RUS=нулевой порог пишет и самое короткое ожидание';
+      MinWaitOffTxt@1000000113 : TextConst 'ENU=threshold 0, wait %1 ms, opened %2, rows in the journal %3;RUS=порог 0, ожидание %1 мс, открыто %2, строк в журнале %3';
       FailedRunErr@1000000023 : TextConst 'ENU=%1;RUS=%1';
+      MailRefusedTxt@1000000123 : TextConst 'ENU=BENCH-MAIL-REFUSED;RUS=BENCH-MAIL-REFUSED';
+      MailErrorTxt@1000000124 : TextConst 'ENU=BENCH-MAIL-ERROR;RUS=BENCH-MAIL-ERROR';
+      ExpectNoGroupTxt@1000000125 : TextConst 'ENU=The notification group is not set, no mail was sent.;RUS=Группа уведомлений не задана - письмо не отправлялось';
+      ExpectNoHandlerTxt@1000000126 : TextConst 'ENU=No mail sender is subscribed, no mail was sent.;RUS=Нет обработчика отправки почты - письмо не отправлялось';
+      ExpectSentTxt@1000000127 : TextConst 'ENU=Sent by mail;RUS=Отправлено письмом';
+      ChkMailNoGroupTxt@1000000128 : TextConst 'ENU=a zero notification group sends no mail and names the reason;RUS=нулевая группа уведомлений не отправляет письмо и называет причину';
+      MailNoGroupDetailTxt@1000000129 : TextConst 'ENU=bound %1, calls %2 of the expected 0, note "%3";RUS=подписан %1, вызовов %2 при ожидаемых 0, заметка "%3"';
+      ChkMailNoHandlerTxt@1000000130 : TextConst 'ENU=with no subscriber the row says so instead of staying silent;RUS=без подписчика строка говорит об этом, а не молчит';
+      MailNoHandlerDetailTxt@1000000131 : TextConst 'ENU=calls %1 of the expected 0, note "%2";RUS=вызовов %1 при ожидаемых 0, заметка "%2"';
+      ChkMailRefusedTxt@1000000132 : TextConst 'ENU=a refusal from the subscriber lands in the note as its own text;RUS=отказ подписчика ложится в заметку его собственным текстом';
+      MailRefusedDetailTxt@1000000133 : TextConst 'ENU=calls %1, mail %2, note "%3";RUS=вызовов %1, почта %2, заметка "%3"';
+      ChkMailErrorTxt@1000000134 : TextConst 'ENU=an error inside the subscriber neither escapes the delivery nor rolls the row back;RUS=ошибка внутри подписчика не выходит из доставки и не откатывает строку';
+      MailErrorDetailTxt@1000000135 : TextConst 'ENU=calls %1, row kept %2, note "%3";RUS=вызовов %1, строка на месте %2, заметка "%3"';
+      ChkMailSentTxt@1000000136 : TextConst 'ENU=a sent mail marks the row with the mail channel;RUS=отправленное письмо помечает строку каналом почты';
+      MailSentDetailTxt@1000000137 : TextConst 'ENU=calls %1, mail %2, note "%3";RUS=вызовов %1, почта %2, заметка "%3"';
+      ChkMailContentTxt@1000000138 : TextConst 'ENU=the subscriber gets the group from the setup and a real subject and body;RUS=подписчик получает группу из настройки и настоящие тему и тело';
+      MailContentDetailTxt@1000000139 : TextConst 'ENU=group %1 of the expected %2, subject characters %3, body characters %4, table %5, sessions %6, start %7;RUS=группа %1 при ожидаемой %2, знаков в теме %3, знаков в теле %4, таблица %5, сеансы %6, начало %7';
 
     [External]
     PROCEDURE Bench@1();
@@ -194,6 +225,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       HistoryAged@1000000093 : Integer;
       OwnOldBefore@1000000094 : Integer;
       OwnYoungBefore@1000000095 : Integer;
+      ThrStoredWait@1000000116 : Integer;
       BenchInCoverageMs@1000000077 : BigInteger;
       CovMsBefore@1000000071 : BigInteger;
       CovMsAfter@1000000072 : BigInteger;
@@ -202,8 +234,11 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       MirrorOther@1000000054 : Text;
       RegHugeGap@1000000086 : Duration;
       TermAge@1000000088 : Duration;
+      ThrGap@1000000115 : Duration;
       CovFound@1000000087 : Boolean;
+      ThrFound@1000000117 : Boolean;
       TermCutoff@1000000089 : DateTime;
+      ThrStarted@1000000114 : DateTime;
     BEGIN
       Setup.FetchOnce;
       IF Setup.Enabled THEN
@@ -340,20 +375,20 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       IF CovFound THEN
         Cov.DELETE;
 
-      // Защёлка тревоги проверяется без базы SQL и без единой блокировки: она работает над
-      // строкой эпизода, а строку можно подать руками. Головы берутся отрицательные - в
-      // настоящем spid отрицательных не бывает, и столкнуться с чужой тревогой нельзя.
+      // Защёлка уведомлений проверяется без базы SQL и без единой блокировки: она работает
+      // над строкой эпизода, а строку можно подать руками. Головы берутся отрицательные - в
+      // настоящем spid отрицательных не бывает, и столкнуться с чужим уведомлением нельзя.
       Alerts.BeginPass;
       MakeAlertEpisode(AlertEp,AlertHeadA,AlertWaitMs);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
       MakeAlertEpisode(AlertEp,AlertHeadB,AlertWaitMs);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
-      // Ниже порога тревоги нет вовсе, и это тоже часть защёлки: порог, который не
-      // отсекает, превращает тревогу в поток.
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
+      // Ниже порога уведомления нет вовсе, и это тоже часть защёлки: порог, который не
+      // отсекает, превращает уведомление в поток.
       MakeAlertEpisode(AlertEp,AlertHeadC,AlertThresholdMs - 1);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
       Alerts.PassCounts(AlertRaised,AlertLatched);
       AlertRows := AlertRowCount;
       Alert.RESET;
@@ -365,15 +400,18 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             STRSUBSTNO(LatchTxt,AlertRaised,2,AlertLatched,2,AlertRows,AlertEpisodes));
 
       // Окно защёлки проверяется тем, что его СДВИГАЮТ: строка состаривается за окно, и
-      // следующая тревога по той же голове обязана завестись заново. Без этой проверки
+      // следующее уведомление по той же голове обязано завестись заново. Без этой проверки
       // защёлка, залипшая навсегда, выглядела бы точно так же.
       AgeAlerts;
       MakeAlertEpisode(AlertEp,AlertHeadA,AlertWaitMs);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'');
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
       AlertRows := AlertRowCount;
       Check(Passed,Total,Report,ChkLatchWindowTxt,
             AlertRows = 3,
             STRSUBSTNO(LatchWindowTxt,AlertRows,3));
+      // Канал "Почта" проверяется здесь же, до уборки: строки заводятся теми же
+      // отрицательными головами, и убирает их тот же SweepAlerts.
+      CheckMail(Passed,Total,Report);
       SweepAlerts;
 
       // Переезд проверяется с ОБЕИХ сторон: сколько ушло из журнала и сколько доехало до
@@ -637,6 +675,55 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
 
       Sweep;
 
+      // ---------- порог записи в журнал ----------
+      // Четыре сцены, и каждая непустая по-своему: порог, пропускающий короткое; порог,
+      // отвергающий равное себе; порог, мешающий обновлять уже открытое; и ноль, который
+      // обязан открывать всё. Идут они ПОСЛЕ последней уборки: журнал пуст, и число строк
+      // после сцены - это ровно то, что сцена записала.
+      //
+      // Строка, уже открытая, порогом не задета: обновление и закрытие идут своей дорогой.
+      // Проверяется это растущим ожиданием (1200 -> 1500) - счётчик, пошедший назад, был бы
+      // новым эпизодом, и сцена мерила бы не порог, а признак перезапуска.
+      ThrStarted := CURRENTDATETIME;
+      ThrGap := PeriodMs;
+
+      OneWaitPass(ThresholdIndex,FirstWaitMs,MinWaitUnderTest,ThrStarted,Opened,Updated);
+      Check(Passed,Total,Report,ChkMinWaitNewTxt,
+            (Opened = 0) AND (BenchRowCount = 0),
+            STRSUBSTNO(MinWaitNewTxt,MinWaitUnderTest,FirstWaitMs,Opened,BenchRowCount));
+      Sweep;
+
+      OneWaitPass(ThresholdIndex,MinWaitUnderTest,MinWaitUnderTest,ThrStarted,Opened,Updated);
+      Check(Passed,Total,Report,ChkMinWaitBoundTxt,
+            (Opened = 1) AND (BenchRowCount = 1) AND
+            (BenchRowsWithWait(MinWaitUnderTest) = 1),
+            STRSUBSTNO(MinWaitBoundTxt,MinWaitUnderTest,MinWaitUnderTest,Opened,BenchRowCount));
+      Sweep;
+
+      // Первый проход открывает строку без порога, второй приходит с порогом выше нового
+      // ожидания. Обновление обязано случиться: иначе длинный эпизод, пойманный однажды,
+      // пропадал бы на первом же коротком проходе.
+      OneWaitPass(ThresholdIndex,FirstWaitMs,0,ThrStarted,Opened,Updated);
+      OneWaitPass(ThresholdIndex,UpdateWaitUnderTest,MinWaitUnderTest,ThrStarted + ThrGap,Opened,Updated);
+      Episode.RESET;
+      Episode.SETRANGE("Victim SPID",-ThresholdIndex);
+      ThrFound := Episode.FINDFIRST;
+      ThrStoredWait := -1;
+      IF ThrFound THEN
+        ThrStoredWait := Episode."Max Wait (ms)";
+      Check(Passed,Total,Report,ChkMinWaitUpdateTxt,
+            (Updated = 1) AND (Opened = 0) AND ThrFound AND
+            (ThrStoredWait = UpdateWaitUnderTest) AND (BenchRowCount = 1),
+            STRSUBSTNO(MinWaitUpdateTxt,MinWaitUnderTest,UpdateWaitUnderTest,Updated,Opened,ThrStoredWait));
+      Sweep;
+
+      OneWaitPass(ThresholdIndex,TinyWaitUnderTest,0,ThrStarted,Opened,Updated);
+      Check(Passed,Total,Report,ChkMinWaitOffTxt,
+            (Opened = 1) AND (BenchRowCount = 1) AND
+            (BenchRowsWithWait(TinyWaitUnderTest) = 1),
+            STRSUBSTNO(MinWaitOffTxt,TinyWaitUnderTest,Opened,BenchRowCount));
+      Sweep;
+
       Worst := OpenMs;
       IF UpdateMs > Worst THEN
         Worst := UpdateMs;
@@ -668,7 +755,9 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // с COMMIT. Без COMMIT замер был бы вдвое красивее и вдвое бесполезнее - запись в
       // журнал транзакций и есть то, чем проход платит.
       Started := CURRENTDATETIME;
-      Journal.BeginPass(Started,PeriodMs,AlertUnderTest);
+      // Порог записи здесь ноль: замер и его проверки держатся на том, что каждый ждущий
+      // даёт строку. Сам порог проверяется отдельными сценами ниже.
+      Journal.BeginPass(Started,PeriodMs,AlertUnderTest,NoMinWait);
       FOR Index := 1 TO Waiters DO BEGIN
         MakeObserved(Observed,Index,WaitMs);
         Journal.Observe(Observed);
@@ -681,6 +770,22 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       EXIT(Milliseconds);
     END;
 
+    LOCAL PROCEDURE OneWaitPass@87(Index@1000000000 : Integer;WaitMs@1000000001 : Integer;MinWaitMs@1000000002 : Integer;ObservedAt@1000000003 : DateTime;VAR Opened@1000000004 : Integer;VAR Updated@1000000005 : Integer);
+    VAR
+      Observed@1000000006 : Record 110231;
+      Closed@1000000007 : Integer;
+      Restarted@1000000008 : Integer;
+    BEGIN
+      // Один ждущий, один проход: наименьшее, из чего виден порог записи. Счётчики
+      // возвращаются наружу целиком, чтобы проверка спрашивала и открытие, и обновление,
+      // а не одно из двух.
+      Journal.BeginPass(ObservedAt,PeriodMs,AlertUnderTest,MinWaitMs);
+      MakeObserved(Observed,Index,WaitMs);
+      Journal.Observe(Observed);
+      Journal.FinishPass;
+      Journal.PassCounts(Opened,Updated,Closed,Restarted);
+    END;
+
     LOCAL PROCEDURE RegEpisode@77(VictimSpid@1000000000 : Integer;WaitMs@1000000001 : Integer;PeriodMs@1000000002 : Integer;AgeMs@1000000003 : Duration) : Integer;
     VAR
       Observed@1000000004 : Record 110231;
@@ -691,7 +796,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // настоящий промежуток, закрыть проходом и вернуть исход. Строка удаляется,
       // чтобы остальные проверки видели только своих ожидающих.
       FoundOutcome := -1;
-      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest);
+      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest,NoMinWait);
       MakeObserved(Observed,VictimSpid,WaitMs);
       Journal.Observe(Observed);
       Journal.FinishPass;
@@ -703,7 +808,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         Found.MODIFY;
       END;
       COMMIT;
-      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest);
+      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest,NoMinWait);
       Journal.FinishPass;
       COMMIT;
       Found.RESET;
@@ -765,6 +870,14 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // журнала и сколько доехало до истории, - и порог здесь увёл бы часть строк в
       // удаление, то есть подменил бы измеряемое. Сам порог проверяется на стенде, где
       // эпизоды настоящие и длительность у них не выдуманная.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE NoMinWait@83() : Integer;
+    BEGIN
+      // Ноль: порога записи нет, открывается всё. Им зовут журнал замер и прежние сцены -
+      // они держатся на том, что каждый ждущий даёт строку. Сам порог проверяется
+      // отдельными сценами ниже.
       EXIT(0);
     END;
 
@@ -1178,6 +1291,255 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       EXIT(3);
     END;
 
+    LOCAL PROCEDURE MinWaitUnderTest@84() : Integer;
+    BEGIN
+      // Две тысячи - умолчание настройки, и сцена берёт его же: проверяется то, что
+      // получит новая установка. Порог заведомо выше первого ожидания замера (1200),
+      // поэтому "короткое не открывает" не проходит на пороге, которого никто не читает.
+      EXIT(2000);
+    END;
+
+    LOCAL PROCEDURE UpdateWaitUnderTest@85() : Integer;
+    BEGIN
+      // Между первым ожиданием замера (1200) и порогом (2000). Ожидание РАСТЁТ, значит
+      // это продолжение эпизода, а не перезапуск, - и всё же остаётся короче порога.
+      // Одно это число и различает "порог не пускает новое" и "порог мешает обновлять".
+      EXIT(1500);
+    END;
+
+    LOCAL PROCEDURE TinyWaitUnderTest@86() : Integer;
+    BEGIN
+      // Одна миллисекунда - самое короткое ожидание, которое вообще бывает: нулевое в
+      // очередь не попадает, и проверка на нём ничего бы не сказала.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE ThresholdIndex@88() : Integer;
+    BEGIN
+      // Далеко за числом ждущих основного замера и за индексами проверки имён: строки
+      // порога не должны попасть ни под чей счёт. Свои строки сцена убирает после каждой
+      // проверки, поэтому одного индекса на все четыре хватает.
+      EXIT(911);
+    END;
+
+
+    LOCAL PROCEDURE CheckMail@89(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Row@1000000003 : Record 110236;
+      Ep@1000000004 : Record 110231;
+      MailSub@1000000005 : Codeunit 110233;
+      Bound@1000000006 : Boolean;
+      Found@1000000007 : Boolean;
+      StartedAt@1000000008 : DateTime;
+      Sessions@1000000009 : Text[250];
+      SubjectLen@1000000010 : Integer;
+      BodyLen@1000000011 : Integer;
+    BEGIN
+      // Подписчик проверяется НАСТОЯЩИЙ: второй экземпляр этого же кодюнита, привязанный
+      // вручную. Подменить вызов события заглушкой значило бы проверить заглушку, а не
+      // доставку. Ручная привязка живёт до UNBINDSUBSCRIPTION или до конца процедуры.
+      StartedAt := CURRENTDATETIME - 9000;
+      Sessions := '4242,4243';
+
+      // (а) Группа 0: подписчик привязан и обязан молчать, а строка - назвать причину.
+      MailSub.MailModeSet(MailModeSent);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadNoGroup,AlertThresholdMs + 1000);
+      Ep."Started At" := StartedAt;
+      Ep."Culprit NAV Sessions" := Sessions;
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,0);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadNoGroup,Row);
+      Check(Passed,Total,Report,ChkMailNoGroupTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 0) AND
+            (Row."Channel Note" = ExpectNoGroupTxt),
+            STRSUBSTNO(MailNoGroupDetailTxt,Bound,MailSub.MailCallsGet(),Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (б) Подписчика нет вовсе: строка обязана сказать и об этом.
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadNoHandler,AlertThresholdMs + 1000);
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadNoHandler,Row);
+      Check(Passed,Total,Report,ChkMailNoHandlerTxt,
+            Found AND (MailSub.MailCallsGet() = 0) AND (Row."Channel Note" = ExpectNoHandlerTxt),
+            STRSUBSTNO(MailNoHandlerDetailTxt,MailSub.MailCallsGet(),Row."Channel Note"));
+
+      // (в) Отказ: текст отказа приходит от подписчика и ложится в заметку целиком.
+      MailSub.MailModeSet(MailModeRefused);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadRefused,AlertThresholdMs + 1000);
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadRefused,Row);
+      Check(Passed,Total,Report,ChkMailRefusedTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
+            (Row."Channel Note" = MailRefusedTxt),
+            STRSUBSTNO(MailRefusedDetailTxt,MailSub.MailCallsGet(),
+                       Row.Channel = Row.Channel::Mail,Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (г) Ошибка внутри подписчика: доставка ловит её, строка остаётся, причина в заметке.
+      MailSub.MailModeSet(MailModeError);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadError,AlertThresholdMs + 1000);
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadError,Row);
+      Check(Passed,Total,Report,ChkMailErrorTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
+            (STRPOS(Row."Channel Note",MailErrorTxt) > 0),
+            STRSUBSTNO(MailErrorDetailTxt,MailSub.MailCallsGet(),Found,Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (д) Отправлено: канал в строке - почта, а не журнал.
+      MailSub.MailModeSet(MailModeSent);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadSent,AlertThresholdMs + 1000);
+      Ep."Started At" := StartedAt;
+      Ep."Culprit NAV Sessions" := Sessions;
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadSent,Row);
+      Check(Passed,Total,Report,ChkMailSentTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
+            (Row.Channel = Row.Channel::Mail) AND (Row."Channel Note" = ExpectSentTxt),
+            STRSUBSTNO(MailSentDetailTxt,MailSub.MailCallsGet(),
+                       Row.Channel = Row.Channel::Mail,Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (е) Содержимое: группа, поданная в Raise, и настоящие тема с телом - в теле стоят
+      // таблица, сеансы и начало ожидания, то есть всё, ради чего письмо и пишется.
+      SubjectLen := STRLEN(MailSub.MailSubjectGet());
+      BodyLen := STRLEN(MailSub.MailBodyGet());
+      Check(Passed,Total,Report,ChkMailContentTxt,
+            (MailSub.MailGroupGet() = MailGroupId) AND (SubjectLen > 0) AND (BodyLen > 0) AND
+            (STRPOS(MailSub.MailBodyGet(),'Sales Line') > 0) AND
+            (STRPOS(MailSub.MailBodyGet(),Sessions) > 0) AND
+            (STRPOS(MailSub.MailBodyGet(),FORMAT(StartedAt,0,0)) > 0),
+            STRSUBSTNO(MailContentDetailTxt,MailSub.MailGroupGet(),MailGroupId,SubjectLen,BodyLen,
+                       'Sales Line',Sessions,FORMAT(StartedAt,0,0)));
+    END;
+
+    LOCAL PROCEDURE GetAlert@90(Spid@1000000000 : Integer;VAR Row@1000000001 : Record 110236) : Boolean;
+    BEGIN
+      // Строка ищется по голове, а не счётом: проверке нужна именно СВОЯ строка, и её
+      // заметка, а не количество строк в журнале.
+      Row.RESET;
+      Row.SETRANGE("Head SPID",Spid);
+      EXIT(Row.FINDLAST);
+    END;
+
+    [EventSubscriber(Codeunit,110240,OnSendAlertMail)]
+    PROCEDURE OnSendAlertMail@91(NotifGroupID@1000000000 : Integer;Subject@1000000001 : Text;Body@1000000002 : Text;VAR Handled@1000000003 : Boolean;VAR Sent@1000000004 : Boolean;VAR ErrorText@1000000005 : Text);
+    BEGIN
+      // Подписчик мерного прогона: он не шлёт писем, а записывает, ЧТО ему дали, и
+      // отвечает так, как просит выставленный режим. Так проверяется вся дорога доставки,
+      // включая отказ и падение, без единого SMTP.
+      MailCalls := MailCalls + 1;
+      MailGroup := NotifGroupID;
+      MailSubject := Subject;
+      MailBody := Body;
+      Handled := TRUE;
+      IF MailMode = MailModeSent THEN
+        Sent := TRUE
+      ELSE
+        IF MailMode = MailModeRefused THEN BEGIN
+          Sent := FALSE;
+          ErrorText := MailRefusedTxt;
+        END ELSE
+          IF MailMode = MailModeError THEN
+            ERROR(MailErrorTxt);
+    END;
+
+    PROCEDURE MailModeSet@92(Mode@1000000000 : Integer);
+    BEGIN
+      // Режим и захваченные поля обнуляются вместе: иначе счёт вызовов переехал бы из
+      // одной проверки в следующую, и "вызван один раз" зеленело бы на втором вызове.
+      MailMode := Mode;
+      MailCalls := 0;
+      MailGroup := 0;
+      MailSubject := '';
+      MailBody := '';
+    END;
+
+    PROCEDURE MailGroupGet@93() : Integer;
+    BEGIN
+      EXIT(MailGroup);
+    END;
+
+    PROCEDURE MailCallsGet@94() : Integer;
+    BEGIN
+      EXIT(MailCalls);
+    END;
+
+    PROCEDURE MailSubjectGet@95() : Text;
+    BEGIN
+      EXIT(MailSubject);
+    END;
+
+    PROCEDURE MailBodyGet@96() : Text;
+    BEGIN
+      EXIT(MailBody);
+    END;
+
+    LOCAL PROCEDURE MailModeSent@97() : Integer;
+    BEGIN
+      // Ноль - "подписчик отправил". Имена вместо чисел: в проверке видно, ЧТО подано,
+      // а не какое число.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE MailModeRefused@98() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE MailModeError@99() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE MailHeadNoGroup@100() : Integer;
+    BEGIN
+      // Отрицательные головы - свои у каждой проверки: настоящий spid отрицательным не
+      // бывает, и столкнуться с чужой строкой нельзя. Продолжение ряда AlertHeadA..C.
+      EXIT(-104);
+    END;
+
+    LOCAL PROCEDURE MailHeadNoHandler@101() : Integer;
+    BEGIN
+      EXIT(-105);
+    END;
+
+    LOCAL PROCEDURE MailHeadRefused@102() : Integer;
+    BEGIN
+      EXIT(-106);
+    END;
+
+    LOCAL PROCEDURE MailHeadError@103() : Integer;
+    BEGIN
+      EXIT(-107);
+    END;
+
+    LOCAL PROCEDURE MailHeadSent@104() : Integer;
+    BEGIN
+      EXIT(-108);
+    END;
+
+    LOCAL PROCEDURE MailGroupId@105() : Integer;
+    BEGIN
+      // Номер группы, которого на стенде нет: подписчик получает его как есть, и связь
+      // "настройка -> событие" проверяется сравнением с этим числом. Настоящий номер
+      // понимает только подписчик установки.
+      EXIT(4242);
+    END;
+
     LOCAL PROCEDURE MakeAlertEpisode@25(VAR Episode@1000000000 : Record 110231;HeadSpid@1000000001 : Integer;WaitMs@1000000002 : Integer);
     BEGIN
       Episode.INIT;
@@ -1257,7 +1619,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     BEGIN
       // Оба ждущих обязаны приходить КАЖДЫМ проходом: FinishPass закрывает эпизод,
       // которого в проходе не было, а закрытый эпизод не разбирается вовсе.
-      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest);
+      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest,NoMinWait);
       MakeObserved(Observed,FirstIndex,FirstWaitMs);
       Journal.Observe(Observed);
       MakeObserved(Observed,SecondIndex,FirstWaitMs);
@@ -1479,8 +1841,9 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         0"; переспрашивание - "выбрано в первый раз 2, после пустого ответа 2, в буфере
         0 и 0". На целом коде 19 из 19.
 
-      Проверок с тех пор стало 30 (счёт на 18.10.2026), и четыре из них добавлены потому,
-      что прежние молчали бы на сломанном коде:
+      Проверок с тех пор стало 40 (счёт на 19.10.2026). Шесть последних - про почту, они
+      описаны ниже. Четыре из прежних добавлены потому, что прежние молчали бы на
+      сломанном коде:
 
         непустой итог      - первым утверждением, а не следствием константы: пустой журнал
                              сошёлся бы сам с собой;
@@ -1497,9 +1860,32 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
         ноль на сроке     - удаление при нуле означало бы, что обновление молча стирает
                             историю, ради которой инструмент и держат;
         потолок порции    - без него годовая история сносилась бы одной транзакцией и
-                            сама стала бы поводом для тревоги;
+                            сама стала бы поводом для уведомления;
         срок и молодость  - уходит только старшее, младшее остаётся: проверка на одном
                             удалении прошла бы и на простом DELETEALL.
+
+      Проверки порога записи добавлены 18.10.2026, и каждая ловит свою поломку:
+
+        короткое не пишет - порог, которого не читают, пропускает всё, и первый проход
+                            полтысячи коротких ожиданий завёл бы полтысячи строк;
+        равное пишет     - порог, отвергающий равное себе, терял бы ожидание ровно на
+                            границе и выглядел бы исправным на соседних числах;
+        открытое живёт   - порог, закрывающий уже открытый эпизод на коротком проходе,
+                            терял бы пойманное длинное ожидание молча;
+        ноль пишет всё   - ноль, понятый как "ничего не писать", выключил бы журнал целиком
+                            на установке, обновившейся до появления порога.
+
+      Проверки почты добавлены 19.10.2026, и каждая ловит свою поломку:
+
+        группа ноль     - письмо ушло бы в никуда и выглядело отправленным: строка обязана
+                          сказать, что группа не задана, а подписчик - не позван;
+        нет подписчика  - молчание вместо причины читалось бы как "письмо ушло";
+        отказ           - текст отказа обязан доехать до заметки целиком, а не смениться
+                          общим "не отправлено";
+        ошибка          - упавший подписчик не имеет права откатить строку прохода;
+        отправлено      - канал обязан смениться на почту, иначе строка врёт о доставке;
+        содержимое      - тема и тело пусты у заглушки: проверка спрашивает таблицу, сеансы
+                          и начало ожидания, то есть то, ради чего письмо и пишется.
 
       Ещё три места приведены в правду без смены числа проверок: у цены появился ПОЛ
       (замер в ноль проходил зелёным), мкс на строку считаются дробно (целое деление с

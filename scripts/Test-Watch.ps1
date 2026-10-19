@@ -373,7 +373,7 @@ try {
     # покраснели бы три прогона, ни один из которых сторожа не касается. Ловилось это
     # 13.09.2026 и стоило целой сметы.
     #
-    # Порогов в настройке ДВА, и они про разное: срок переезда в историю и порог тревоги.
+    # Порогов в настройке ДВА, и они про разное: срок переезда в историю и порог уведомления.
     # Пока имя было одно (здесь стояло $thresholdWas), второе затирало первое: уборка
     # возвращала в [History Threshold (ms)] значение [Alert Threshold (ms)], и срок
     # переезда 60000 превращался в 5000 - то есть следующий прогон мерил переезд не тем
@@ -922,7 +922,7 @@ finally {
     $cleanup += " UPDATE $setup SET [Enabled] = 0;"
     if ($deadlocksWas) { $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = $deadlocksWas;" }
     if ($coverageWas)  { $cleanup += " UPDATE $setup SET [Coverage Enabled] = $coverageWas;" }
-    # Потолок, срок переезда и порог тревоги возвращаются теми же, какими были: подставлять
+    # Потолок, срок переезда и порог уведомления возвращаются теми же, какими были: подставлять
     # сюда заводские числа значило бы стереть настройку установки под видом уборки за собой.
     if ($ceilingWas) { $cleanup += " UPDATE $setup SET [Journal Rows Ceiling] = $ceilingWas;" }
     if ($historyThresholdWas) { $cleanup += " UPDATE $setup SET [History Threshold (ms)] = $historyThresholdWas;" }

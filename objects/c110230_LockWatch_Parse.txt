@@ -2,7 +2,7 @@ OBJECT Codeunit 110230 LockWatch Parse
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -20,7 +20,7 @@ OBJECT Codeunit 110230 LockWatch Parse
       AdvSiftTxt@1000000004 : TextConst 'ENU=The fight is over a SIFT aggregate, not over a data row. That is cured by the key: maintenance of SIFT on this key is either switched off or narrowed down.;RUS=Спор идёт за SIFT-агрегат, а не за строку данных. Лечится ключом: ведение SIFT по этому ключу либо отключается, либо сужается.';
       AdvQueueTxt@1000000005 : TextConst 'ENU=A queue has formed behind one head: the trouble is one and the journal rows are many. The head of the chain is what has to be fixed, not each victim in turn.;RUS=За одной головой выстроилась очередь: беда одна, а строк в журнале много. Чинить надо голову цепочки, а не каждую жертву по очереди.';
       AdvTimedOutTxt@1000000006 : TextConst 'ENU=The victim did not get its lock: the platform gave up on its own limit and a human saw the refusal. Look at what holds the lock that long, not at the victim.;RUS=Жертва не дождалась: платформа сняла ожидание по своему пределу, и человек увидел отказ. Смотреть надо на то, что держит блокировку так долго, а не на жертву.';
-      AdvLongWaitTxt@1000000007 : TextConst 'ENU=The wait is longer than the alert threshold, and there are no signs of a whole-table lock, of a sleeping transaction or of a queue. Look at the operation itself and at the document the fight is over.;RUS=Ожидание дольше порога тревоги, а признаков спора за таблицу целиком, сна и очереди нет. Смотреть надо на саму операцию и на документ, за который идёт спор.';
+      AdvLongWaitTxt@1000000007 : TextConst 'ENU=The wait is longer than the alert threshold, and there are no signs of a whole-table lock, of a sleeping transaction or of a queue. Look at the operation itself and at the document the fight is over.;RUS=Ожидание дольше порога уведомления, а признаков спора за таблицу целиком, сна и очереди нет. Смотреть надо на саму операцию и на документ, за который идёт спор.';
       CutTxt@1000000018 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено сторожем блокировок, весь оператор %1 знаков, оставлено %2';
       OverrunTxt@1000000019 : TextConst 'ENU=The pass took %1 ms against the declared ceiling of %2.;RUS=Проход занял %1 мс при объявленном потолке %2.';
       RingSilentTxt@1000000020 : TextConst 'ENU=Deadlocks counted by the server: %1, and the system_health ring gave back none. Its output is capped - restart the session.;RUS=Сервер насчитал кругов %1, кольцо system_health не отдало ни одного. Выдача кольца переполнена - нужен перезавод сессии.';
@@ -670,8 +670,8 @@ OBJECT Codeunit 110230 LockWatch Parse
         EXIT(AdviceTimedOut);
       END;
 
-      // Ноль в пороге означает "не тревожить вовсе", а не "тревожить всегда". Разница не
-      // теоретическая: без этой оговорки выключенная тревога дала бы совет КАЖДОМУ
+      // Ноль в пороге означает "не уведомлять вовсе", а не "уведомлять всегда". Разница не
+      // теоретическая: без этой оговорки выключенный порог дал бы совет КАЖДОМУ
       // эпизоду, и советчик стал бы шумом, который перестают читать.
       IF (AlertMs > 0) AND (MaxWaitMs >= AlertMs) THEN BEGIN
         AdviceText := AdvLongWaitTxt;
@@ -773,8 +773,8 @@ OBJECT Codeunit 110230 LockWatch Parse
     [External]
     PROCEDURE AlertLatchMs@54() : Integer;
     BEGIN
-      // Пять минут. Окно защёлки: пока та же голова держит очередь, тревога одна. Меньше -
-      // и одна забытая транзакция даст десяток тревог за время своей жизни; больше - и
+      // Пять минут. Окно защёлки: пока та же голова держит очередь, уведомление одно. Меньше -
+      // и одна забытая транзакция даст десяток уведомлений за время своей жизни; больше - и
       // вторая беда на той же голове, начавшаяся после того, как первую разобрали,
       // потеряется молча.
       EXIT(300000);
@@ -783,8 +783,8 @@ OBJECT Codeunit 110230 LockWatch Parse
     [External]
     PROCEDURE MaxAlertsPerPass@55() : Integer;
     BEGIN
-      // Потолок разбираемых на тревогу эпизодов за проход. В шторм их сотни, но тревог из
-      // них выйдет единицы - защёлка сведёт их к головам, - а перебирать все сотни внутри
+      // Потолок разбираемых на уведомление эпизодов за проход. В шторм их сотни, но
+      // уведомлений из них выйдет единицы - защёлка сведёт их к головам, - а перебирать все сотни внутри
       // прохода незачем: голов в шторме меньше двадцати не бывает разве что в теории.
       EXIT(20);
     END;
@@ -881,7 +881,7 @@ OBJECT Codeunit 110230 LockWatch Parse
       // В серверной сессии (прогон, командлет) это те же UTC, и на стенде они расходятся
       // на секунды: порог, не бывающий меньше минуты, перекрывает эту разницу с запасом.
       // У клиента в другом поясе часы иные, и разница выходит за любой порог: тогда
-      // молчание покажется ложной тревогой, а ложная свежесть - молчанием. Отсюда и
+      // молчание покажется ложным уведомлением, а ложная свежесть - молчанием. Отсюда и
       // правило про моменты прохода: их кладёт проход, и кладёт ОДНОЙ шкалой (c110235).
       SilentMs := Asked - LastPassAt;
       IF SilentMs <= SilenceCeilingMs(PollPeriodMs) THEN
@@ -905,14 +905,14 @@ OBJECT Codeunit 110230 LockWatch Parse
     LOCAL PROCEDURE SilentPeriods@68() : Integer;
     BEGIN
       // Двадцать. Одно опоздание бывает от дорогого прохода, три - от занятого планировщика,
-      // а двадцать подряд - уже не невезение. Тревога, поднятая зря, стоит дороже молчания:
+      // а двадцать подряд - уже не невезение. Уведомление, созданное зря, стоит дороже молчания:
       // сторож, кричащий на ровном месте, перестаёт читаться до того, как окажется прав.
       EXIT(20);
     END;
 
     LOCAL PROCEDURE MinSilenceMs@69() : Integer;
     BEGIN
-      // Пол тревоги - минута, и не ради круглого числа: период опроса бывает мелким, а
+      // Нижняя граница - минута, и не ради круглого числа: период опроса бывает мелким, а
       // перезапуск службы съедает десятки секунд сам по себе, и цепочка после него
       // поднимается не мгновенно.
       EXIT(MsPerMinute);
@@ -935,7 +935,7 @@ OBJECT Codeunit 110230 LockWatch Parse
       // наблюдение, съедающее период целиком, выглядело там ровно как дешёвое.
       //
       // Ноль потолка - это "не спрашивать", а не "всё превышено": пустая настройка не
-      // должна поднимать тревогу на каждом проходе.
+      // должна создавать уведомление на каждом проходе.
       IF (Ceiling <= 0) OR (Milliseconds <= Ceiling) THEN
         EXIT('');
       EXIT(STRSUBSTNO(OverrunTxt,Milliseconds,Ceiling));

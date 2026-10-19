@@ -2,7 +2,7 @@ OBJECT Codeunit 110235 LockWatch Pass
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -41,7 +41,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       NoBufferTxt@1000000035 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
       CoverageFailedTxt@1000000037 : TextConst 'ENU=Coverage counters are not read: %1;RUS=Счётчики охвата не прочитаны: %1';
       CoverageTxt@1000000038 : TextConst 'ENU=Coverage: %1 indexes grew.;RUS=Охват: приросло индексов %1.';
-      AlertsTxt@1000000041 : TextConst 'ENU=Alerts raised %1, held back by the latch %2.;RUS=Тревог поднято %1, придержано защёлкой %2.';
+      AlertsTxt@1000000041 : TextConst 'ENU=Alerts raised %1, held back by the latch %2.;RUS=Уведомлений создано %1, придержано защёлкой %2.';
       CoverageResetTxt@1000000039 : TextConst 'ENU=Coverage: %1 counters were zeroed by the server, that much waiting is lost from the total.;RUS=Охват: счётчиков обнулено сервером %1, столько же ожиданий потеряно для итога.';
       CulpritRowFailedTxt@1000000048 : TextConst 'ENU=Names from culprit rows are not read: %1;RUS=Имена по строкам виновника не прочитаны: %1';
       PurgedTxt@1000000049 : TextConst 'ENU=Purged from history %1.;RUS=Удалено из истории %1.';
@@ -83,15 +83,17 @@ OBJECT Codeunit 110235 LockWatch Pass
       Purged@1000000038 : Integer;
     BEGIN
       // Проход целиком: съём, разматывание цепочек, ведение эпизодов, чистка по сроку и
-      // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
-      // предыдущего, а самый дорогой - запись - должен получить всё, что о нём известно,
-      // с первого раза: обновлять строку журнала дважды за проход дороже вдвое.
+      // ОДИН COMMIT в конце. Второй бывает только там, где строки прохода ждут письма, и
+      // стоит после первого - довод в конце файла и в AlertMgt.DeliverPending. Порядок
+      // именно такой, потому что каждый шаг дешевле предыдущего, а самый дорогой - запись -
+      // должен получить всё, что о нём известно, с первого раза: обновлять строку журнала
+      // дважды за проход дороже вдвое.
       Setup.FetchOnce;
       // Состояние сторожа лежит отдельно от настройки нарочно: строку, которую фон
       // переписывает каждый проход, человек не может править вовсе (FINDINGS, раздел 33).
       State.FetchOnce;
       // Язык, на котором проход пишет слова: подсказку, причину, сообщение сторожа и текст
-      // тревоги наружу. В сессии с окном язык не трогается вовсе - разбирается это внутри.
+      // уведомления наружу. В сессии с окном язык не трогается вовсе - разбирается это внутри.
       Parse.UseJournalLanguage(Setup."Journal Language ID");
       // Часы клиента, и это НАЗВАНО нарочно: длительность прохода мерится ими от начала до
       // конца, а значит разницы поясов в ней нет - обе половины взяты одними часами.
@@ -147,7 +149,10 @@ OBJECT Codeunit 110235 LockWatch Pass
 
       Parse.Chains(Waiter,Blocker,RowCount,Head,Depth,Ring,Behind);
 
-      Journal.BeginPass(ObservedAt,Setup."Poll Period (ms)",Setup."Alert Threshold (ms)");
+      // Порог записи идёт тем же путём, что период и порог уведомления: проход читает
+      // настройку один раз и отдаёт журналу, а журнал не знает, откуда он вызван.
+      Journal.BeginPass(ObservedAt,Setup."Poll Period (ms)",Setup."Alert Threshold (ms)",
+                        Setup."Journal Min Wait (ms)");
       Observed.RESET;
       IF Observed.FINDSET THEN
         REPEAT
@@ -170,7 +175,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       // тогда, когда он трогает таблицу документа, а это бывает и позже начала ожидания.
       Note := Note + NameDocuments(Setup."Names From Culprit Rows");
 
-      // Тревога поднимается ПОСЛЕ разбора документа: в неё должны попасть и номер
+      // Уведомление создаётся ПОСЛЕ разбора документа: в него должны попасть и номер
       // документа, и учётная запись, а до разбора их ещё нет.
       Note := Note + RaiseAlerts(Setup);
 
@@ -209,6 +214,9 @@ OBJECT Codeunit 110235 LockWatch Pass
       Note := Note + SweptNote(Swept);
 
       Truncated := (RowLimit > 0) AND (RowCount >= RowLimit);
+      // Время прохода кончается ЗДЕСЬ, до SaveWatchdog: отправка письма идёт после его
+      // COMMIT, и ожидание SMTP в Last Pass (ms) не попадает. Иначе медленный чужой
+      // почтовый сервер выглядел бы медленным проходом и разрежал наблюдение.
       Elapsed := CURRENTDATETIME - StartedAt;
       Note := STRSUBSTNO(CountsTxt,Opened,Updated,Closed,Restarted) + Note;
       // Превышение потолка идёт ПЕРВЫМ словом, а не последним: строка сторожа - Text250,
@@ -220,6 +228,10 @@ OBJECT Codeunit 110235 LockWatch Pass
         Overrun := Overrun + ' ';
       SaveWatchdog(State,Overrun + PassNote(RowCount,OtherDatabase,Truncated,RowLimit,Note),
              ObservedAt,Elapsed,RowCount,Truncated,DroppedSeen,DroppedSeenMs);
+      // Письмо уходит ПОСЛЕ фиксации прохода - и после того, как время прохода
+      // сосчитано. Внешний вызов на секунды не должен ни держать транзакцию журнала, ни
+      // выглядеть медленным проходом: иначе наблюдение разрежалось бы из-за чужого SMTP.
+      AlertMgt.DeliverPending;
       EXIT(TRUE);
     END;
 
@@ -446,23 +458,28 @@ OBJECT Codeunit 110235 LockWatch Pass
       Raised@1000000003 : Integer;
       Latched@1000000004 : Integer;
     BEGIN
+      // Счётчики и очередь писем обнуляются КАЖДЫМ проходом, даже когда канал выключен:
+      // иначе проход с выключенным каналом унаследовал бы очередь прошлого и отправил бы
+      // вчерашние письма сегодня.
+      AlertMgt.BeginPass;
       IF Setup."Alert Channel" = Setup."Alert Channel"::Off THEN
         EXIT('');
       Picked := Journal.PickAlerting(Pending,Setup."Alert Threshold (ms)",Parse.MaxAlertsPerPass);
-      // Тревоги фоном НЕ чистятся, и это решение, а не забывчивость. Тревога - запись о
-      // том, что наружу ушло сообщение; стереть её значит расписаться за чужой разговор с
-      // мониторингом. Строк здесь на порядки меньше, чем эпизодов: тревога поднимается на
-      // голову цепочки один раз за окно защёлки, а не на каждое ожидание. Убирает их
-      // человек кнопкой на странице тревог - там же, где их и читает.
+      // Уведомления фоном НЕ чистятся, и это решение, а не забывчивость. Уведомление -
+      // запись о том, что наружу ушло сообщение; стереть его значит расписаться за чужой
+      // разговор с мониторингом. Строк здесь на порядки меньше, чем эпизодов: уведомление
+      // создаётся на голову цепочки один раз за окно защёлки, а не на каждое ожидание.
+      // Убирает их человек кнопкой на странице уведомлений - там же, где их и читает.
       IF Picked = 0 THEN
         EXIT('');
-      AlertMgt.BeginPass;
       Pending.RESET;
       IF Pending.FINDSET THEN
         REPEAT
           AlertMgt.Raise(Pending,Setup."Alert Threshold (ms)",
                          Setup."Alert Channel" = Setup."Alert Channel"::EventLog,
-                         Setup."Alert Event Source");
+                         Setup."Alert Event Source",
+                         Setup."Alert Channel" = Setup."Alert Channel"::Mail,
+                         Setup."Alert Notif. Group ID");
         UNTIL Pending.NEXT = 0;
       AlertMgt.PassCounts(Raised,Latched);
       IF (Raised > 0) OR (Latched > 0) THEN
@@ -721,6 +738,10 @@ OBJECT Codeunit 110235 LockWatch Pass
       получить куб от числа ждущих: на пятистах это сотни миллионов сравнений.
 
       COMMIT здесь ровно один на проход - тот самый, чью цену меряет Codeunit 110233.
+      Второй бывает только в проходе, где строки ждали письма (AlertMgt.DeliverPending):
+      почта - внешний вызов на секунды, и держать её под транзакцией наблюдения нельзя, а
+      отказ SMTP не должен стоить журнала. Время прохода считается ДО отправки, поэтому в
+      Last Pass (ms) ожидание почты не попадает и наблюдение им не разрежается.
     }
     END.
   }

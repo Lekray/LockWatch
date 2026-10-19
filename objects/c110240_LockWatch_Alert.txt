@@ -2,7 +2,7 @@ OBJECT Codeunit 110240 LockWatch Alert
 {
   OBJECT-PROPERTIES
   {
-    Date=08.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -13,40 +13,54 @@ OBJECT Codeunit 110240 LockWatch Alert
   CODE
   {
     VAR
-      Parse@1000000000 : Codeunit 110230;
       Alert@1000000001 : Record 110236;
+      Parse@1000000000 : Codeunit 110230;
       NextEntryNo@1000000002 : Integer;
       RaisedCount@1000000003 : Integer;
       LatchedCount@1000000004 : Integer;
-      NoSourceTxt@1000000005 : TextConst 'ENU=The event source %1 is not registered on this machine, so the alert stayed in the journal. Registering a source needs an administrator - New-EventLog -LogName Application -Source %1.;RUS=Источник событий %1 на этой машине не заведён, и тревога осталась в журнале. Заводит источник администратор - New-EventLog -LogName Application -Source %1.';
-      WriteFailedTxt@1000000006 : TextConst 'ENU=The Windows event log refused the entry, the alert stayed in the journal: %1;RUS=Журнал событий Windows запись не принял, тревога осталась в журнале: %1';
-      WrittenTxt@1000000007 : TextConst 'ENU=Written to the Windows event log, source %1.;RUS=Записана в журнал событий Windows, источник %1.';
-      OffTxt@1000000008 : TextConst 'ENU=The channel outwards is switched off in the setup, the alert is in the journal only.;RUS=Канал наружу выключен в настройке, тревога только в журнале.';
-      EntryTxt@1000000009 : TextConst 'ENU=LockWatch: a lock has been waiting %1 ms, over the threshold of %2 ms. Head of the chain: session %3. Table %4, key %5. Document %6, user %7. %8;RUS=Сторож блокировок: блокировка держит уже %1 мс при пороге %2 мс. Голова цепочки - сеанс %3. Таблица %4, ключ %5. Документ %6, пользователь %7. %8';
+      MailEntryNo@1000000010 : ARRAY [20] OF Integer;
+      MailGroups@1000000011 : ARRAY [20] OF Integer;
+      MailPendingCount@1000000012 : Integer;
+      MailStartedAt@1000000013 : ARRAY [20] OF DateTime;
+      MailSessions@1000000014 : ARRAY [20] OF Text[250];
+      NoSourceTxt@1000000005 : TextConst 'ENU=The event source %1 is not registered on this machine, so the alert stayed in the journal. Registering a source needs an administrator - New-EventLog -LogName Application -Source %1.;RUS=Источник событий %1 на этой машине не заведён, и уведомление осталось в журнале. Заводит источник администратор - New-EventLog -LogName Application -Source %1.';
+      WriteFailedTxt@1000000006 : TextConst 'ENU=The Windows event log refused the entry, the alert stayed in the journal: %1;RUS=Журнал событий Windows запись не принял, уведомление осталось в журнале: %1';
+      WrittenTxt@1000000007 : TextConst 'ENU=Written to the Windows event log, source %1.;RUS=Записано в журнал событий Windows, источник %1.';
+      OffTxt@1000000008 : TextConst 'ENU=The channel outwards is switched off in the setup, the alert is in the journal only.;RUS=Канал наружу выключен в настройке, уведомление только в журнале.';
+      EntryTxt@1000000009 : TextConst 'ENU=LockWatch: a lock has been waiting %1 ms, over the threshold of %2 ms. Head of the chain: session %3. Table %4, key %5. Document %6, user %7. Started at %8, culprit NAV sessions %9. %10;RUS=Сторож блокировок: блокировка держит уже %1 мс при пороге %2 мс. Голова цепочки - сеанс %3. Таблица %4, ключ %5. Документ %6, пользователь %7. Начало ожидания %8, сеансы NAV виновника %9. %10';
+      NoGroupTxt@1000000015 : TextConst 'ENU=The notification group is not set, no mail was sent.;RUS=Группа уведомлений не задана - письмо не отправлялось';
+      NoHandlerTxt@1000000016 : TextConst 'ENU=No mail sender is subscribed, no mail was sent.;RUS=Нет обработчика отправки почты - письмо не отправлялось';
+      NotSentTxt@1000000017 : TextConst 'ENU=The mail was not sent.;RUS=Письмо не отправлено';
+      SentTxt@1000000018 : TextConst 'ENU=Sent by mail;RUS=Отправлено письмом';
+      PendingTxt@1000000019 : TextConst 'ENU=Waiting for the mail to be sent;RUS=Ждёт отправки письмом';
+      MailSubjectTxt@1000000020 : TextConst 'ENU=LockWatch: a lock has been waiting %1 ms on table %2;RUS=Сторож блокировок: блокировка держит уже %1 мс, таблица %2';
 
     [External]
     PROCEDURE BeginPass@1();
     BEGIN
       RaisedCount := 0;
       LatchedCount := 0;
+      // Очередь писем обнуляется КАЖДЫМ проходом, даже когда канал выключен: иначе проход
+      // унаследовал бы очередь прошлого и отправил бы вчерашние письма сегодня.
+      MailPendingCount := 0;
     END;
 
     [External]
-    PROCEDURE Raise@2(VAR Episode@1000000000 : Record 110231;ThresholdMs@1000000001 : Integer;ToEventLog@1000000002 : Boolean;SourceName@1000000003 : Text) : Boolean;
+    PROCEDURE Raise@2(VAR Episode@1000000000 : Record 110231;ThresholdMs@1000000001 : Integer;ToEventLog@1000000002 : Boolean;SourceName@1000000003 : Text;ToMail@1000000006 : Boolean;NotifGroupID@1000000007 : Integer) : Boolean;
     VAR
       Now@1000000004 : DateTime;
       Latch@1000000005 : Duration;
     BEGIN
       // Защёлка ищется по ГОЛОВЕ цепочки, а не по эпизоду: одна забытая транзакция в шторм
-      // держит сотни жертв, и тревога на каждую - это мусор, который перестают читать.
+      // держит сотни жертв, и уведомление на каждую - это мусор, который перестают читать.
       // Окно защёлки живёт в разборе функцией с доводом рядом.
       IF ThresholdMs <= 0 THEN
         EXIT(FALSE);
       IF Episode."Max Wait (ms)" < ThresholdMs THEN
         EXIT(FALSE);
-      // Эпизод ПОКАЗА не тревожит никого. Показ держит строку дольше порога тревоги
-      // нарочно, и тревога уходила бы наружу по нажатию кнопки "Демо" - то есть ровно та
-      // тревога, после которой перестают читать настоящие.
+      // Эпизод ПОКАЗА не уведомляет никого. Показ держит строку дольше порога уведомления
+      // нарочно, и уведомление уходило бы наружу по нажатию кнопки "Демо" - то есть ровно
+      // то, после которого перестают читать настоящие.
       IF OnDeliberateShow(Episode) THEN
         EXIT(FALSE);
       Now := CURRENTDATETIME;
@@ -57,8 +71,9 @@ OBJECT Codeunit 110240 LockWatch Alert
       Alert.SETRANGE("Head SPID",Episode."Head SPID");
       Alert.SETFILTER("Last Seen At",'>=%1',Now - Latch);
       IF Alert.FINDLAST THEN BEGIN
-        // Та же голова в том же окне - тревога уже поднята. Строка не заводится заново, а
-        // растёт: число эпизодов за защёлкой и есть мера того, сколько народу задето.
+        // Та же голова в том же окне - уведомление уже создано. Строка не заводится
+        // заново, а растёт: число эпизодов за защёлкой и есть мера того, сколько народу
+        // задето.
         Alert."Last Seen At" := Now;
         Alert.Episodes := Alert.Episodes + 1;
         IF Episode."Max Wait (ms)" > Alert."Max Wait (ms)" THEN
@@ -84,16 +99,30 @@ OBJECT Codeunit 110240 LockWatch Alert
       Alert."Episode Entry No." := Episode."Entry No.";
       Alert.Advice := Episode.Advice;
       Alert.Channel := Alert.Channel::JournalOnly;
-      // Канал выключен - наружу не идёт ничего, и заметка ложится тем же INSERT, что и
-      // строка: лишней записи не будет.
+      // Канал у одного прохода один, и выбор сделан вызывающим. Заметка ложится тем же
+      // INSERT, что и строка: лишней записи не будет.
+      //
+      // При канале журнала событий заметка здесь не ставится вовсе - её перепишет
+      // Announce после вставки, своим ответом. Письмо без группы - не ошибка и не повод
+      // звать подписчика: письма не будет, и строка говорит об этом сама.
       IF NOT ToEventLog THEN
-        Alert."Channel Note" := COPYSTR(OffTxt,1,MAXSTRLEN(Alert."Channel Note"));
+        IF ToMail AND (NotifGroupID > 0) THEN
+          Alert."Channel Note" := COPYSTR(PendingTxt,1,MAXSTRLEN(Alert."Channel Note"))
+        ELSE
+          IF ToMail THEN
+            Alert."Channel Note" := COPYSTR(NoGroupTxt,1,MAXSTRLEN(Alert."Channel Note"))
+          ELSE
+            Alert."Channel Note" := COPYSTR(OffTxt,1,MAXSTRLEN(Alert."Channel Note"));
       Alert.INSERT;
       // Наружу - ТОЛЬКО ПОСЛЕ строки. Отказ вставки (повтор номера, отказ прав) иначе
-      // оставил бы в журнале событий Windows сообщение о беде, которой в журнале тревог
-      // нет, и разбираться пришлось бы с внешним журналом, которого наш не подтверждает.
+      // оставил бы в журнале событий Windows сообщение о беде, которой в журнале
+      // уведомлений нет, и разбираться пришлось бы с внешним журналом, которого наш не
+      // подтверждает. По той же причине и письмо берётся в очередь только после INSERT:
+      // отправить то, чего в журнале нет, значило бы разойтись с ним молча.
+      IF ToMail AND (NOT ToEventLog) AND (NotifGroupID > 0) THEN
+        AddPendingMail(Alert."Entry No.",NotifGroupID,Episode."Started At",Episode."Culprit NAV Sessions");
       IF ToEventLog THEN BEGIN
-        Announce(Alert,SourceName);
+        Announce(Alert,Episode,SourceName);
         Alert.MODIFY;
       END;
       RaisedCount := RaisedCount + 1;
@@ -104,13 +133,13 @@ OBJECT Codeunit 110240 LockWatch Alert
     VAR
       DemoRef@1000000001 : RecordRef;
     BEGIN
-      // Показ по кнопке "Демо" поднимает НАСТОЯЩЕЕ ожидание на СВОЕЙ строке - и держит её
-      // дольше порога тревоги: шесть секунд против пяти по умолчанию. Тревога по нему
-      // звала бы человека на нажатие кнопки, и это ровно тот случай, после которого
-      // настоящие тревоги перестают читать.
+      // Показ по кнопке "Демо" создаёт НАСТОЯЩЕЕ ожидание на СВОЕЙ строке - и держит её
+      // дольше порога уведомления: шесть секунд против пяти по умолчанию. Уведомление по
+      // нему звало бы человека на нажатие кнопки, и это ровно тот случай, после которого
+      // настоящие уведомления перестают читать.
       //
-      // Поэтому эпизод показа не поднимается ВООБЩЕ, а не уходит в журнал без канала:
-      // пометить строку тревоги как "это был показ" нечем - такого поля в ней нет, - и
+      // Поэтому эпизод показа не уведомляет ВООБЩЕ, а не уходит в журнал без канала:
+      // пометить строку уведомления как "это был показ" нечем - такого поля в ней нет, - и
       // оставленная строка читалась бы потом как настоящая беда.
       //
       // Отметка тут - ТАБЛИЦА мишени, и она наша: показ спорит за строку своей таблицы, а
@@ -127,17 +156,22 @@ OBJECT Codeunit 110240 LockWatch Alert
       Latched := LatchedCount;
     END;
 
+    [Integration]
+    PROCEDURE OnSendAlertMail@4(NotifGroupID@1000000000 : Integer;Subject@1000000001 : Text;Body@1000000002 : Text;VAR Handled@1000000003 : Boolean;VAR Sent@1000000004 : Boolean;VAR ErrorText@1000000005 : Text);
+    BEGIN
+      // Письмо отправляет ПОДПИСЧИК УСТАНОВКИ, а не LockWatch: SMTP - её среда, и настроек
+      // почты у инструмента нет. Handled=FALSE означает, что подписчика нет; Sent=FALSE -
+      // что он был и отказал, и тогда ErrorText говорит почему.
+    END;
 
-    LOCAL PROCEDURE Announce@5(VAR Row@1000000000 : Record 110236;SourceName@1000000001 : Text);
+    LOCAL PROCEDURE Announce@5(VAR Row@1000000000 : Record 110236;VAR Episode@1000000001 : Record 110231;SourceName@1000000002 : Text);
     VAR
-      Message@1000000002 : Text;
+      Message@1000000003 : Text;
     BEGIN
       // Канал наружу может не сработать, и молчащий канал, о котором никто не знает, хуже
       // отсутствующего. Поэтому ответ канала пишется В СТРОКУ, а не в никуда, и строка
-      // остаётся в журнале тревог в любом случае.
-      Message := STRSUBSTNO(EntryTxt,Row."Max Wait (ms)",Row."Threshold (ms)",Row."Head SPID",
-                            Row."NAV Table Name",Row."NAV Key No.",Row."Document No.",
-                            Row."User Name",Row.Advice);
+      // остаётся в журнале уведомлений в любом случае.
+      Message := BuildMessage(Row,Episode."Started At",Episode."Culprit NAV Sessions");
       IF NOT TryWriteEventLog(SourceName,Message) THEN BEGIN
         Row."Channel Note" := COPYSTR(STRSUBSTNO(WriteFailedTxt,GETLASTERRORTEXT),1,MAXSTRLEN(Row."Channel Note"));
         EXIT;
@@ -178,38 +212,149 @@ OBJECT Codeunit 110240 LockWatch Alert
       EXIT(NextEntryNo);
     END;
 
+    LOCAL PROCEDURE AddPendingMail@12(EntryNo@1000000000 : Integer;GroupId@1000000001 : Integer;StartedAt@1000000002 : DateTime;Sessions@1000000003 : Text);
+    BEGIN
+      // Очередь хранит номер строки и всё, что письму понадобится ПОСЛЕ фиксации прохода.
+      // Копируется здесь нарочно: к тому мигу эпизод может уехать в историю или быть
+      // выброшен чисткой, а строка уведомления останется.
+      //
+      // Потолок массива равен потолку разбора, поэтому проверка здесь - страховка от
+      // прямого вызова, а не рабочая ветка: без неё выход за границу массива уронил бы
+      // проход. Выброшенное письмо не отправляется, но строка остаётся честной - в ней
+      // написано, что она ждёт отправки, а доставка эту пометку не перепишет.
+      IF MailPendingCount >= MaxPendingMails THEN
+        EXIT;
+      MailPendingCount := MailPendingCount + 1;
+      MailEntryNo[MailPendingCount] := EntryNo;
+      MailGroups[MailPendingCount] := GroupId;
+      MailStartedAt[MailPendingCount] := StartedAt;
+      MailSessions[MailPendingCount] := Sessions;
+    END;
+
+    LOCAL PROCEDURE MaxPendingMails@13() : Integer;
+    BEGIN
+      // Двадцать - тот же потолок, что MaxAlertsPerPass в разборе: больше строк один проход
+      // не заводит. Число повторено здесь потому, что размер массива объявляется
+      // константой времени компиляции, а имя у предела должно быть одно: при росте
+      // потолка разбора правка будет в двух соседних местах, и забыть второе не даст эта
+      // функция.
+      EXIT(20);
+    END;
+
+    [External]
+    PROCEDURE DeliverPending@9();
+    VAR
+      Row@1000000000 : Record 110236;
+      Index@1000000001 : Integer;
+      Subject@1000000002 : Text;
+      Body@1000000003 : Text;
+      ErrorText@1000000006 : Text;
+      Note@1000000007 : Text;
+      Handled@1000000004 : Boolean;
+      Sent@1000000005 : Boolean;
+      Changed@1000000008 : Boolean;
+    BEGIN
+      IF MailPendingCount = 0 THEN
+        EXIT;
+      FOR Index := 1 TO MailPendingCount DO BEGIN
+        // Строку могли убрать со страницы уведомлений между фиксацией прохода и этим
+        // вызовом. Письма без строки нет: журнал - запись о том, что ушло, и отправлять
+        // то, чего в нём уже нет, значило бы разойтись с ним молча.
+        IF Row.GET(MailEntryNo[Index]) THEN BEGIN
+          Subject := STRSUBSTNO(MailSubjectTxt,Row."Max Wait (ms)",Row."NAV Table Name");
+          Body := BuildMessage(Row,MailStartedAt[Index],MailSessions[Index]);
+          Handled := FALSE;
+          Sent := FALSE;
+          ErrorText := '';
+          IF TrySendMail(MailGroups[Index],Subject,Body,Handled,Sent,ErrorText) THEN BEGIN
+            IF NOT Handled THEN
+              Note := NoHandlerTxt
+            ELSE
+              IF NOT Sent THEN BEGIN
+                Note := ErrorText;
+                IF Note = '' THEN
+                  Note := NotSentTxt;
+              END ELSE BEGIN
+                Row.Channel := Row.Channel::Mail;
+                Note := SentTxt;
+              END;
+          END ELSE
+            // Ошибка подписчика поймана TryFunction: строка прохода уже зафиксирована, и
+            // откатывать её нечем и незачем. Причина остаётся в заметке словами.
+            Note := GETLASTERRORTEXT;
+          Row."Channel Note" := COPYSTR(Note,1,MAXSTRLEN(Row."Channel Note"));
+          Row.MODIFY;
+          Changed := TRUE;
+        END;
+      END;
+      MailPendingCount := 0;
+      // Второй COMMIT прохода - и только в том проходе, где строки ждали письма. Почта -
+      // внешний вызов на секунды: держать её под транзакцией наблюдения нельзя, а отказ
+      // SMTP не должен стоить журнала. Время прохода к этому мигу уже посчитано и
+      // записано (Codeunit 110235), поэтому ожидание почты в Last Pass (ms) не попадает
+      // и наблюдение из-за чужого SMTP не разрежается.
+      IF Changed THEN
+        COMMIT;
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TrySendMail@10(NotifGroupID@1000000000 : Integer;Subject@1000000001 : Text;Body@1000000002 : Text;VAR Handled@1000000003 : Boolean;VAR Sent@1000000004 : Boolean;VAR ErrorText@1000000005 : Text);
+    BEGIN
+      // Только вызов события. Ни записи, ни COMMIT здесь нет: ошибка подписчика не
+      // откатывает строки прохода, а наш перехват не должен сам ничего писать - иначе
+      // отказ SMTP оставлял бы за собой половину заметки.
+      OnSendAlertMail(NotifGroupID,Subject,Body,Handled,Sent,ErrorText);
+    END;
+
+    LOCAL PROCEDURE BuildMessage@11(VAR Row@1000000000 : Record 110236;StartedAt@1000000001 : DateTime;Sessions@1000000002 : Text) : Text;
+    BEGIN
+      // Один и тот же текст уходит и в журнал событий Windows, и в тело письма: два
+      // сборщика разошлись бы при первой же правке, и каналы начали бы рассказывать
+      // разное про одно событие. Время начала и сеансы виновника приходят снаружи: в
+      // строке уведомления их нет, а письму они нужны.
+      EXIT(STRSUBSTNO(EntryTxt,Row."Max Wait (ms)",Row."Threshold (ms)",Row."Head SPID",
+                      Row."NAV Table Name",Row."NAV Key No.",Row."Document No.",
+                      Row."User Name",FORMAT(StartedAt,0,0),Sessions,Row.Advice));
+    END;
+
     BEGIN
     {
-      Тревога: порог из настройки наконец не только красит строку, но и зовёт человека.
+      Уведомление: порог из настройки наконец не только красит строку, но и зовёт человека.
 
-      Пять решений, и каждое против одного и того же - против тревоги, которую перестают
-      читать:
+      Пять решений, и каждое против одного и того же - против уведомления, которое
+      перестают читать:
 
       1. Защёлка по ГОЛОВЕ цепочки, а не по эпизоду. Одна забытая транзакция в шторм
-         держит сотни жертв; сотня строк тревоги - это мусор. Пока голова та же и окно не
-         вышло, строка одна, а число эпизодов за ней растёт полем.
-      2. Тревога только на ИДУЩИЙ эпизод. Смысл её - "происходит сейчас, вмешайся";
+         держит сотни жертв; сотня строк уведомлений - это мусор. Пока голова та же и окно
+         не вышло, строка одна, а число эпизодов за ней растёт полем.
+      2. Уведомление только на ИДУЩИЙ эпизод. Смысл его - "происходит сейчас, вмешайся";
          звать человека к тому, что кончилось само, значит приучить его не читать.
       3. Ответ канала пишется в строку словами. Канал наружу может не сработать - нет
-         источника событий, не выдали прав, - и тогда тревога всё равно остаётся здесь, а
-         причина молчания видна. Молчащий канал, о котором никто не знает, хуже
-         отсутствующего.
-      4. Убирает тревоги ЧЕЛОВЕК кнопкой на странице тревог, и никто больше. Срез по
-         сроку здесь был написан и снят: он удалял бы записи о разговоре с мониторингом
+         источника событий, не выдали прав, не настроен SMTP, - и тогда уведомление всё
+         равно остаётся здесь, а причина молчания видна. Молчащий канал, о котором никто
+         не знает, хуже отсутствующего.
+      4. Убирает уведомления ЧЕЛОВЕК кнопкой на странице уведомлений, и никто больше. Срез
+         по сроку здесь был написан и снят: он удалял бы записи о разговоре с мониторингом
          по числу дней, которого никто не называл, и не звал его ни один проход.
-      5. Показ по кнопке "Демо" тревоги не поднимает вовсе. Он держит строку СВОЕЙ
+      5. Показ по кнопке "Демо" уведомления не создаёт вовсе. Он держит строку СВОЕЙ
          таблицы дольше порога нарочно - шесть секунд против пяти по умолчанию, - и
-         тревога уходила бы наружу по нажатию кнопки. Признак показа - таблица мишени,
+         уведомление уходило бы наружу по нажатию кнопки. Признак показа - таблица мишени,
          взятая у самой таблицы: она наша, и спутать её с чужой нельзя.
 
-      Наружу тревога уходит в журнал событий Windows, и это выбор не от бедности. Своего
-      канала в журнал событий у C/AL 2018 нет вовсе; почта требует настроенного SMTP,
-      которого может не быть; а журнал событий Windows - ровно то, что мониторинг на
-      сервере и без нас уже читает.
+      Наружу уведомление уходит в журнал событий Windows или почтой, и это выбор не от
+      бедности. Своего канала в журнал событий у C/AL 2018 нет вовсе; почта требует
+      настроенного SMTP, которого может не быть; а журнал событий Windows - ровно то, что
+      мониторинг на сервере и без нас уже читает.
+
+      Письмо LockWatch не отправляет сам: он поднимает событие, а отправляет подписчик
+      установки. Так SMTP и его настройки остаются там, где им место, - у установки.
 
       И запись наружу идёт ПОСЛЕ вставки строки, а не до неё. Отказ вставки - повтор
       номера, отказ прав - оставил бы в чужом журнале сообщение о беде, которой в нашем
       журнале нет; разбирающийся искал бы её здесь и не нашёл.
+
+      Письмо уходит ещё позже - после COMMIT прохода. Внешний вызов на секунды не должен
+      держать транзакцию журнала, а отказ SMTP - стоить уже записанного прохода.
     }
     END.
   }

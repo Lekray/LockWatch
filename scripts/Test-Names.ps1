@@ -322,7 +322,7 @@ UPDATE $state SET [Watchdog Message] = N'';
     # Сличается с образцом, а не с ожидаемой строкой: образец тут - источник правды, и
     # расходиться им нельзя.
     $sample = @(Get-ChildItem (Join-Path $root 'objects') -Filter 'c*.txt' |
-                Where-Object { ([IO.File]::ReadAllText($_.FullName)) -match '\[EventSubscriber\(' })
+                Where-Object { ([IO.File]::ReadAllText($_.FullName)) -match '\[EventSubscriber\(Table,' })
     $samplePerm = ''
     if ($sample.Count -eq 1) {
         $samplePerm = ([regex]::Match([IO.File]::ReadAllText($sample[0].FullName), '(?s)Permissions=(.*?);')).Groups[1].Value -replace '\s', ''

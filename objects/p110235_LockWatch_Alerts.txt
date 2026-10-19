@@ -2,7 +2,7 @@ OBJECT Page 110235 LockWatch Alerts
 {
   OBJECT-PROPERTIES
   {
-    Date=08.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -10,7 +10,7 @@ OBJECT Page 110235 LockWatch Alerts
   PROPERTIES
   {
     CaptionML=[ENU=LockWatch Alerts;
-               RUS=Тревоги сторожа];
+               RUS=Уведомления сторожа];
     InsertAllowed=No;
     DeleteAllowed=No;
     ModifyAllowed=No;
@@ -30,7 +30,7 @@ OBJECT Page 110235 LockWatch Alerts
                       CaptionML=[ENU=Refresh;
                                  RUS=Обновить];
                       ToolTipML=[ENU=Read the alerts again and recount what is shown. The background pass raises and confirms them on its own, and this page notices none of that by itself.;
-                                 RUS=Перечитать тревоги и пересчитать показанное. Фоновый проход сам их поднимает и сам подтверждает, и сама страница об этом не узнаёт.];
+                                 RUS=Перечитать уведомления и пересчитать показанное. Фоновый проход сам их создаёт и сам подтверждает, и сама страница об этом не узнаёт.];
                       ApplicationArea=#All;
                       Promoted=Yes;
                       PromotedIsBig=Yes;
@@ -45,7 +45,7 @@ OBJECT Page 110235 LockWatch Alerts
                       CaptionML=[ENU=Episode;
                                  RUS=Эпизод];
                       ToolTipML=[ENU=Open the episode that raised this alert. The others behind the same latch are found by the head of the chain.;
-                                 RUS=Открыть эпизод, поднявший эту тревогу. Остальные за той же защёлкой ищутся по голове цепочки.];
+                                 RUS=Открыть эпизод, создавший это уведомление. Остальные за той же защёлкой ищутся по голове цепочки.];
                       ApplicationArea=#All;
                       Promoted=Yes;
                       PromotedIsBig=Yes;
@@ -87,7 +87,7 @@ OBJECT Page 110235 LockWatch Alerts
                       CaptionML=[ENU=Delete What Is Shown;
                                  RUS=Удалить показанное];
                       ToolTipML=[ENU=Delete the alerts this list is showing right now. The background pass never clears alerts: an alert is the record that a message went out, and erasing it would sign off on someone else's talk with monitoring. The press is a person's, and the count comes first.;
-                                 RUS=Удалить тревоги, которые список показывает сейчас. Фоном они не чистятся никогда: тревога - запись об ушедшем наружу сообщении, и стереть её значит расписаться за чужой разговор с мониторингом. Жмёт её человек, и число называется до вопроса.];
+                                 RUS=Удалить уведомления, которые список показывает сейчас. Фоном они не чистятся никогда: уведомление - запись об ушедшем наружу сообщении, и стереть его значит расписаться за чужой разговор с мониторингом. Жмёт кнопку человек, и число называется до вопроса.];
                       ApplicationArea=#All;
                       Image=Delete;
                       PromotedCategory=Process;
@@ -108,28 +108,28 @@ OBJECT Page 110235 LockWatch Alerts
     { 3   ;2   ;Field     ;
                 Name=RaisedAt;
                 ToolTipML=[ENU=Specifies when the alert was raised. It is the first moment the wait crossed the threshold, not the moment the wait began.;
-                           RUS=Определяет, когда тревога поднята. Это первый миг, когда ожидание перевалило порог, а не миг начала ожидания.];
+                           RUS=Определяет, когда уведомление создано. Это первый миг, когда ожидание перевалило порог, а не миг начала ожидания.];
                 ApplicationArea=#All;
                 SourceExpr="Raised At" }
 
     { 4   ;2   ;Field     ;
                 Name=LastSeenAt;
                 ToolTipML=[ENU=Specifies when this alert was last confirmed. While it keeps moving, the trouble is still going on.;
-                           RUS=Определяет, когда тревога подтверждалась в последний раз. Пока время движется, беда ещё идёт.];
+                           RUS=Определяет, когда уведомление подтверждалось в последний раз. Пока время движется, беда ещё идёт.];
                 ApplicationArea=#All;
                 SourceExpr="Last Seen At" }
 
     { 5   ;2   ;Field     ;
                 Name=MaxWait;
                 ToolTipML=[ENU=Specifies the longest wait behind this alert, in milliseconds.;
-                           RUS=Определяет самое долгое ожидание за этой тревогой, в миллисекундах.];
+                           RUS=Определяет самое долгое ожидание за этим уведомлением, в миллисекундах.];
                 ApplicationArea=#All;
                 SourceExpr="Max Wait (ms)" }
 
     { 6   ;2   ;Field     ;
                 Name=Episodes;
                 ToolTipML=[ENU=Specifies how many episodes fell behind this one alert. The latch holds them together on purpose: one forgotten transaction in a storm holds hundreds of victims, and a hundred alerts is not an alert but noise.;
-                           RUS=Определяет, сколько эпизодов легло за одной этой тревогой. Защёлка держит их вместе нарочно: одна забытая транзакция в шторм держит сотни жертв, а сотня тревог - это не тревога, а шум.];
+                           RUS=Определяет, сколько эпизодов легло за одним этим уведомлением. Защёлка держит их вместе нарочно: одна забытая транзакция в шторм держит сотни жертв, а сотня уведомлений - это не уведомление, а шум.];
                 ApplicationArea=#All;
                 SourceExpr=Episodes }
 
@@ -143,7 +143,7 @@ OBJECT Page 110235 LockWatch Alerts
     { 8   ;2   ;Field     ;
                 Name=NAVTableName;
                 ToolTipML=[ENU=Specifies the table the first episode behind this alert sat on.;
-                           RUS=Определяет таблицу, на которой сидел первый эпизод этой тревоги.];
+                           RUS=Определяет таблицу, на которой сидел первый эпизод этого уведомления.];
                 ApplicationArea=#All;
                 SourceExpr="NAV Table Name" }
 
@@ -171,21 +171,21 @@ OBJECT Page 110235 LockWatch Alerts
     { 12  ;2   ;Field     ;
                 Name=Advice;
                 ToolTipML=[ENU=Specifies what to do about it - the advice of the episode that raised the alert.;
-                           RUS=Определяет, что с этим делать, - совет того эпизода, который поднял тревогу.];
+                           RUS=Определяет, что с этим делать, - совет того эпизода, который создал уведомление.];
                 ApplicationArea=#All;
                 SourceExpr=Advice }
 
     { 13  ;2   ;Field     ;
                 Name=Threshold;
                 ToolTipML=[ENU=Specifies the threshold the alert was raised against. It is kept in the row because the setting changes, and an alert judged by the old threshold must stay readable.;
-                           RUS=Определяет порог, по которому тревога поднята. Хранится в строке потому, что настройку меняют, а тревога, поднятая по прежнему порогу, должна остаться понятной.];
+                           RUS=Определяет порог, по которому уведомление создано. Хранится в строке потому, что настройку меняют, а уведомление, созданное по прежнему порогу, должно остаться понятным.];
                 ApplicationArea=#All;
                 SourceExpr="Threshold (ms)" }
 
     { 14  ;2   ;Field     ;
                 Name=Channel;
                 ToolTipML=[ENU=Specifies where the alert went besides this journal.;
-                           RUS=Определяет, куда тревога ушла кроме этого журнала.];
+                           RUS=Определяет, куда уведомление ушло кроме этого журнала.];
                 ApplicationArea=#All;
                 SourceExpr=Channel }
 
@@ -207,16 +207,16 @@ OBJECT Page 110235 LockWatch Alerts
   {
     VAR
       NothingShownTxt@1000000000 : TextConst 'ENU=The list is showing nothing, so there is nothing to delete.;RUS=Список сейчас ничего не показывает, значит и удалять нечего.';
-      ConfirmPurgeTxt@1000000001 : TextConst 'ENU=Delete %1 alerts? This is exactly what the list is showing right now, and the messages that already went out stay out.;RUS=Удалить %1 тревог? Это ровно то, что список показывает сейчас, а ушедшие наружу сообщения останутся ушедшими.';
-      PurgedTxt@1000000002 : TextConst 'ENU=Deleted alerts: %1.;RUS=Удалено тревог: %1.';
-      EpisodeGoneErr@1000000003 : TextConst 'ENU=The episode of this alert is no longer in the journal: it has either moved to history or been dropped as too short, and the alert knows nothing of that - a person has to clean alerts up. Look in history by the same head of the chain.;RUS=Эпизода этой тревоги в журнале больше нет: он либо переехал в историю, либо выброшен как слишком короткий, и тревога об этом не знает - тревоги убирает человек. Поищите его в истории по той же голове цепочки.';
+      ConfirmPurgeTxt@1000000001 : TextConst 'ENU=Delete %1 alerts? This is exactly what the list is showing right now, and the messages that already went out stay out.;RUS=Удалить %1 уведомлений? Это ровно то, что список показывает сейчас, а ушедшие наружу сообщения останутся ушедшими.';
+      PurgedTxt@1000000002 : TextConst 'ENU=Deleted alerts: %1.;RUS=Удалено уведомлений: %1.';
+      EpisodeGoneErr@1000000003 : TextConst 'ENU=The episode of this alert is no longer in the journal: it has either moved to history or been dropped as too short, and the alert knows nothing of that - a person has to clean alerts up. Look in history by the same head of the chain.;RUS=Эпизода этого уведомления в журнале больше нет: он либо переехал в историю, либо выброшен как слишком короткий, и уведомление об этом не знает - уведомления убирает человек. Поищите его в истории по той же голове цепочки.';
 
     LOCAL PROCEDURE ShowEpisode@1();
     VAR
       Episode@1000000000 : Record 110231;
     BEGIN
-      // Молчание тут читалось бы как "эпизод пропал", а он не пропал: тревога живёт своим
-      // сроком и переезда эпизода в историю не замечает. Причина называется словами.
+      // Молчание тут читалось бы как "эпизод пропал", а он не пропал: уведомление живёт
+      // своим сроком и переезда эпизода в историю не замечает. Причина называется словами.
       IF NOT Episode.GET("Episode Entry No.") THEN
         ERROR(EpisodeGoneErr);
       Episode.SETRECFILTER;
@@ -228,7 +228,7 @@ OBJECT Page 110235 LockWatch Alerts
       Episode@1000000000 : Record 110231;
       Spid@1000000001 : Integer;
     BEGIN
-      // Отбор по голове, а не по одному эпизоду: за тревогой стоит столько эпизодов,
+      // Отбор по голове, а не по одному эпизоду: за уведомлением стоит столько эпизодов,
       // сколько жертв держала эта голова, и увидеть их надо всех.
       Spid := "Head SPID";
       Episode.SETCURRENTKEY("Head SPID",Open);
@@ -241,9 +241,9 @@ OBJECT Page 110235 LockWatch Alerts
       Doomed@1000000000 : Record 110236;
       Rows@1000000001 : Integer;
     BEGIN
-      // Единственное место, где тревоги удаляются, и нажать его должен человек: фоном они
-      // не чистятся нарочно, довод записан в самом проходе. Тревога - запись о том, что
-      // наружу ушло сообщение, и стирать её за мониторинг инструмент не станет.
+      // Единственное место, где уведомления удаляются, и нажать его должен человек: фоном
+      // они не чистятся нарочно, довод записан в самом проходе. Уведомление - запись о
+      // том, что наружу ушло сообщение, и стирать её за мониторинг инструмент не станет.
       //
       // Отбор берётся С ЭКРАНА, как в истории: что человек видит, то и уйдёт. Число
       // называется ДО вопроса - "удалить показанное" без счёта это предложение
@@ -263,13 +263,14 @@ OBJECT Page 110235 LockWatch Alerts
 
     BEGIN
     {
-      Тревоги. Строка на голову цепочки за окно, а не на эпизод, и это главное, что нужно
-      знать при чтении: число в колонке "эпизодов за защёлкой" и есть мера того, скольких
-      задело, а строк при этом одна.
+      Уведомления. Строка на голову цепочки за окно, а не на эпизод, и это главное, что
+      нужно знать при чтении: число в колонке "эпизодов за защёлкой" и есть мера того,
+      скольких задело, а строк при этом одна.
 
-      Колонка "что сказал канал" стоит рядом с колонкой "куда ушла" нарочно. Канал наружу
-      может не сработать - источника событий на машине нет, прав не выдали, - и тогда
-      тревога всё равно здесь, а причина молчания записана словами. Пустая колонка на её
+      Колонка "что сказал канал" стоит рядом с колонкой "куда ушло" нарочно. Канал
+      наружу может не сработать - источника событий на машине нет, прав не выдали, - и
+      тогда уведомление всё равно здесь, а причина молчания записана словами. Пустая
+      колонка на её
       месте читалась бы как "всё ушло куда надо".
     }
     END.
