@@ -1,4 +1,4 @@
-OBJECT Codeunit 110245 LockWatch Demo Hold
+OBJECT Codeunit 110240 LockWatch Demo Hold
 {
   OBJECT-PROPERTIES
   {
@@ -18,7 +18,8 @@ OBJECT Codeunit 110245 LockWatch Demo Hold
   {
     VAR
       Demo@1000000000 : Record 110239;
-      Control@1000000001 : Codeunit 110244;
+      Mark@1000000003 : Record 110233;
+      Control@1000000001 : Codeunit 110239;
       HeldTxt@1000000002 : TextConst 'ENU=Held by the demo;RUS=Держит показ';
 
     LOCAL PROCEDURE Hold@1();
@@ -36,6 +37,17 @@ OBJECT Codeunit 110245 LockWatch Demo Hold
       // показ показывал бы не то, что обещал.
       IF NOT Demo.GET(Control.TargetNo) THEN
         EXIT;
+      // Отметка - та же, что кладёт переходник деловой таблицы, и в той же транзакции,
+      // что держит строку. По ней проход называет держателя главной дорогой: учёткой и
+      // номером сеанса, без всякой настройки.
+      //
+      // Первая отметка сеанса - вставка, а вставку NAV копит и выкладывает в SQL только
+      // на следующей операции с ТОЙ ЖЕ таблицей или при фиксации; запись другой таблицы
+      // её не выталкивает (замерено 19.10.2026: всё удержание отметки в базе не было).
+      // Проход читает отметку другим соединением, и буфер сессии ему не виден, - отсюда
+      // чтение той же строки сразу за вставкой, приём мерного кодюнита 110247.
+      Mark.Mark(DATABASE::"LockWatch Demo Row",FORMAT(Control.TargetNo));
+      Mark.GET(SERVICEINSTANCEID,SESSIONID);
       Demo.Note := HeldTxt;
       Demo."Touched At" := CURRENTDATETIME;
       // Учётная запись держателя - в поле-связи с "User": по нему дорога "по строке
@@ -45,6 +57,8 @@ OBJECT Codeunit 110245 LockWatch Demo Hold
       Demo."Held By" := COPYSTR(USERID,1,MAXSTRLEN(Demo."Held By"));
       Demo.MODIFY;
       SLEEP(Control.HoldMs);
+      // Сеанс показа живёт секунды, и его отметке после него делать нечего.
+      Mark.Release;
     END;
 
     BEGIN

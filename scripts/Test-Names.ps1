@@ -52,9 +52,9 @@ param(
     [int]    $TableNo  = $(if ($env:LW_DOC_TABLE_NO) { [int]$env:LW_DOC_TABLE_NO } else { 0 }),
     [int]    $FieldNo  = $(if ($env:LW_DOC_FIELD_NO) { [int]$env:LW_DOC_FIELD_NO } else { 0 }),
     [int]    $AdapterObjectNo = 110250,
-    [int]    $PassCodeunitId  = 110235,
-    [int]    $TaskCodeunitId  = 110236,
-    [int]    $HoldCodeunitId  = 110243,
+    [int]    $PassCodeunitId  = 110234,
+    [int]    $TaskCodeunitId  = 110235,
+    [int]    $HoldCodeunitId  = 110248,
     [int]    $MgmtPort = 7145,
     [int]    $TimeoutMinutes = 3
 )
@@ -101,7 +101,7 @@ $setup    = '[LockWatch Setup]'
 $state    = '[LockWatch Watchdog]'
 $service  = "MicrosoftDynamicsNavServer`$$Instance"
 
-# Номера строк-мишеней заданы не здесь: их знает Codeunit 110243, и повторены они тут
+# Номера строк-мишеней заданы не здесь: их знает Codeunit 110248, и повторены они тут
 # затем, что прогон обязан подложить ровно те строки, за которыми держатель пойдёт.
 # Разойдись они - держатель откажет словами «строки нет», и это лучший из исходов.
 $holdDoc = 'LOCKWATCH-LIVE'

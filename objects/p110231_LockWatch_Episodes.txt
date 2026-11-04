@@ -362,7 +362,7 @@ OBJECT Page 110231 LockWatch Episodes
     VAR
       AlertMs@1000000000 : Integer;
       WaitStyle@1000000001 : Text[30];
-      Platform@1000000002 : Codeunit 110241;
+      Platform@1000000002 : Codeunit 110238;
       PlatformOffErr@1000000003 : TextConst 'ENU=Names from the platform are switched off in the setup. Switching them on costs a config change, an instance restart and both SQL rights - it is a decision, not a checkbox.;RUS=Имена от платформы выключены в настройке. Их включение стоит правки конфига, перезапуска экземпляра и обоих прав SQL - это решение, а не галка.';
       NamedMsg@1000000004 : TextConst 'ENU=The platform named the user - %1;RUS=Платформа назвала пользователя - %1';
       NotNamedMsg@1000000005 : TextConst 'ENU=The platform did not name anyone. %1;RUS=Платформа никого не назвала. %1';
@@ -428,8 +428,17 @@ OBJECT Page 110231 LockWatch Episodes
         WaitStyle := AlarmStyle;
     END;
 
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@7();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Имена стилей - язык клиента, а не среда.
+    END;
+
     LOCAL PROCEDURE StandardStyle@3() : Text[30];
     BEGIN
+      // Имя платформенного стиля. Написать его с ошибкой можно молча: неизвестный стиль
+      // клиент рисует обычным, ничего не сказав.
       EXIT('Standard');
     END;
 

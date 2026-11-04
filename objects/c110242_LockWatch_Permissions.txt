@@ -1,8 +1,8 @@
-OBJECT Codeunit 110247 LockWatch Permissions
+OBJECT Codeunit 110242 LockWatch Permissions
 {
   OBJECT-PROPERTIES
   {
-    Date=15.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -235,6 +235,13 @@ OBJECT Codeunit 110247 LockWatch Permissions
            (Has."Modify Permission" = Want."Modify Permission") AND
            (Has."Delete Permission" = Want."Delete Permission") AND
            (Has."Execute Permission" = Want."Execute Permission"));
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@11();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Здесь таких величин нет: имя набора - лицо инструмента, а не среда.
     END;
 
     LOCAL PROCEDURE RoleId@8() : Code[20];

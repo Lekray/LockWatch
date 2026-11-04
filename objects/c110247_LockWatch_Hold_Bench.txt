@@ -1,8 +1,8 @@
-OBJECT Codeunit 110242 LockWatch Hold Bench
+OBJECT Codeunit 110247 LockWatch Hold Bench
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -45,39 +45,13 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
       // значит карта у каждой сессии своя, и дорога к чужому имени по ней не проходит.
       OwnRows := Locks.COUNT;
       Waited := HoldMs;
-      SLEEP(Waited DIV 2);
+      SLEEP(Waited DIV SleepHalves);
       // Второй счёт - когда ждущий уже стоит в очереди. Первый мог оказаться слишком
       // ранним: карта наполняется на старте транзакции, а не на взятии блокировки.
       Locks.RESET;
       LateRows := Locks.COUNT;
-      SLEEP(Waited DIV 2);
+      SLEEP(Waited DIV SleepHalves);
       MESSAGE(HeldTxt,USERID,SESSIONID,Waited,OwnRows,LateRows);
-    END;
-
-    LOCAL PROCEDURE HoldMs@2() : Integer;
-    BEGIN
-      // Минута. Больше предела ожидания NAV (10 000 мс) - чтобы жертва успела отвалиться
-      // по нему и эпизод получил честный исход, - и заведомо больше, чем нужно прогону на
-      // проход и нажатие кнопки. Меньше минуты не годится: на холодной службе первый
-      // проход платит за сборку business assemblies, и окно съедается целиком.
-      EXIT(60000);
-    END;
-
-    LOCAL PROCEDURE TargetInstanceId@3() : Integer;
-    BEGIN
-      // Та же мишень, что и у прогона по живой блокировке: отрицательные номера сеанса и
-      // экземпляра настоящими не бывают, и столкнуться с чужой отметкой нельзя.
-      EXIT(-1);
-    END;
-
-    LOCAL PROCEDURE TargetSessionId@4() : Integer;
-    BEGIN
-      EXIT(-1);
-    END;
-
-    LOCAL PROCEDURE HeldDocumentNo@5() : Code[20];
-    BEGIN
-      EXIT('HELD-BY-NAV');
     END;
 
     [External]
@@ -134,6 +108,39 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
       ERROR(LockRowTookTxt,USERID,SESSIONID);
     END;
 
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@19();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Мерный объект не настраивается - его числа описывают поставленный опыт, а не
+      // среду установки, - поэтому они лежат здесь, а не в настройке LockWatch Setup.
+    END;
+
+    LOCAL PROCEDURE HoldMs@2() : Integer;
+    BEGIN
+      // Минута. Больше предела ожидания NAV (10 000 мс) - чтобы жертва успела отвалиться
+      // по нему и эпизод получил честный исход, - и заведомо больше, чем нужно прогону на
+      // проход и нажатие кнопки. Меньше минуты не годится: на холодной службе первый
+      // проход платит за сборку business assemblies, и окно съедается целиком.
+      EXIT(60000);
+    END;
+
+    LOCAL PROCEDURE TargetInstanceId@3() : Integer;
+    BEGIN
+      // Та же мишень, что и у прогона по живой блокировке: отрицательные номера сеанса и
+      // экземпляра настоящими не бывают, и столкнуться с чужой отметкой нельзя.
+      EXIT(-1);
+    END;
+
+    LOCAL PROCEDURE TargetSessionId@4() : Integer;
+    BEGIN
+      EXIT(-1);
+    END;
+
+    LOCAL PROCEDURE HeldDocumentNo@5() : Code[20];
+    BEGIN
+      EXIT('HELD-BY-NAV');
+    END;
+
     LOCAL PROCEDURE HeldRegisterNo@8() : Integer;
     BEGIN
       // Номер строки-мишени в G/L Register. Он же ключ: номер у таблицы первичный, и
@@ -166,6 +173,14 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
       EXIT(30000);
     END;
 
+    LOCAL PROCEDURE SleepHalves@20() : Integer;
+    BEGIN
+      // Удержание делится на две половины: первый счёт берётся до прихода ждущего, второй
+      // после. Две половины, а не одно ожидание целиком, - иначе второй счёт нечем
+      // отличить от первого.
+      EXIT(2);
+    END;
+
     BEGIN
     {
       Держатель блокировки для проверки дороги к имени ЧЕЛОВЕКА.
@@ -178,7 +193,7 @@ OBJECT Codeunit 110242 LockWatch Hold Bench
       Ответ он отдаёт машиночитаемой строкой и на обоих языках одинаково: разбирать её
       прогону, а не читать человеку, и зависеть от языка службы разбор не должен.
 
-      Объект мерный, как и Codeunit 110233: в бою он не нужен и вреда не приносит - без
+      Объект мерный, как и Codeunit 110245: в бою он не нужен и вреда не приносит - без
       строки-мишени он просто отказывается работать.
 
       Две мишени - HoldWithUserRow и WaitWithUserRow - ставят опыт для дороги "по строке

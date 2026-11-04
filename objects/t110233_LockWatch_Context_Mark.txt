@@ -2,7 +2,7 @@ OBJECT Table 110233 LockWatch Context Mark
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -141,15 +141,6 @@ OBJECT Table 110233 LockWatch Context Mark
       EXIT(Removed);
     END;
 
-    LOCAL PROCEDURE KeepMarkMs@5() : Duration;
-    BEGIN
-      // Сутки. Отметка живёт до следующей записи того же сеанса, и суточная - это почти
-      // наверняка след работы, которая кончилась. Меньше нельзя: сеанс, оставленный на
-      // ночь, пишет редко, и уборка отняла бы у него отметку прямо посреди работы. Больше
-      // незачем: мусор этот не нужен уже через час, а ждать дольше значит носить его.
-      EXIT(86400000);
-    END;
-
     LOCAL PROCEDURE FillFrom@3(ContextTableNo@1000000000 : Integer;DocumentNo@1000000001 : Code[20]);
     BEGIN
       "User Id" := COPYSTR(USERID,1,MAXSTRLEN("User Id"));
@@ -157,6 +148,22 @@ OBJECT Table 110233 LockWatch Context Mark
       "Table No." := ContextTableNo;
       "Document No." := DocumentNo;
       "Marked At" := CURRENTDATETIME;
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@6();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Срок жизни отметки - обещание уборке, а не среда.
+    END;
+
+    LOCAL PROCEDURE KeepMarkMs@5() : Duration;
+    BEGIN
+      // Сутки. Отметка живёт до следующей записи того же сеанса, и суточная - это почти
+      // наверняка след работы, которая кончилась. Меньше нельзя: сеанс, оставленный на
+      // ночь, пишет редко, и уборка отняла бы у него отметку прямо посреди работы. Больше
+      // незачем: мусор этот не нужен уже через час, а ждать дольше значит носить его.
+      EXIT(86400000);
     END;
 
     BEGIN

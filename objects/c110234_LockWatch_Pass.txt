@@ -1,8 +1,8 @@
-OBJECT Codeunit 110235 LockWatch Pass
+OBJECT Codeunit 110234 LockWatch Pass
 {
   OBJECT-PROPERTIES
   {
-    Date=19.10.26;
+    Date=02.11.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -17,12 +17,13 @@ OBJECT Codeunit 110235 LockWatch Pass
   CODE
   {
     VAR
-      Parse@1000000000 : Codeunit 110230;
-      Sql@1000000001 : Codeunit 110234;
-      Journal@1000000002 : Codeunit 110232;
-      Coverage@1000000036 : Codeunit 110238;
-      AlertMgt@1000000040 : Codeunit 110240;
       Mark@1000000043 : Record 110233;
+      Parse@1000000000 : Codeunit 110230;
+      Sql@1000000001 : Codeunit 110233;
+      Journal@1000000002 : Codeunit 110232;
+      Coverage@1000000036 : Codeunit 110236;
+      AlertMgt@1000000040 : Codeunit 110237;
+      Platform@1000000050 : Codeunit 110238;
       NamesFailedTxt@1000000003 : TextConst 'ENU=Episodes are logged, but table and key names are missing: %1;RUS=Эпизоды записаны, но имена таблиц и ключей не получены: %1';
       OtherDbTxt@1000000004 : TextConst 'ENU=Skipped %1 waits belonging to another database on the same server.;RUS=Пропущено %1 ожиданий, относящихся к другой базе на том же сервере.';
       QuietTxt@1000000005 : TextConst 'ENU=Pass went through, the queue is empty.;RUS=Проход прошёл, очередь пуста.';
@@ -173,7 +174,11 @@ OBJECT Codeunit 110235 LockWatch Pass
       // нечего вовсе - ожидание кончилось ровно потому, что блокировку отпустили. Пока
       // же эпизод идёт, вопрос повторяется каждым проходом: отметка виновника появляется
       // тогда, когда он трогает таблицу документа, а это бывает и позже начала ожидания.
-      Note := Note + NameDocuments(Setup."Names From Culprit Rows");
+      Note := Note + NameDocuments(Setup."Names From Culprit Rows",Setup.DocumentsPerPass);
+
+      // Имена от платформы - последней дорогой и только туда, где прежние имени не дали:
+      // отметка и строка виновника называют сеанс точнее, а штатная таблица дорога.
+      Note := Note + Platform.NameInPass;
 
       // Уведомление создаётся ПОСЛЕ разбора документа: в него должны попасть и номер
       // документа, и учётная запись, а до разбора их ещё нет.
@@ -235,7 +240,8 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE NameDocuments@7(WantCulpritRow@1000000003 : Boolean) : Text;
+    LOCAL PROCEDURE NameDocuments@7(WantCulpritRow@1000000003 : Boolean;
+                                   DocumentsPerPass@1000000006 : Integer) : Text;
     VAR
       Pending@1000000000 : TEMPORARY Record 110231;
       Context@1000000002 : TEMPORARY Record 110232;
@@ -246,7 +252,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       // Разбирать нечего - и запроса не будет вовсе. Это и есть ответ на "dm_tran_locks
       // в цикле не трогать никогда": на тихом сервере цикл её не трогает, а на шумном
       // читает один раз на проход, а не один раз на эпизод.
-      Picked := Journal.PickUnresolved(Pending,Parse.MaxDocumentsPerPass);
+      Picked := Journal.PickUnresolved(Pending,DocumentsPerPass);
       IF Picked = 0 THEN
         EXIT('');
       LoadContext(Context);
@@ -281,7 +287,7 @@ OBJECT Codeunit 110235 LockWatch Pass
                                 NoMarkTxt,Pending."Victim User Name",
                                 Pending."Culprit Document No.",Pending."User Source",Sessions);
         UNTIL Pending.NEXT = 0;
-      // Обрезка списка интересных блокировок (MaxLocks в Codeunit 110234) называется вслух
+      // Обрезка списка интересных блокировок (MaxLocks в Codeunit 110233) называется вслух
       // тем же словом прохода. У эпизодов, чьи блокировки в список не влезли, документ и
       // имя остались пустыми, и пустая колонка без этого слова читается как "ответа не
       // было", хотя ответ просто не искали.
@@ -355,13 +361,6 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(Result);
     END;
 
-    LOCAL PROCEDURE LiveSessionsCap@19() : Integer;
-    BEGIN
-      // Сто живых сеансов одной учётки - это уже не человек за экраном, а ферма заданий.
-      // Больше не влезло бы и в поле в 250 знаков. Предел стоит ради границы массива, а
-      // не ради ответа "сто": упереться в него на живой установке неоткуда.
-      EXIT(100);
-    END;
 
     LOCAL PROCEDURE CollectDeadlocks@9(VAR Setup@1000000000 : Record 110230;
                                        VAR State@1000000011 : Record 110237;
@@ -655,13 +654,6 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(TrimRowsFloor);
     END;
 
-    LOCAL PROCEDURE TrimRowsFloor@13() : Integer;
-    BEGIN
-      // Пол уборки: двести строк за проход разбирают суточный завал за минуты и никому не
-      // мешают. Ниже него уборка не опускается, даже если потолок наблюдения занижен до
-      // единиц: тогда завал не разобрался бы вовсе.
-      EXIT(200);
-    END;
 
     LOCAL PROCEDURE SweptNote@15(Swept@1000000000 : Integer) : Text;
     BEGIN
@@ -672,17 +664,6 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(' ' + STRSUBSTNO(SweptTxt,Swept));
     END;
 
-    LOCAL PROCEDURE MarkSweepPerPass@16() : Integer;
-    BEGIN
-      // Тысяча отметок за проход, и потолок этот НЕ общий с уборкой журнала. Граница у него
-      // чужая: свыше пяти тысяч строк в одном операторе сервер переводит замки на ВСЮ
-      // таблицу, а таблица отметок - единственная, куда пишут сессии заказчика. Уборка,
-      // запирающая её целиком, стоила бы ровно того, что инструмент и ловит.
-      //
-      // Тысячи хватает с запасом: на стенде за двенадцать дней набралось 82 057 разных пар
-      // "экземпляр плюс сеанс", а тысяча за проход разбирает такой завал за минуты.
-      EXIT(1000);
-    END;
 
     LOCAL PROCEDURE MovedNote@14(Moved@1000000000 : Integer;Dropped@1000000001 : Integer) : Text;
     BEGIN
@@ -718,6 +699,41 @@ OBJECT Codeunit 110235 LockWatch Pass
       EXIT(' ' + STRSUBSTNO(MergedTxt,Merged));
     END;
 
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@21();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Эти три - пределы самого прохода.
+    END;
+
+    LOCAL PROCEDURE LiveSessionsCap@19() : Integer;
+    BEGIN
+      // Сто живых сеансов одной учётки - это уже не человек за экраном, а ферма заданий.
+      // Больше не влезло бы и в поле в 250 знаков. Предел стоит ради границы массива, а
+      // не ради ответа "сто": упереться в него на живой установке неоткуда.
+      EXIT(100);
+    END;
+
+    LOCAL PROCEDURE TrimRowsFloor@13() : Integer;
+    BEGIN
+      // Пол уборки: двести строк за проход разбирают суточный завал за минуты и никому не
+      // мешают. Ниже него уборка не опускается, даже если потолок наблюдения занижен до
+      // единиц: тогда завал не разобрался бы вовсе.
+      EXIT(200);
+    END;
+
+    LOCAL PROCEDURE MarkSweepPerPass@16() : Integer;
+    BEGIN
+      // Тысяча отметок за проход, и потолок этот НЕ общий с уборкой журнала. Граница у него
+      // чужая: свыше пяти тысяч строк в одном операторе сервер переводит замки на ВСЮ
+      // таблицу, а таблица отметок - единственная, куда пишут сессии заказчика. Уборка,
+      // запирающая её целиком, стоила бы ровно того, что инструмент и ловит.
+      //
+      // Тысячи хватает с запасом: на стенде за двенадцать дней набралось 82 057 разных пар
+      // "экземпляр плюс сеанс", а тысяча за проход разбирает такой завал за минуты.
+      EXIT(1000);
+    END;
+
     BEGIN
     {
       Проход целиком - от очереди SQL до строки в журнале. Здесь нет ни разбора (он в
@@ -737,7 +753,7 @@ OBJECT Codeunit 110235 LockWatch Pass
       всем ждущим, и посчитать "жертв за головой" отдельно для каждой строки значило бы
       получить куб от числа ждущих: на пятистах это сотни миллионов сравнений.
 
-      COMMIT здесь ровно один на проход - тот самый, чью цену меряет Codeunit 110233.
+      COMMIT здесь ровно один на проход - тот самый, чью цену меряет Codeunit 110245.
       Второй бывает только в проходе, где строки ждали письма (AlertMgt.DeliverPending):
       почта - внешний вызов на секунды, и держать её под транзакцией наблюдения нельзя, а
       отказ SMTP не должен стоить журнала. Время прохода считается ДО отправки, поэтому в

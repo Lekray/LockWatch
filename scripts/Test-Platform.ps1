@@ -17,7 +17,7 @@
 
     Держателем блокировки здесь может быть только СЕССИЯ NAV: штатная таблица показывает
     лишь те транзакции, что платформа завела в свою карту, а соединение sqlcmd в неё не
-    попадает никогда. Держит Codeunit 110242, ждёт всё тот же sqlcmd.
+    попадает никогда. Держит Codeunit 110247, ждёт всё тот же sqlcmd.
 
     Прогон возвращает ключ в то состояние, в котором его нашёл, - и настройку тоже: имена от
     платформы, канал уведомлений и сбор кругов он правит на время опыта, а возвращает теми,
@@ -38,9 +38,9 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $PassCodeunitId = 110235,
-    [int]    $PlatformCodeunitId = 110241,
-    [int]    $HoldCodeunitId = 110242,
+    [int]    $PassCodeunitId = 110234,
+    [int]    $PlatformCodeunitId = 110238,
+    [int]    $HoldCodeunitId = 110247,
     [switch] $KeepJournal,
     [switch] $StopInstance
 )
@@ -75,6 +75,7 @@ $setup   = '[LockWatch Setup]'
 $mark    = "[$Company`$LockWatch Context Mark]"
 # Та же таблица, но именем, каким её пишет в журнал разбор: без компании и без скобок.
 $markName = 'LockWatch Context Mark'
+$watchdog = '[LockWatch Watchdog]'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 $expectedUser = "$env:USERDOMAIN\$env:USERNAME"
 
@@ -307,6 +308,16 @@ WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($waiter.Id);
         (($rows -ge 1) -and ($w[0] -eq $markName) -and
          ($w[1] -match '(?i)dynamics nav') -and ($w[2] -eq '2')) `
         "строк в журнале $rows, таблица [$($w[0])] при ожидаемой [$markName], держал [$($w[1])], жертва - сессия NAV $($w[2]) при ожидаемом 2 (нет, ждёт sqlcmd)"
+
+    # Проход при включённых именах спрашивает платформу САМ, без кнопки, и говорит об этом
+    # строкой сторожа: "названо N из M". Карта на стенде пуста (раздел 26), поэтому
+    # проверяется не имя, а то, что вопрос задан и имя не выдумано. Что карта живая и
+    # платформа называет человека, видно только на установке с Windows-клиентом (раздел 106).
+    $passSaid = Scalar "SELECT [Watchdog Message] FROM $watchdog;"
+    $passSource = Scalar "SELECT TOP 1 CONVERT(varchar(11),[User Source]) FROM $episode ORDER BY [Entry No_] DESC;"
+    Check 'проход сам спросил платформу и имени не выдумал' `
+        (($passSaid -match 'Имена от платформы: \d+ из \d+|Names from the platform: \d+ of \d+') -and ($passSource -ne '2')) `
+        "сторож пишет: $passSaid; откуда имя $passSource (не 2)"
 
     # ---------- главная проверка: правду о мёртвой карте ----------
     # Здесь и выясняется цена всей затеи. Ключ взведён, права на месте, сессия мониторинга

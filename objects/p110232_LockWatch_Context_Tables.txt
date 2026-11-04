@@ -29,7 +29,7 @@ OBJECT Page 110232 LockWatch Context Tables
                       Image=Refresh;
                       PromotedCategory=Process;
                       OnAction=VAR
-                                 Task@1000000000 : Codeunit 110236;
+                                 Task@1000000000 : Codeunit 110235;
                                BEGIN
                                  MESSAGE(RefreshedTxt,Task.RefreshContextNames);
                                  CurrPage.UPDATE(FALSE);

@@ -36,8 +36,8 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $TaskCodeunitId = 110236,
-    [int]    $PassCodeunitId = 110235,
+    [int]    $TaskCodeunitId = 110235,
+    [int]    $PassCodeunitId = 110234,
     [switch] $KeepJournal,
     [switch] $StopInstance
 )

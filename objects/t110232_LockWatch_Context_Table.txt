@@ -2,7 +2,7 @@ OBJECT Table 110232 LockWatch Context Table
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -14,7 +14,8 @@ OBJECT Table 110232 LockWatch Context Table
   }
   FIELDS
   {
-    { 1   ;   ;Table No.           ;Integer       ;OnValidate=BEGIN
+    { 1   ;   ;Table No.           ;Integer       ;TableRelation=AllObjWithCaption."Object ID" WHERE (Object Type=CONST(Table));
+                                                   OnValidate=BEGIN
                                                                 SetNameFromTable;
                                                               END;
 
@@ -24,7 +25,9 @@ OBJECT Table 110232 LockWatch Context Table
     { 10  ;   ;Table Name          ;Text80        ;CaptionML=[ENU=Table Name;
                                                               RUS=Имя таблицы];
                                                    Editable=No }
-    { 11  ;   ;Document Field No.  ;Integer       ;OnValidate=BEGIN
+    { 11  ;   ;Document Field No.  ;Integer       ;TableRelation=Field.No. WHERE (TableNo=FIELD(Table No.),
+                                                                                  Class=CONST(Normal));
+                                                   OnValidate=BEGIN
                                                                 SetFieldName;
                                                               END;
 

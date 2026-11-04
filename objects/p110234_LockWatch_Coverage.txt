@@ -263,7 +263,7 @@ OBJECT Page 110234 LockWatch Coverage
   CODE
   {
     VAR
-      Coverage@1000000000 : Codeunit 110238;
+      Coverage@1000000000 : Codeunit 110236;
       CoverageSince@1000000001 : DateTime;
       CounterWaits@1000000002 : BigInteger;
       CounterMs@1000000003 : BigInteger;
@@ -301,13 +301,6 @@ OBJECT Page 110234 LockWatch Coverage
         ShareShown := ShareUnknownTxt
       ELSE
         ShareShown := FORMAT(SharePct,0,ShareFormat);
-    END;
-
-    LOCAL PROCEDURE ShareFormat@10() : Text;
-    BEGIN
-      // Один знак после запятой - ровно столько, сколько показывала прежняя десятичная
-      // колонка: сама доля берётся округлением до десятых, и второй знак был бы вымыслом.
-      EXIT('<Precision,1:1>');
     END;
 
     LOCAL PROCEDURE SetShareStyle@2();
@@ -364,6 +357,20 @@ OBJECT Page 110234 LockWatch Coverage
       PAGE.RUN(PAGE::"LockWatch Episode History",Episode);
     END;
 
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@11();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Порог доверия к экрану и имена его стилей со средой не связаны.
+    END;
+
+    LOCAL PROCEDURE ShareFormat@10() : Text;
+    BEGIN
+      // Один знак после запятой - ровно столько, сколько показывала прежняя десятичная
+      // колонка: сама доля берётся округлением до десятых, и второй знак был бы вымыслом.
+      EXIT('<Precision,1:1>');
+    END;
+
     LOCAL PROCEDURE LowShare@5() : Integer;
     BEGIN
       // Половина. Ниже неё журнал называет меньше половины ожидания, и сводкой по нему
@@ -374,11 +381,14 @@ OBJECT Page 110234 LockWatch Coverage
 
     LOCAL PROCEDURE StandardStyle@6() : Text[30];
     BEGIN
+      // Имя платформенного стиля. Написать его с ошибкой можно молча: неизвестный стиль
+      // клиент рисует обычным, ничего не сказав.
       EXIT('Standard');
     END;
 
     LOCAL PROCEDURE AlarmStyle@7() : Text[30];
     BEGIN
+      // Тот же довод, что и у обычного стиля: имя платформенное, и ошибка в нём молчит.
       EXIT('Unfavorable');
     END;
 

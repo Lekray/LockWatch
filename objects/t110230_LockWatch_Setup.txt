@@ -136,6 +136,27 @@ OBJECT Table 110230 LockWatch Setup
     { 51  ;   ;Names From Culprit Rows;Boolean    ;InitValue=Yes;
                                                    CaptionML=[ENU=Names from Culprit Rows;
                                                               RUS=Имена по строкам виновника] }
+    { 52  ;   ;SQL Connect Timeout (s);Integer     ;CaptionML=[ENU=SQL Connect Timeout (s);
+                                                              RUS=Таймаут соединения с SQL, с];
+                                                   MinValue=0 }
+    { 53  ;   ;SQL Read Timeout (s);Integer        ;CaptionML=[ENU=SQL Read Timeout (s);
+                                                              RUS=Таймаут команды SQL, с];
+                                                   MinValue=0 }
+    { 54  ;   ;Culprit Full Scan Rows;Integer      ;CaptionML=[ENU=Culprit Full Scan Rows;
+                                                              RUS=Таблица виновника целиком до, строк];
+                                                   MinValue=0 }
+    { 55  ;   ;Culprit Tail Rows;Integer           ;CaptionML=[ENU=Culprit Tail Rows;
+                                                              RUS=Хвост большой таблицы, строк];
+                                                   MinValue=0 }
+    { 56  ;   ;Documents per Pass;Integer          ;CaptionML=[ENU=Documents per Pass;
+                                                              RUS=Документов за проход];
+                                                   MinValue=0 }
+    { 57  ;   ;Culprit Tables per Document;Integer ;CaptionML=[ENU=Culprit Tables per Document;
+                                                              RUS=Таблиц виновника на документ];
+                                                   MinValue=0 }
+    { 58  ;   ;Culprit Hashes per Table;Integer    ;CaptionML=[ENU=Culprit Hashes per Table;
+                                                              RUS=Хэшей на таблицу виновника];
+                                                   MinValue=0 }
   }
   KEYS
   {
@@ -147,6 +168,7 @@ OBJECT Table 110230 LockWatch Setup
   CODE
   {
     VAR
+      Parse@1000000001 : Codeunit 110230;
       PeriodTooLongErr@1000000000 : TextConst 'ENU=The poll period must be shorter than the NAV lock timeout of %1 ms. An episode fits entirely inside that window, and a longer period would miss whole episodes without saying so.;RUS=Период опроса должен быть короче предела ожидания блокировки NAV в %1 мс. Эпизод целиком укладывается в это окно, и период длиннее терял бы эпизоды целиком, ничего об этом не сообщая.';
 
     [External]
@@ -175,6 +197,16 @@ OBJECT Table 110230 LockWatch Setup
       "Poll Period (ms)" := DefaultPollPeriodMs;
       "Max Rows per Pass" := DefaultMaxRows;
       "Max Pass (ms)" := DefaultMaxPassMs;
+      // Новые поля ниже получают умолчание только при заведении строки: существующая
+      // настройка после обновления приходит нулём, и правило "ноль - заводское" в
+      // чтении это переживает.
+      "SQL Connect Timeout (s)" := DefaultSqlConnectTimeoutSec;
+      "SQL Read Timeout (s)" := DefaultSqlReadTimeoutSec;
+      "Culprit Full Scan Rows" := DefaultCulpritFullScanRows;
+      "Culprit Tail Rows" := DefaultCulpritTailRows;
+      "Documents per Pass" := DefaultDocumentsPerPass;
+      "Culprit Tables per Document" := DefaultCulpritTablesPerDocument;
+      "Culprit Hashes per Table" := DefaultCulpritHashesPerTable;
       "Retention (Days)" := DefaultRetentionDays;
       "Journal Rows Ceiling" := DefaultJournalRows;
       "History Threshold (ms)" := DefaultHistoryMs;
@@ -205,8 +237,6 @@ OBJECT Table 110230 LockWatch Setup
     END;
 
     LOCAL PROCEDURE CheckPollPeriod@2();
-    VAR
-      Parse@1000000000 : Codeunit 110230;
     BEGIN
       // Предел ожидания у NAV - 10 000 мс, и эпизод целиком укладывается в это окно.
       // Период, равный пределу или больше, означает журнал, который честно пуст на
@@ -215,21 +245,146 @@ OBJECT Table 110230 LockWatch Setup
         ERROR(PeriodTooLongErr,Parse.NavLockTimeoutMs);
     END;
 
-    LOCAL PROCEDURE DefaultHistoryMs@30() : Integer;
+    [External]
+    PROCEDURE SqlConnectTimeoutSec@10() : Integer;
     BEGIN
-      // Минута. Это НЕ смысловая граница, а умолчание для среды, и потому лежит в
-      // настройке: сколько ждать не жалко, решает установка, а не разработчик.
-      //
-      // Минута взята за то, что она заведомо больше предела ожидания NAV в 10 000 мс:
-      // эпизод, переваливший её, кончился не отказом по пределу, а настоящим длинным
-      // удержанием - за таким и возвращаются через месяц. Всё, что короче, из журнала
-      // УДАЛЯЕТСЯ, а не уезжает: история, набитая эпизодами по полсекунды, перестаёт
-      // быть историей и становится вторым журналом.
-      //
-      // Ноль означает "порога нет": уезжает всё, как было до появления этого поля. Так
-      // установка, обновившая инструмент, не теряет ни строки молча - решение "что не
-      // хранить" принимает человек, а не обновление.
-      EXIT(60000);
+      // Ноль (и отрицательное) означает заводское: новое поле на старой установке
+      // приходит нулём, и это обязано работать без ручной правки.
+      IF "SQL Connect Timeout (s)" <= 0 THEN
+        EXIT(DefaultSqlConnectTimeoutSec);
+      EXIT("SQL Connect Timeout (s)");
+    END;
+
+    [External]
+    PROCEDURE SqlReadTimeoutSec@11() : Integer;
+    BEGIN
+      // Правило то же: ноль - заводское. Своей верхней границы у поля нет - медленный
+      // сервер не повод отказывать в настройке, - и потому потолок здесь не проверяется.
+      IF "SQL Read Timeout (s)" <= 0 THEN
+        EXIT(DefaultSqlReadTimeoutSec);
+      EXIT("SQL Read Timeout (s)");
+    END;
+
+    [External]
+    PROCEDURE CulpritFullScanRows@12() : Integer;
+    BEGIN
+      // Ноль - заводское. Верхней границы нет: порог этот и есть решение установки о
+      // том, с какого размера таблица читается хвостом, а не целиком.
+      IF "Culprit Full Scan Rows" <= 0 THEN
+        EXIT(DefaultCulpritFullScanRows);
+      EXIT("Culprit Full Scan Rows");
+    END;
+
+    [External]
+    PROCEDURE CulpritTailRows@13() : Integer;
+    BEGIN
+      // Ноль - заводское. Верхней границы нет: хвост тем и хорош, что его длину
+      // назначает установка, зная цену чтения своей таблицы.
+      IF "Culprit Tail Rows" <= 0 THEN
+        EXIT(DefaultCulpritTailRows);
+      EXIT("Culprit Tail Rows");
+    END;
+
+    [External]
+    PROCEDURE DocumentsPerPass@14() : Integer;
+    BEGIN
+      // Ноль - заводское. Потолок - собственный предел разбора: выше него эпизоды
+      // просто некуда положить, и запрос всё равно не отдаст больше.
+      IF "Documents per Pass" <= 0 THEN
+        EXIT(DefaultDocumentsPerPass);
+      IF "Documents per Pass" > Parse.MaxDocumentsPerPass THEN
+        EXIT(Parse.MaxDocumentsPerPass);
+      EXIT("Documents per Pass");
+    END;
+
+    [External]
+    PROCEDURE CulpritTablesPerDocument@15() : Integer;
+    BEGIN
+      // Ноль - заводское. Потолок - размер массива таблиц эпизода: больше в него не
+      // влезет, и предел стоит в самом запросе.
+      IF "Culprit Tables per Document" <= 0 THEN
+        EXIT(DefaultCulpritTablesPerDocument);
+      IF "Culprit Tables per Document" > Parse.MaxCulpritTables THEN
+        EXIT(Parse.MaxCulpritTables);
+      EXIT("Culprit Tables per Document");
+    END;
+
+    [External]
+    PROCEDURE CulpritHashesPerTable@16() : Integer;
+    BEGIN
+      // Ноль - заводское. Потолок - размер массива хэшей: больше SQL и не отдаст,
+      // потому что предел стоит в самом запросе.
+      IF "Culprit Hashes per Table" <= 0 THEN
+        EXIT(DefaultCulpritHashesPerTable);
+      IF "Culprit Hashes per Table" > Parse.MaxCulpritHashesPerTable THEN
+        EXIT(Parse.MaxCulpritHashesPerTable);
+      EXIT("Culprit Hashes per Table");
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@17();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup - эти процедуры и есть её умолчания.
+    END;
+
+    LOCAL PROCEDURE DefaultSqlConnectTimeoutSec@18() : Integer;
+    BEGIN
+      // Пять секунд на подключение и пять на чтение дают ровно предел ожидания
+      // блокировки NAV в 10 000 мс: дольше висеть соединению не дадут по построению.
+      EXIT(5);
+    END;
+
+    LOCAL PROCEDURE DefaultSqlReadTimeoutSec@19() : Integer;
+    BEGIN
+      // Съём при двухстах ждущих стоит 12 мс. Пять секунд - это не запас на медленный
+      // запрос, а признак того, что сервер стоит совсем: ждать дольше бессмысленно.
+      EXIT(5);
+    END;
+
+    LOCAL PROCEDURE DefaultCulpritFullScanRows@20() : Integer;
+    BEGIN
+      // До этого размера таблица читается целиком по хэшам: у %%lockres%% индекса нет,
+      // и отбор по нему всё равно означает скан - значит, скан небольшой таблицы дешевле
+      // любой хитрости. Сто тысяч строк - это таблица накладных небольшой установки.
+      EXIT(100000);
+    END;
+
+    LOCAL PROCEDURE DefaultCulpritTailRows@21() : Integer;
+    BEGIN
+      // А это - сколько строк читается у большой таблицы. Только хвост: проводка пишет
+      // свежие строки, и номера записей растут, то есть нужная строка стоит последней
+      // в кластерном ключе. Тысяча строк - это несколько сотых секунды, тогда как скан
+      // таблицы в миллионы строк стоил бы секунд, и всё это время очередь стоит.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE DefaultDocumentsPerPass@22() : Integer;
+    BEGIN
+      // Сколько эпизодов за проход разбираются до номера документа. Разбор стоит чтения
+      // dm_tran_locks - 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не
+      // помогает вовсе. Десяток за проход - это один такой скан на проход и только тогда,
+      // когда есть что разбирать: на тихом сервере чтения не происходит вовсе.
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE DefaultCulpritTablesPerDocument@23() : Integer;
+    BEGIN
+      // Сколько таблиц виновника читаются за один эпизод. Верхний предел, а не ожидание:
+      // проводка трогает шапку, строки, книгу и настройку - это единицы. Десяток покрывает
+      // такую проводку целиком, и при трёх хэшах на таблицу и десятке эпизодов за проход
+      // список не превышает трёхсот строк - их ещё можно прочитать, не став сторожем
+      // собственной же нагрузки.
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE DefaultCulpritHashesPerTable@24() : Integer;
+    BEGIN
+      // Сколько разных страниц (хэшей) читаются по одной таблице. Строки одной транзакции
+      // в одной таблице ложатся на соседние страницы, и трёх хэшей хватает на шапку и пару
+      // строк. Больше - это уже не "строка виновника", а выборка таблицы: платить за неё
+      // приходится на каждом проходе, пока имя не найдено.
+      EXIT(3);
     END;
 
     LOCAL PROCEDURE DefaultPollPeriodMs@3() : Integer;
@@ -321,6 +476,30 @@ OBJECT Table 110230 LockWatch Setup
       EXIT(20000);
     END;
 
+    LOCAL PROCEDURE DefaultAlertMs@7() : Integer;
+    BEGIN
+      // Половина предела NAV. Эпизод, переваливший за пять секунд, уже заметен
+      // человеку, но ещё не кончился отказом - уведомление успевает быть полезным.
+      EXIT(5000);
+    END;
+
+    LOCAL PROCEDURE DefaultHistoryMs@30() : Integer;
+    BEGIN
+      // Минута. Это НЕ смысловая граница, а умолчание для среды, и потому лежит в
+      // настройке: сколько ждать не жалко, решает установка, а не разработчик.
+      //
+      // Минута взята за то, что она заведомо больше предела ожидания NAV в 10 000 мс:
+      // эпизод, переваливший её, кончился не отказом по пределу, а настоящим длинным
+      // удержанием - за таким и возвращаются через месяц. Всё, что короче, из журнала
+      // УДАЛЯЕТСЯ, а не уезжает: история, набитая эпизодами по полсекунды, перестаёт
+      // быть историей и становится вторым журналом.
+      //
+      // Ноль означает "порога нет": уезжает всё, как было до появления этого поля. Так
+      // установка, обновившая инструмент, не теряет ни строки молча - решение "что не
+      // хранить" принимает человек, а не обновление.
+      EXIT(60000);
+    END;
+
     LOCAL PROCEDURE DefaultEventSource@8() : Text[50];
     BEGIN
       // Имя источника событий Windows. Заводит его администратор один раз на машину, и до
@@ -328,13 +507,6 @@ OBJECT Table 110230 LockWatch Setup
       // Писать в чужой источник, скажем в источник самой службы NAV, нельзя: мониторинг
       // припишет запись платформе, и разбираться будут не с тем.
       EXIT('LockWatch');
-    END;
-
-    LOCAL PROCEDURE DefaultAlertMs@7() : Integer;
-    BEGIN
-      // Половина предела NAV. Эпизод, переваливший за пять секунд, уже заметен
-      // человеку, но ещё не кончился отказом - уведомление успевает быть полезным.
-      EXIT(5000);
     END;
 
     BEGIN

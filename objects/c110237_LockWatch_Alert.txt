@@ -1,4 +1,4 @@
-OBJECT Codeunit 110240 LockWatch Alert
+OBJECT Codeunit 110237 LockWatch Alert
 {
   OBJECT-PROPERTIES
   {
@@ -231,16 +231,6 @@ OBJECT Codeunit 110240 LockWatch Alert
       MailSessions[MailPendingCount] := Sessions;
     END;
 
-    LOCAL PROCEDURE MaxPendingMails@13() : Integer;
-    BEGIN
-      // Двадцать - тот же потолок, что MaxAlertsPerPass в разборе: больше строк один проход
-      // не заводит. Число повторено здесь потому, что размер массива объявляется
-      // константой времени компиляции, а имя у предела должно быть одно: при росте
-      // потолка разбора правка будет в двух соседних местах, и забыть второе не даст эта
-      // функция.
-      EXIT(20);
-    END;
-
     [External]
     PROCEDURE DeliverPending@9();
     VAR
@@ -291,7 +281,7 @@ OBJECT Codeunit 110240 LockWatch Alert
       // Второй COMMIT прохода - и только в том проходе, где строки ждали письма. Почта -
       // внешний вызов на секунды: держать её под транзакцией наблюдения нельзя, а отказ
       // SMTP не должен стоить журнала. Время прохода к этому мигу уже посчитано и
-      // записано (Codeunit 110235), поэтому ожидание почты в Last Pass (ms) не попадает
+      // записано (Codeunit 110234), поэтому ожидание почты в Last Pass (ms) не попадает
       // и наблюдение из-за чужого SMTP не разрежается.
       IF Changed THEN
         COMMIT;
@@ -315,6 +305,23 @@ OBJECT Codeunit 110240 LockWatch Alert
       EXIT(STRSUBSTNO(EntryTxt,Row."Max Wait (ms)",Row."Threshold (ms)",Row."Head SPID",
                       Row."NAV Table Name",Row."NAV Key No.",Row."Document No.",
                       Row."User Name",FORMAT(StartedAt,0,0),Sessions,Row.Advice));
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@14();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Потолок очереди писем связан с размером массива, а не со средой.
+    END;
+
+    LOCAL PROCEDURE MaxPendingMails@13() : Integer;
+    BEGIN
+      // Двадцать - тот же потолок, что MaxAlertsPerPass в разборе: больше строк один проход
+      // не заводит. Число повторено здесь потому, что размер массива объявляется
+      // константой времени компиляции, а имя у предела должно быть одно: при росте
+      // потолка разбора правка будет в двух соседних местах, и забыть второе не даст эта
+      // функция.
+      EXIT(20);
     END;
 
     BEGIN

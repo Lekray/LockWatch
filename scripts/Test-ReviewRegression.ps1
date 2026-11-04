@@ -129,7 +129,7 @@ function Restore-Rows([string]$table,[Data.DataTable]$snapshot) {
 function Restore-Reader {
     if (-not $script:readerChanged) { return }
     Finsql ('Command=ImportObjects,File="'+(Join-Path $work 'reader-before.fob')+'",ImportAction=Overwrite,SynchronizeSchemaChanges=Force') 'restore-reader'
-    $actual=Query 'SELECT [Date],[Time],Compiled FROM dbo.[Object] WHERE [Type]=5 AND ID=110234'
+    $actual=Query 'SELECT [Date],[Time],Compiled FROM dbo.[Object] WHERE [Type]=5 AND ID=110233'
     if ($actual.Rows.Count -ne 1 -or -not $actual.Rows[0].Compiled -or $actual.Rows[0].Date -ne $originalObject.Rows[0].Date -or $actual.Rows[0].Time -ne $originalObject.Rows[0].Time) {
         throw 'The original reader was not restored by stamp and Compiled.'
     }
@@ -155,7 +155,7 @@ try {
     $stateBefore=Query 'SELECT * FROM [LockWatch Watchdog]'
     $coverageBefore=Query "SELECT * FROM $coverageTable"
     if ($setupBefore.Rows.Count -ne 1 -or $stateBefore.Rows.Count -ne 1) { throw 'Initialize LockWatch before the regression.' }
-    if ($setupBefore.Rows[0].Enabled -ne 0 -or [int](Scalar 'SELECT COUNT(*) FROM [Scheduled Task] WHERE [Run Codeunit]=110236') -ne 0) {
+    if ($setupBefore.Rows[0].Enabled -ne 0 -or [int](Scalar 'SELECT COUNT(*) FROM [Scheduled Task] WHERE [Run Codeunit]=110235') -ne 0) {
         throw 'Stop the watch before running this isolated regression.'
     }
     $prepared=$true
@@ -167,11 +167,11 @@ try {
         $tableCreated=$true
         Execute "CREATE TABLE $counterTable (Id int NOT NULL PRIMARY KEY,Value int NOT NULL); INSERT $counterTable VALUES(1,0);"
         $objectId=[int](Scalar "SELECT OBJECT_ID($(Q $tag));")
-        $originalObject=Query 'SELECT [Date],[Time],Compiled FROM dbo.[Object] WHERE [Type]=5 AND ID=110234'
+        $originalObject=Query 'SELECT [Date],[Time],Compiled FROM dbo.[Object] WHERE [Type]=5 AND ID=110233'
         if ($originalObject.Rows.Count -ne 1 -or -not $originalObject.Rows[0].Compiled) { throw 'Deploy a compiled SQL reader first.' }
-        Finsql ('Command=ExportObjects,File="'+(Join-Path $work 'reader-before.fob')+'",Filter="Type=Codeunit;ID=110234"') 'export-reader'
+        Finsql ('Command=ExportObjects,File="'+(Join-Path $work 'reader-before.fob')+'",Filter="Type=Codeunit;ID=110233"') 'export-reader'
         if (-not (Test-Path (Join-Path $work 'reader-before.fob'))) { throw 'Reader rollback FOB missing.' }
-        $source=[IO.File]::ReadAllText((Join-Path $root 'objects/c110234_LockWatch_Sql.txt'),[Text.Encoding]::UTF8)
+        $source=[IO.File]::ReadAllText((Join-Path $root 'objects/c110233_LockWatch_Sql.txt'),[Text.Encoding]::UTF8)
         $prefix="'EXECUTE AS USER = ''$tag'';' + "
         foreach($name in @('QueueSql','CountersSql')) {
             $pattern='(?m)(SqlCmd\.CommandText := )('+[regex]::Escape($name)+'\([^\r\n]*\);)'
@@ -187,11 +187,11 @@ try {
         [IO.File]::WriteAllBytes($injected,$encoding.GetBytes($source))
         $readerChanged=$true
         Finsql ('Command=ImportObjects,File="'+$injected+'",ImportAction=Overwrite,SynchronizeSchemaChanges=Force') 'inject-reader'
-        Finsql 'Command=CompileObjects,Filter="Type=Codeunit;ID=110234"' 'compile-reader'
-        $actual=Query 'SELECT CONVERT(varchar(8),[Time],108) AS Stamp,Compiled FROM dbo.[Object] WHERE [Type]=5 AND ID=110234'
+        Finsql 'Command=CompileObjects,Filter="Type=Codeunit;ID=110233"' 'compile-reader'
+        $actual=Query 'SELECT CONVERT(varchar(8),[Time],108) AS Stamp,Compiled FROM dbo.[Object] WHERE [Type]=5 AND ID=110233'
         if (-not $actual.Rows[0].Compiled -or $actual.Rows[0].Stamp -ne $stamp) { throw 'Injected reader is not current and compiled.' }
         Restart-Stand
-        Nav 110238 'StartOver'
+        Nav 110236 'StartOver'
         Check 'zero-wait index is absent from sparse baseline' ([int](Scalar "SELECT COUNT(*) FROM $coverageTable WHERE [SQL Object Id]=$objectId") -eq 0) "object $objectId"
         if ([int](Scalar "SELECT COUNT(*) FROM $episodeTable WHERE [Entry No_]=$seedNo") -ne 0) { throw 'Regression episode key already exists.' }
         $cols=Query "SELECT c.name,t.name AS typ FROM sys.columns c JOIN sys.types t ON c.user_type_id=t.user_type_id WHERE c.object_id=OBJECT_ID($(Q $episodeTable)) AND t.name NOT IN ('timestamp','rowversion') ORDER BY c.column_id"
@@ -215,7 +215,7 @@ try {
         Make-Wait
         $dmv=Query "SELECT SUM(row_lock_wait_count+page_lock_wait_count) AS Waits,SUM(row_lock_wait_in_ms+page_lock_wait_in_ms) AS Ms FROM sys.dm_db_index_operational_stats(DB_ID(),$objectId,NULL,NULL)"
         Check 'real wait fixture' ([long]$dmv.Rows[0].Waits -gt 0 -and [long]$dmv.Rows[0].Ms -gt 0) "waits $($dmv.Rows[0].Waits), ms $($dmv.Rows[0].Ms)"
-        Nav 110235 'RunPass'
+        Nav 110234 'RunPass'
         $gain=Query "SELECT Waits,[Wait (ms)] AS Ms FROM $coverageTable WHERE [SQL Object Id]=$objectId"
         Check 'first wait counted despite denied queue' ($gain.Rows.Count -eq 1 -and [long]$gain.Rows[0].Waits -eq [long]$dmv.Rows[0].Waits -and [long]$gain.Rows[0].Ms -eq [long]$dmv.Rows[0].Ms) "counter rows $($gain.Rows.Count)"
         $after=Query "SELECT [Open],[Started At],[Last Seen At] FROM $episodeTable WHERE [Entry No_]=$seedNo"
@@ -256,7 +256,7 @@ WHERE CONVERT(nvarchar(max),e.n.query('.')) LIKE '%$tag%';
         if ($seen -eq 0) { throw 'Foreign event absent: database filtering cannot be judged.' }
         Execute "UPDATE [LockWatch Setup] SET [Deadlocks Enabled]=1; UPDATE [LockWatch Watchdog] SET [Deadlocks Read At]=CONVERT(datetime,'17530101',112),[Deadlocks Read Until]=DATEADD(minute,-2,GETUTCDATE());"
         Restart-Stand
-        Nav 110235 'RunPass'
+        Nav 110234 'RunPass'
         $foreign=[int](Scalar "SELECT COUNT(*) FROM $episodeTable WHERE [Deadlock Id]<>'' AND [Database Id]<>DB_ID() AND [SQL Object Name] LIKE '%$tag%'")
         Check 'foreign graph excluded from journal' ($foreign -eq 0) "foreign rows $foreign"
     }

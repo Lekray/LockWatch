@@ -20,8 +20,8 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $TaskCodeunitId = 110236,
-    [int]    $PermissionsCodeunitId = 110247,
+    [int]    $TaskCodeunitId = 110235,
+    [int]    $PermissionsCodeunitId = 110242,
     [int]    $AdapterObjectNo = 0,
     [int]    $MenuTargetId = 0
 )

@@ -1,8 +1,8 @@
-OBJECT Codeunit 110241 LockWatch Platform
+OBJECT Codeunit 110238 LockWatch Platform
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=02.11.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -13,7 +13,7 @@ OBJECT Codeunit 110241 LockWatch Platform
   CODE
   {
     VAR
-      Sql@1000000000 : Codeunit 110234;
+      Sql@1000000000 : Codeunit 110233;
       NoEntryErr@1000000001 : TextConst 'ENU=There is no episode %1 in the journal.;RUS=Эпизода %1 в журнале нет.';
       NoTranTxt@1000000002 : TextConst 'ENU=The episode has no culprit transaction number, and the platform road starts from it. That happens when the queue named the head of the chain but the lock itself belongs to nobody we can see.;RUS=У эпизода нет номера транзакции виновника, а дорога от платформы начинается именно с него. Так бывает, когда очередь назвала голову цепочки, а сама блокировка принадлежит тому, кого мы не видим.';
       NoRowTxt@1000000003 : TextConst 'ENU=The platform table has no row for transaction %1. The lock is most likely already released - the table shows what is held RIGHT NOW, and nothing else.;RUS=В штатной таблице нет строки для транзакции %1. Скорее всего блокировку уже отпустили: таблица показывает то, что держится ПРЯМО СЕЙЧАС, и ничего кроме.';
@@ -30,6 +30,8 @@ OBJECT Codeunit 110241 LockWatch Platform
       NamedMsg@1000000012 : TextConst 'ENU=PLATFORMNAME named %1 of %2 note %3;RUS=PLATFORMNAME named %1 of %2 note %3';
       LocksMsg@1000000014 : TextConst 'ENU=PLATFORMLOCKS rows %1 head %2;RUS=PLATFORMLOCKS rows %1 head %2';
       OffErr@1000000013 : TextConst 'ENU=Names from the platform are switched off in the setup.;RUS=Имена от платформы выключены в настройке.';
+      PassNamedTxt@1000000015 : TextConst 'ENU=Names from the platform: %1 of %2.;RUS=Имена от платформы: %1 из %2.';
+      PassFailedTxt@1000000016 : TextConst 'ENU=Names from the platform are not read: %1;RUS=Имена от платформы не прочитаны: %1';
 
     [External]
     PROCEDURE NameUser@1(EntryNo@1000000000 : Integer;VAR Reason@1000000001 : Text) : Boolean;
@@ -125,7 +127,7 @@ OBJECT Codeunit 110241 LockWatch Platform
       // Оговорка, которую нельзя не сказать: счёт ожиданий - СЕРВЕРНЫЙ и по базе не
       // отобран. Ожидание чужой базы даёт ту же картину, и различить два случая этим
       // счётом нечем. Отбор по resource_database_id живёт в самом запросе к серверу
-      // (Codeunit 110234), и пока его там нет, вердикт говорит ровно то, что видно:
+      // (Codeunit 110233), и пока его там нет, вердикт говорит ровно то, что видно:
       // "мертва, насколько это видно из нашей базы".
       IF (Rows = 0) AND (LockWaits > 0) THEN BEGIN
         Reason := STRSUBSTNO(DeadTxt,STRSUBSTNO(DeadMapTxt,LockWaits));
@@ -212,9 +214,107 @@ OBJECT Codeunit 110241 LockWatch Platform
           Shown := Shown + 1;
           IF Shown <= ShowLimit THEN
             Line := Line + FORMAT(Locks."Transaction ID") + ' ' + Locks."User Name" + ' ' +
-                    COPYSTR(Locks."Object Name",1,40) + CrLf;
+                    COPYSTR(Locks."Object Name",1,ShowNameWidth) + CrLf;
         UNTIL Locks.NEXT = 0;
       MESSAGE(LocksMsg,Shown,Line);
+    END;
+
+    [External]
+    PROCEDURE NameInPass@11() : Text;
+    VAR
+      Episode@1000000000 : Record 110231;
+      Setup@1000000001 : Record 110230;
+      EntryNos@1000000002 : ARRAY [20] OF Integer;
+      Episodes@1000000005 : Integer;
+      Named@1000000006 : Integer;
+      Index@1000000007 : Integer;
+      Trans@1000000003 : ARRAY [40] OF BigInteger;
+      Users@1000000004 : ARRAY [40] OF Code[50];
+      Changed@1000000008 : Boolean;
+    BEGIN
+      // Та же дорога, что у кнопки, но в проходе и на всех идущих эпизодах сразу, у которых
+      // нет имени виновника или ждущего. Штатная таблица читается ОДИН раз на проход и
+      // только тогда, когда спрашивать есть о ком: чтение её материализует все блокировки
+      // экземпляра (FINDSET с отбором не дешевле), и на тихом сервере проход за неё не
+      // платит ничего. Номера транзакций идут в отбор одним списком - отбор платформа
+      // накладывает уже на материализованный набор, но строки до C/AL доходят только нужные.
+      //
+      // Мост к человеку - номер транзакции, снятый со стороны SQL: у виновника - того, кто
+      // держит, у ждущего - того, кто стоит в очереди. Его ожидающая просьба лежит в той
+      // же таблице строкой со статусом WAIT и несёт его имя.
+      //
+      // Имена, уже данные отметкой контекста или строкой виновника, не переписываются:
+      // те дороги точнее - они называют сеанс, а не транзакцию. Выключатель тот же, что у
+      // кнопки, и спрашивается здесь, а не в проходе: дверей к таблице теперь четыре.
+      Setup.FetchOnce;
+      IF NOT Setup."Platform Names Enabled" THEN
+        EXIT('');
+      Episode.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Episode.SETRANGE(Open,TRUE);
+      Episode.SETFILTER("Blocker Transaction Id",'<>%1',0);
+      IF Episode.FINDSET THEN
+        REPEAT
+          IF (Episode."User Name" = '') OR
+             ((Episode."Victim User Name" = '') AND (Episode."Victim Transaction Id" <> 0))
+          THEN
+            IF Episodes < PassEpisodeLimit THEN BEGIN
+              Episodes := Episodes + 1;
+              EntryNos[Episodes] := Episode."Entry No.";
+              Trans[2 * Episodes - 1] := Episode."Blocker Transaction Id";
+              Trans[2 * Episodes] := Episode."Victim Transaction Id";
+            END;
+        UNTIL Episode.NEXT = 0;
+      IF Episodes = 0 THEN
+        EXIT('');
+
+      IF NOT TryReadUsers(Trans,Users,2 * Episodes) THEN
+        EXIT(' ' + STRSUBSTNO(PassFailedTxt,GETLASTERRORTEXT));
+
+      FOR Index := 1 TO Episodes DO
+        IF Episode.GET(EntryNos[Index]) THEN BEGIN
+          Changed := FALSE;
+          IF (Episode."User Name" = '') AND (Users[2 * Index - 1] <> '') THEN BEGIN
+            Episode."User Name" := Users[2 * Index - 1];
+            Episode."User Source" := Episode."User Source"::FromPlatform;
+            Changed := TRUE;
+          END;
+          IF (Episode."Victim User Name" = '') AND (Users[2 * Index] <> '') THEN BEGIN
+            Episode."Victim User Name" := Users[2 * Index];
+            Changed := TRUE;
+          END;
+          IF Changed THEN BEGIN
+            Episode.MODIFY;
+            Named := Named + 1;
+          END;
+        END;
+      EXIT(' ' + STRSUBSTNO(PassNamedTxt,Named,Episodes));
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryReadUsers@12(Trans@1000000000 : ARRAY [40] OF BigInteger;VAR Users@1000000001 : ARRAY [40] OF Code[50];Slots@1000000002 : Integer);
+    VAR
+      Locks@1000000003 : Record 2000000154;
+      TranFilter@1000000004 : Text;
+      Index@1000000005 : Integer;
+    BEGIN
+      // Только чтение: внутри TryFunction запись в базу запрещена платформой, поэтому
+      // имена возвращаются массивом, а журнал правит вызывающий.
+      FOR Index := 1 TO Slots DO
+        IF Trans[Index] <> 0 THEN BEGIN
+          IF TranFilter <> '' THEN
+            TranFilter := TranFilter + '|';
+          TranFilter := TranFilter + FORMAT(Trans[Index],0,9);
+        END;
+      IF TranFilter = '' THEN
+        EXIT;
+      Locks.SETFILTER("Transaction ID",TranFilter);
+      IF Locks.FINDSET THEN
+        REPEAT
+          IF Locks."User Name" <> '' THEN
+            FOR Index := 1 TO Slots DO
+              IF (Trans[Index] = Locks."Transaction ID") AND (Users[Index] = '') THEN
+                Users[Index] := COPYSTR(Locks."User Name",1,MAXSTRLEN(Users[Index]));
+        UNTIL Locks.NEXT = 0;
     END;
 
     LOCAL PROCEDURE CheckNamesOn@8();
@@ -234,6 +334,22 @@ OBJECT Codeunit 110241 LockWatch Platform
         ERROR(OffErr);
     END;
 
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@9();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Здесь ширина показа и предел строк - экран и только он.
+    END;
+
+    LOCAL PROCEDURE PassEpisodeLimit@13() : Integer;
+    BEGIN
+      // Двадцать эпизодов за проход - по два номера транзакции на каждый, сорок в отборе.
+      // Идущих эпизодов без имени в спокойной базе единицы; в шторм остальные дождутся
+      // следующего прохода, а отбор длиной в сотни номеров платформа разбирала бы дольше,
+      // чем читает саму таблицу.
+      EXIT(20);
+    END;
+
     LOCAL PROCEDURE ShowLimit@6() : Integer;
     BEGIN
       // Двадцать строк. Больше в окно всё равно не читают, а таблица в шторм отдаёт
@@ -249,6 +365,16 @@ OBJECT Codeunit 110241 LockWatch Platform
       Cr := 13;
       Lf := 10;
       EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
+    LOCAL PROCEDURE ShowNameWidth@10() : Integer;
+    BEGIN
+      // Сорок знаков на имя объекта в строке списка. Это ширина ПОКАЗА, а не длина поля:
+      // в ту же строку уже идут номер транзакции и имя пользователя, а имя объекта
+      // в поле заметно длиннее сорока знаков - целое превратило бы строку в полотно,
+      // которое не читают. Обрезка ничего не теряет: список отвечает на "что держится",
+      // а не на "как объект зовётся целиком".
+      EXIT(40);
     END;
 
     BEGIN

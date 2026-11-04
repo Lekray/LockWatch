@@ -57,8 +57,8 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $PassCodeunitId = 110235,
-    [int]    $CoverageCodeunitId = 110238,
+    [int]    $PassCodeunitId = 110234,
+    [int]    $CoverageCodeunitId = 110236,
     [switch] $ContextRoad,
     [switch] $KeepJournal,
     [switch] $StopInstance

@@ -1,7 +1,7 @@
 ﻿#requires -Version 7
 <#
 .SYNOPSIS
-    Собирает переходник-подписчик под таблицу контекста установки по образцу Codeunit 110237.
+    Собирает переходник-подписчик под таблицу контекста установки по образцу Codeunit 110244.
 
 .DESCRIPTION
     Номер таблицы у подписки `[EventSubscriber(Table,N,...)]` - КОНСТАНТА времени
@@ -28,10 +28,10 @@
     и это ещё лучший исход.
 
 .EXAMPLE
-    pwsh scripts/New-ContextAdapter.ps1 -TableNo 37 -ObjectNo 110240
+    pwsh scripts/New-ContextAdapter.ps1 -TableNo 37 -ObjectNo 110250
 
 .EXAMPLE
-    pwsh scripts/New-ContextAdapter.ps1 -TableNo 37 -ObjectNo 110240 -TableName 'Sales Line' -FieldName 'Document No.'
+    pwsh scripts/New-ContextAdapter.ps1 -TableNo 37 -ObjectNo 110250 -TableName 'Sales Line' -FieldName 'Document No.'
 #>
 [CmdletBinding()]
 param(
@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $root 'out' }
-$sample = Join-Path $root 'objects\c110237_LockWatch_Context_Adapter.txt'
+$sample = Join-Path $root 'objects\c110244_LockWatch_Context_Adapter.txt'
 
 function Fail([string]$message) { Write-Host "ОТКАЗ: $message" -ForegroundColor Red; exit 1 }
 
@@ -139,7 +139,7 @@ function Swap([string]$body, [string]$from, [string]$to, [int]$expected) {
 }
 
 # --- шапка объекта -----------------------------------------------------------------
-$text = Swap $text 'OBJECT Codeunit 110237 LockWatch Context Adapter' "OBJECT Codeunit $ObjectNo $objectName" 1
+$text = Swap $text 'OBJECT Codeunit 110244 LockWatch Context Adapter' "OBJECT Codeunit $ObjectNo $objectName" 1
 $text = Swap $text 'CODEUNIT::"LockWatch Context Adapter"' "CODEUNIT::`"$objectName`"" 2
 
 # --- подписки и тип записи ---------------------------------------------------------
@@ -204,7 +204,7 @@ $noteFrom = @'
 '@
 $noteTo = @"
       Переходник-подписчик под таблицу $TableNo. Объект СОБРАН подстановкой из образца
-      (Codeunit 110237) скриптом scripts/New-ContextAdapter.ps1 - правкой рук в нём нет.
+      (Codeunit 110244) скриптом scripts/New-ContextAdapter.ps1 - правкой рук в нём нет.
       Пересобирать его надо тем же скриптом: мест для правки пять, и промахнуться в них
       можно молча.
 "@

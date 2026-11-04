@@ -402,7 +402,7 @@ $runner = Join-Path $outDir 'uninstall-stopwatch.ps1'
 $body = @"
 `$ErrorActionPreference = 'Stop'
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110236 -MethodName StopWatch -ErrorAction Stop
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110235 -MethodName StopWatch -ErrorAction Stop
 "@
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-Null
@@ -438,7 +438,7 @@ $runner = Join-Path $outDir 'uninstall-droprights.ps1'
 $body = @"
 `$ErrorActionPreference = 'Stop'
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110247 -MethodName DropPermissionSet -ErrorAction Stop
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110242 -MethodName DropPermissionSet -ErrorAction Stop
 "@
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 $rightsSaid = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-String

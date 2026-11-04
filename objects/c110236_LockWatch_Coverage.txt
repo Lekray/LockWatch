@@ -1,8 +1,8 @@
-OBJECT Codeunit 110238 LockWatch Coverage
+OBJECT Codeunit 110236 LockWatch Coverage
 {
   OBJECT-PROPERTIES
   {
-    Date=18.10.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -237,21 +237,6 @@ OBJECT Codeunit 110238 LockWatch Coverage
       EXIT(ROUND(Share,SharePrecision));
     END;
 
-    LOCAL PROCEDURE PercentScale@12() : Decimal;
-    BEGIN
-      // Сто. Множитель должен быть ДРОБНЫМ, а не целым: с целым числом в числителе деление
-      // выходит целым, и десятые доли процента теряются молча.
-      EXIT(100);
-    END;
-
-    LOCAL PROCEDURE SharePrecision@13() : Decimal;
-    BEGIN
-      // Одна десятая процента. Мельче показывать нечего: и счётчики сервера, и журнал
-      // измеряются миллисекундами, и вторая десятая была бы шумом наблюдения, выданным за
-      // число.
-      EXIT(0.1);
-    END;
-
     LOCAL PROCEDURE ResetAll@6();
     BEGIN
       // Счёт начинается заново целиком: и приросты, и отметки последнего чтения. Оставить
@@ -269,7 +254,7 @@ OBJECT Codeunit 110238 LockWatch Coverage
     PROCEDURE StartOver@10();
     VAR
       State@1000000000 : Record 110237;
-      Sql@1000000001 : Codeunit 110234;
+      Sql@1000000001 : Codeunit 110233;
       Reading@1000000002 : TEMPORARY Record 110235;
       Rows@1000000003 : Integer;
       ReadAt@1000000004 : DateTime;
@@ -317,6 +302,28 @@ OBJECT Codeunit 110238 LockWatch Coverage
       State."Dropped Wait (ms)" := 0;
       State.MODIFY;
       COMMIT;
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@14();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Множитель и точность доли - договор с экраном, а не со средой.
+    END;
+
+    LOCAL PROCEDURE PercentScale@12() : Decimal;
+    BEGIN
+      // Сто. Множитель должен быть ДРОБНЫМ, а не целым: с целым числом в числителе деление
+      // выходит целым, и десятые доли процента теряются молча.
+      EXIT(100);
+    END;
+
+    LOCAL PROCEDURE SharePrecision@13() : Decimal;
+    BEGIN
+      // Одна десятая процента. Мельче показывать нечего: и счётчики сервера, и журнал
+      // измеряются миллисекундами, и вторая десятая была бы шумом наблюдения, выданным за
+      // число.
+      EXIT(0.1);
     END;
 
     BEGIN

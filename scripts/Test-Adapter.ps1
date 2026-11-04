@@ -48,9 +48,9 @@ param(
     [int]    $TableNo  = $env:LW_DOC_TABLE_NO,
     [int]    $FieldNo  = $env:LW_DOC_FIELD_NO,
     [int]    $AdapterObjectNo = 110250,
-    [int]    $SampleAdapterId = 110237,
-    [int]    $BenchCodeunitId = 110239,
-    [int]    $TaskCodeunitId  = 110236,
+    [int]    $SampleAdapterId = 110244,
+    [int]    $BenchCodeunitId = 110246,
+    [int]    $TaskCodeunitId  = 110235,
     [int]    $MgmtPort = 7145,
     [int]    $TimeoutMinutes = 3,
     [switch] $StopInstance
@@ -257,7 +257,7 @@ try {
     # не проверялось тогда ничем - доказано поломкой 11.09.2026: убрали у переходника
     # проверку галки целиком, и прогон остался зелёным, 5 из 5.
     Write-Host 'Вариант второй: подписчик есть, строка контекста выключена'
-    Import-Object (Join-Path $root 'objects\c110237_LockWatch_Context_Adapter.txt') 'sample-adapter'
+    Import-Object (Join-Path $root 'objects\c110244_LockWatch_Context_Adapter.txt') 'sample-adapter'
     Compile-Codeunit $SampleAdapterId 'sample-adapter'
     Invoke-Sql @"
 DELETE FROM $context WHERE [Table No_] = $sampleTableNo;

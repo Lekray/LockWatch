@@ -27,7 +27,7 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $TaskCodeunitId = 110236,
+    [int]    $TaskCodeunitId = 110235,
     [switch] $StopInstance
 )
 

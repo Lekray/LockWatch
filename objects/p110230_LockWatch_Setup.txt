@@ -2,7 +2,7 @@ OBJECT Page 110230 LockWatch Setup
 {
   OBJECT-PROPERTIES
   {
-    Date=19.10.26;
+    Date=20.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -23,9 +23,10 @@ OBJECT Page 110230 LockWatch Setup
                            ScheduledTasks := Task.ScheduledCount;
                            WatchSilent := Task.SilentNote;
                            IF WatchSilent <> '' THEN
-                             WatchSilentStyle := 'Unfavorable'
+                             WatchSilentStyle := AlarmStyle
                            ELSE
-                             WatchSilentStyle := 'Standard';
+                             WatchSilentStyle := StandardStyle;
+                           SetWatchState;
                          END;
 
     ActionList=ACTIONS
@@ -165,6 +166,18 @@ OBJECT Page 110230 LockWatch Setup
                 CaptionML=[ENU=Watch;
                            RUS=Наблюдение];
                 GroupType=Group }
+
+    { 27  ;2   ;Field     ;
+                Name=WatchState;
+                CaptionML=[ENU=Watch State;
+                           RUS=Состояние сторожа];
+                ToolTipML=[ENU=Specifies in one word whether the watch is running. Running means armed, one task in the scheduler and a fresh pass. Anything else names what is wrong, and the details are in the lines below. The page recounts it with Refresh.;
+                           RUS=Одним словом - идёт ли наблюдение. "Работает" - заведён, в планировщике одна задача и последний проход свежий. Всё остальное называет, что не так, а подробности - в строках ниже. Пересчитывается кнопкой "Обновить".];
+                ApplicationArea=#All;
+                Editable=FALSE;
+                MultiLine=Yes;
+                StyleExpr=WatchStateStyle;
+                SourceExpr=WatchState }
 
     { 3   ;2   ;Field     ;
                 Name=Enabled;
@@ -345,8 +358,8 @@ OBJECT Page 110230 LockWatch Setup
 
     { 53  ;2   ;Field     ;
                 Name=PlatformNamesEnabled;
-                ToolTipML=[ENU=Specifies whether the tool may ask the platform for the name of the PERSON behind a lock. It costs a config change, an instance restart, both SQL rights and a permanent server session that outlives the tool - so it is switched on by a decision, not by default.;
-                           RUS=Определяет, вправе ли инструмент спрашивать у платформы имя ЧЕЛОВЕКА за блокировкой. Стоит это правки конфига, перезапуска экземпляра, обоих прав SQL и постоянной серверной сессии, переживающей снятие инструмента, - поэтому включается решением, а не по умолчанию.];
+                ToolTipML=[ENU=Specifies whether the tool may ask the platform for the name of the PERSON behind a lock. It costs a config change, an instance restart, both SQL rights and a permanent server session that outlives the tool - so it is switched on by a decision, not by default. Switched on, every pass names the culprit and the waiter of the open episodes that have no name yet, reading the platform lock table once per pass and only when there is someone to name.;
+                           RUS=Определяет, вправе ли инструмент спрашивать у платформы имя ЧЕЛОВЕКА за блокировкой. Стоит это правки конфига, перезапуска экземпляра, обоих прав SQL и постоянной серверной сессии, переживающей снятие инструмента, - поэтому включается решением, а не по умолчанию. Включённая, она даёт проходу самому называть виновника и ждущего у идущих эпизодов без имени: штатная таблица блокировок читается раз за проход и только тогда, когда есть кого называть.];
                 ApplicationArea=#All;
                 SourceExpr="Platform Names Enabled" }
 
@@ -374,6 +387,74 @@ OBJECT Page 110230 LockWatch Setup
                            RUS=Определяет, вправе ли кнопка "Демо" поднимать блокировку. Снимите галку - кнопка станет недоступна. Показ нарочно держит строку несколько секунд: там, где умышленное ожидание на сервере согласуют со службой безопасности, эта галка снимает и вопрос.];
                 ApplicationArea=#All;
                 SourceExpr="Demo Enabled" }
+
+    { 25  ;1   ;Group     ;
+                CaptionML=[ENU=Parsing Limits;
+                           RUS=Пределы разбора];
+                GroupType=Group }
+
+    { 18  ;2   ;Field     ;
+                Name=SqlConnectTimeoutSec;
+                CaptionML=[ENU=SQL Connect Timeout (s);
+                           RUS=Таймаут соединения с SQL, с];
+                ToolTipML=[ENU=Specifies how many seconds to wait for a connection to SQL Server. Five seconds here and five for the command together make the NAV lock timeout of 10 000 ms - the connection is not allowed to hang longer than that by construction. Zero means the factory value.;
+                           RUS=Сколько секунд ждать подключения к серверу SQL. Пять секунд здесь и пять на команду вместе дают предел ожидания блокировки NAV в 10 000 мс - дольше висеть соединению не дадут по построению. Ноль означает заводское значение.];
+                ApplicationArea=#All;
+                SourceExpr="SQL Connect Timeout (s)" }
+
+    { 19  ;2   ;Field     ;
+                Name=SqlReadTimeoutSec;
+                CaptionML=[ENU=SQL Read Timeout (s);
+                           RUS=Таймаут команды SQL, с];
+                ToolTipML=[ENU=Specifies how many seconds to wait for a SQL query to answer. Reading the queue costs 12 ms with two hundred waiters, so five seconds is not headroom for a slow query but a sign that the server has stopped. Zero means the factory value.;
+                           RUS=Сколько секунд ждать ответа на запрос к SQL. Съём очереди при двухстах ждущих стоит 12 мс, и пять секунд - это не запас на медленный запрос, а признак того, что сервер стоит совсем. Ноль означает заводское значение.];
+                ApplicationArea=#All;
+                SourceExpr="SQL Read Timeout (s)" }
+
+    { 20  ;2   ;Field     ;
+                Name=CulpritFullScanRows;
+                CaptionML=[ENU=Culprit Full Scan Rows;
+                           RUS=Таблица виновника целиком до, строк];
+                ToolTipML=[ENU=Specifies up to what size the culprit table is read whole, picking rows by page hash. The hash has no index, so the filter means a scan anyway - and scanning a small table is cheaper than any trick. A large table is read by its tail. Zero means the factory value.;
+                           RUS=До какого размера таблица виновника читается целиком, отбирая строки по хэшу страницы. У хэша индекса нет, поэтому отбор всё равно означает скан - и скан небольшой таблицы дешевле любой хитрости. Большая таблица читается хвостом. Ноль означает заводское значение.];
+                ApplicationArea=#All;
+                SourceExpr="Culprit Full Scan Rows" }
+
+    { 21  ;2   ;Field     ;
+                Name=CulpritTailRows;
+                CaptionML=[ENU=Culprit Tail Rows;
+                           RUS=Хвост большой таблицы, строк];
+                ToolTipML=[ENU=Specifies how many last rows of a large culprit table are read. Posting writes the newest rows and record numbers grow, so the wanted row sits at the tail of the clustered key. The longer the tail, the more expensive the read on every pass until the name is found. Zero means the factory value.;
+                           RUS=Сколько последних строк большой таблицы виновника читать. Проводка пишет свежие строки, и номера записей растут, поэтому нужная строка стоит в хвосте кластерного ключа. Чем длиннее хвост, тем дороже чтение на каждом проходе, пока имя не найдено. Ноль означает заводское значение.];
+                ApplicationArea=#All;
+                SourceExpr="Culprit Tail Rows" }
+
+    { 22  ;2   ;Field     ;
+                Name=DocumentsPerPass;
+                CaptionML=[ENU=Documents per Pass;
+                           RUS=Документов за проход];
+                ToolTipML=[ENU=Specifies how many episodes per pass are resolved down to the document number. Resolution reads dm_tran_locks, whose cost grows with the number of locks and is not saved by a WHERE filter - ten episodes mean one such scan per pass. It cannot go above ten, because there is nowhere to put more episodes. Zero means the factory value.;
+                           RUS=Сколько эпизодов за один проход разбираются до номера документа. Разбор читает dm_tran_locks, а его цена растёт с числом блокировок и не спасается отбором в WHERE - десяток эпизодов это один такой скан на проход. Выше десяти значение не поднимется, потому что больше эпизодов некуда положить. Ноль означает заводское значение.];
+                ApplicationArea=#All;
+                SourceExpr="Documents per Pass" }
+
+    { 23  ;2   ;Field     ;
+                Name=CulpritTablesPerDocument;
+                CaptionML=[ENU=Culprit Tables per Document;
+                           RUS=Таблиц виновника на документ];
+                ToolTipML=[ENU=Specifies how many culprit tables are read per episode. A ceiling rather than an expectation: a posting touches a header, lines, a ledger and a setup - single digits. It cannot go above ten, because there is nowhere to put more tables. Zero means the factory value.;
+                           RUS=Сколько таблиц виновника читать по одному эпизоду. Верхний предел, а не ожидание: проводка трогает шапку, строки, книгу и настройку - это единицы. Выше десяти значение не поднимется, потому что больше таблиц некуда положить. Ноль означает заводское значение.];
+                ApplicationArea=#All;
+                SourceExpr="Culprit Tables per Document" }
+
+    { 24  ;2   ;Field     ;
+                Name=CulpritHashesPerTable;
+                CaptionML=[ENU=Culprit Hashes per Table;
+                           RUS=Хэшей на таблицу виновника];
+                ToolTipML=[ENU=Specifies how many different pages (hashes) are read per culprit table. Rows of one transaction land on neighbouring pages, and three hashes cover a header and a couple of lines. More than that is a table sample, and it is paid for on every pass until the name is found. It cannot go above three. Zero means the factory value.;
+                           RUS=Сколько разных страниц (хэшей) читать по одной таблице виновника. Строки одной транзакции ложатся на соседние страницы, и трёх хэшей хватает на шапку и пару строк. Больше - это уже выборка таблицы, и платить за неё приходится на каждом проходе, пока имя не найдено. Выше трёх значение не поднимется. Ноль означает заводское значение.];
+                ApplicationArea=#All;
+                SourceExpr="Culprit Hashes per Table" }
 
     { 12  ;1   ;Group     ;
                 CaptionML=[ENU=Last Pass;
@@ -446,12 +527,20 @@ OBJECT Page 110230 LockWatch Setup
   CODE
   {
     VAR
-      Task@1000000000 : Codeunit 110236;
+      Task@1000000000 : Codeunit 110235;
+      Platform@1000000002 : Codeunit 110238;
+      Demo@1000000003 : Codeunit 110239;
       ScheduledTasks@1000000001 : Integer;
       WatchSilent@1000000004 : Text;
       WatchSilentStyle@1000000005 : Text;
-      Platform@1000000002 : Codeunit 110241;
-      Demo@1000000003 : Codeunit 110244;
+      WatchState@1000000006 : Text;
+      WatchStateStyle@1000000007 : Text;
+      StateRunningTxt@1000000008 : TextConst 'ENU=Running;RUS=Работает';
+      StateStoppedTxt@1000000009 : TextConst 'ENU=Stopped;RUS=Остановлен';
+      StateNoTaskTxt@1000000010 : TextConst 'ENU=Not running: no task in the scheduler, start it again;RUS=Не работает: задачи в планировщике нет, заведите заново';
+      StateManyTasksTxt@1000000011 : TextConst 'ENU=Running twice: %1 tasks in the scheduler, stop and start again;RUS=Работает дважды: задач в планировщике %1, остановите и заведите заново';
+      StateFirstPassTxt@1000000012 : TextConst 'ENU=Armed, no pass yet;RUS=Заведён, проходов ещё не было';
+      StateSilentTxt@1000000013 : TextConst 'ENU=Not running: no passes, see Chain Health;RUS=Не работает: проходов нет, см. "Здоровье цепочки"';
 
     LOCAL PROCEDURE CheckPlatformRoad@1();
     BEGIN
@@ -460,6 +549,75 @@ OBJECT Page 110230 LockWatch Setup
       // проверенным окажется не то, чем пользуются.
       Platform.CheckRoad;
       CurrPage.UPDATE(FALSE);
+    END;
+
+    LOCAL PROCEDURE SetWatchState@5();
+    BEGIN
+      // Одно слово на все строки ниже: галка, число задач и здоровье цепочки по отдельности
+      // правдивы, но ответа "идёт ли наблюдение" не дают ни одна из них. Порядок проверок -
+      // от того, что чинится кнопкой, к тому, что видно только по времени.
+      WatchStateStyle := AlarmStyle;
+      CALCFIELDS("Last Pass At");
+      CASE TRUE OF
+        NOT Enabled:
+          BEGIN
+            WatchState := StateStoppedTxt;
+            WatchStateStyle := StoppedStyle;
+          END;
+        ScheduledTasks = 0:
+          WatchState := StateNoTaskTxt;
+        ScheduledTasks > 1:
+          WatchState := STRSUBSTNO(StateManyTasksTxt,ScheduledTasks);
+        "Last Pass At" = 0DT:
+          BEGIN
+            WatchState := StateFirstPassTxt;
+            WatchStateStyle := PendingStyle;
+          END;
+        WatchSilent <> '':
+          WatchState := StateSilentTxt;
+        ELSE BEGIN
+          WatchState := StateRunningTxt;
+          WatchStateStyle := RunningStyle;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@2();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Имена стилей показа со средой не связаны.
+    END;
+
+    LOCAL PROCEDURE StandardStyle@3() : Text[30];
+    BEGIN
+      // Имя платформенного стиля. Написать его с ошибкой можно молча: неизвестный
+      // стиль клиент рисует обычным, ничего не сказав.
+      EXIT('Standard');
+    END;
+
+    LOCAL PROCEDURE AlarmStyle@4() : Text[30];
+    BEGIN
+      // Тот же довод, что и у обычного стиля: имя платформенное, и ошибка в нём молчит.
+      EXIT('Unfavorable');
+    END;
+
+    LOCAL PROCEDURE RunningStyle@6() : Text[30];
+    BEGIN
+      // Тот же довод: имя платформенное. Зелёный - единственный цвет, который значит "всё идёт".
+      EXIT('Favorable');
+    END;
+
+    LOCAL PROCEDURE StoppedStyle@7() : Text[30];
+    BEGIN
+      // Остановленный сторож - не беда, а выбор человека: жирным, но не красным.
+      EXIT('Strong');
+    END;
+
+    LOCAL PROCEDURE PendingStyle@8() : Text[30];
+    BEGIN
+      // Заведён, но первого прохода ещё нет: секунды после завода, а не поломка.
+      EXIT('Ambiguous');
     END;
 
     BEGIN

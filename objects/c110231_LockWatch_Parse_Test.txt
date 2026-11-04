@@ -144,7 +144,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Строка снята с живого ожидания на стенде 07.09.2026, не придумана.
       Ok := Parse.ParseWaitResource(SampleKeyLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitKeyTxt,
-        Ok AND (Kind = 'keylock') AND (HobtId = SampleHobt) AND (DatabaseId = 7),
+        Ok AND (Kind = ResourceKeyLock) AND (HobtId = SampleHobt) AND
+        (DatabaseId = SampleDatabaseId),
         STRSUBSTNO(WaitKeyTxt,Kind,HobtId,DatabaseId,ObjectId));
     END;
 
@@ -160,7 +161,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // значит разрешить его в постороннюю таблицу - и это будет выглядеть правдоподобно.
       Ok := Parse.ParseWaitResource(SampleObjectLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitObjTxt,
-        Ok AND (Kind = 'objectlock') AND (ObjectId = 1115203073) AND (HobtId = 0),
+        Ok AND (Kind = ResourceObjectLock) AND (ObjectId = SampleObjectId) AND (HobtId = 0),
         STRSUBSTNO(WaitObjTxt,ObjectId,HobtId));
     END;
 
@@ -188,7 +189,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       DatabaseId@1000000006 : Integer;
       Ok@1000000008 : Boolean;
     BEGIN
-      Ok := Parse.ParseWaitResource('something else entirely',Kind,HobtId,ObjectId,DatabaseId);
+      Ok := Parse.ParseWaitResource(JunkWaitResource,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitJunkTxt,NOT Ok,STRSUBSTNO(WaitJunkTxt,Ok));
     END;
 
@@ -199,10 +200,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     BEGIN
       // dm_tran_locks добивает хэш пробелами до ширины столбца, а страничный ресурс
       // выглядит как 1:25456 и хэшем не является вовсе.
-      Hash := Parse.TrimLockHash('(92410d4f079d)                    ');
-      NotHash := Parse.TrimLockHash('1:25456   ');
+      Hash := Parse.TrimLockHash(SampleLockHashPadded);
+      NotHash := Parse.TrimLockHash(SamplePageResource);
       Check(Passed,Total,Report,ChkHashTxt,
-        (Hash = '(92410d4f079d)') AND (NotHash = ''),
+        (Hash = SampleLockHash) AND (NotHash = ''),
         STRSUBSTNO(HashTxt,Hash,NotHash));
     END;
 
@@ -213,9 +214,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       SiftKeyNo@1000000005 : Integer;
       Ok@1000000006 : Boolean;
     BEGIN
-      Ok := Parse.SplitSqlObjectName('CRONUS$Sales Line',Company,TableName,SiftKeyNo);
+      Ok := Parse.SplitSqlObjectName(SampleSqlObjectName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitPlainTxt,
-        Ok AND (Company = 'CRONUS') AND (TableName = 'Sales Line') AND (SiftKeyNo = Parse.UnknownKeyNo),
+        Ok AND (Company = SampleCompanySql) AND (TableName = SampleTableSql) AND
+        (SiftKeyNo = Parse.UnknownKeyNo),
         STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
@@ -226,10 +228,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       SiftKeyNo@1000000005 : Integer;
       Ok@1000000006 : Boolean;
     BEGIN
-      // Object - штатная таблица с DataPerCompany=No: префикса компании у неё нет.
-      Ok := Parse.SplitSqlObjectName('Object',Company,TableName,SiftKeyNo);
+      // Настройка инструмента объявлена с DataPerCompany=No: префикса компании у неё нет.
+      Ok := Parse.SplitSqlObjectName(NoCompanyTableName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitNoCoTxt,
-        Ok AND (Company = '') AND (TableName = 'Object'),
+        Ok AND (Company = '') AND (TableName = NoCompanyTableName),
         STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
@@ -243,9 +245,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Самый частый случай блокировок NAV садится не на таблицу, а на её SIFT-агрегат.
       // Правило "номер ключа из имени индекса" на нём даёт VSIFTIDX, то есть ничего:
       // номер лежит в имени самого представления, после последнего $VSIFT$.
-      Ok := Parse.SplitSqlObjectName('CRONUS$Sales Line$VSIFT$3',Company,TableName,SiftKeyNo);
+      Ok := Parse.SplitSqlObjectName(SampleSiftSqlObjectName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitSiftTxt,
-        Ok AND (Company = 'CRONUS') AND (TableName = 'Sales Line') AND (SiftKeyNo = 3),
+        Ok AND (Company = SampleCompanySql) AND (TableName = SampleTableSql) AND
+        (SiftKeyNo = SampleSiftKeyNo),
         STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
@@ -258,7 +261,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     BEGIN
       // $ndo$dbproperty начинается с $, и наивное правило "до первого $ - компания"
       // выдало бы безымянную компанию и таблицу ndo$dbproperty. Правдоподобно и неверно.
-      Ok := Parse.SplitSqlObjectName('$ndo$dbproperty',Company,TableName,SiftKeyNo);
+      Ok := Parse.SplitSqlObjectName(PlatformSqlObjectName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitNdoTxt,NOT Ok,STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
@@ -268,11 +271,12 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Secondary@1000000004 : Integer;
       Sift@1000000005 : Integer;
     BEGIN
-      Clustered := Parse.KeyNoFromIndexName('CRONUS$Sales Line$0');
-      Secondary := Parse.KeyNoFromIndexName('$13');
-      Sift := Parse.KeyNoFromIndexName('VSIFTIDX');
+      Clustered := Parse.KeyNoFromIndexName(SampleClusteredIndexName);
+      Secondary := Parse.KeyNoFromIndexName(SampleSecondaryIndexName);
+      Sift := Parse.KeyNoFromIndexName(SiftIndexName);
       Check(Passed,Total,Report,ChkKeyNoTxt,
-        (Clustered = 0) AND (Secondary = 13) AND (Sift = Parse.UnknownKeyNo),
+        (Clustered = ClusteredKeyNo) AND (Secondary = SampleSecondaryKeyNo) AND
+        (Sift = Parse.UnknownKeyNo),
         STRSUBSTNO(KeyNoTxt,Clustered,Secondary,Sift));
     END;
 
@@ -283,10 +287,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Difference@1000000005 : Duration;
       Expected@1000000006 : Duration;
     BEGIN
-      ObservedAt := CREATEDATETIME(DMY2DATE(7,9,2026),TIME);
-      StartedAt := Parse.EpisodeStart(ObservedAt,4500);
+      ObservedAt := SampleObservedAt;
+      StartedAt := Parse.EpisodeStart(ObservedAt,SampleStartWaitMs);
       Difference := ObservedAt - StartedAt;
-      Expected := 4500;
+      Expected := SampleStartWaitMs;
       Check(Passed,Total,Report,ChkStartTxt,Difference = Expected,STRSUBSTNO(StartTxt,Difference,Expected));
     END;
 
@@ -295,8 +299,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Backwards@1000000003 : Boolean;
       Forwards@1000000004 : Boolean;
     BEGIN
-      Backwards := Parse.IsNewEpisode(9000,120);
-      Forwards := Parse.IsNewEpisode(120,9000);
+      Backwards := Parse.IsNewEpisode(SampleLongWaitMs,SampleShortWaitMs);
+      Forwards := Parse.IsNewEpisode(SampleShortWaitMs,SampleLongWaitMs);
       Check(Passed,Total,Report,ChkNewEpTxt,Backwards AND (NOT Forwards),STRSUBSTNO(NewEpTxt,Backwards,Forwards));
     END;
 
@@ -309,10 +313,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     BEGIN
       // Три набора и чужая сессия. Средний случай самый важный: 8 000 мс при периоде
       // в 3 000 - это НЕ отказ и НЕ успех, а незнание, и подписывать его надо так.
-      AtLimit := Parse.Outcome(10120,3000,TRUE);
-      WellShort := Parse.Outcome(1200,3000,TRUE);
-      NarrowGap := Parse.Outcome(8000,3000,TRUE);
-      Foreign := Parse.Outcome(10527,3000,FALSE);
+      AtLimit := Parse.Outcome(OutcomeAtLimitWaitMs,SamplePeriodMs,TRUE);
+      WellShort := Parse.Outcome(OutcomeShortWaitMs,SamplePeriodMs,TRUE);
+      NarrowGap := Parse.Outcome(OutcomeNarrowGapWaitMs,SamplePeriodMs,TRUE);
+      Foreign := Parse.Outcome(OutcomeForeignWaitMs,SamplePeriodMs,FALSE);
       Check(Passed,Total,Report,ChkOutcomeTxt,
         (AtLimit = Parse.OutcomeTimedOut) AND (WellShort = Parse.OutcomeGranted) AND
         (NarrowGap = Parse.OutcomeUnknown) AND (Foreign = Parse.OutcomeUnknown),
@@ -329,11 +333,11 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     BEGIN
       // Цепочка 3 -> 2 -> 1. Непосредственный виновник у сеанса 3 - это 2, но 2 сам
       // стоит в очереди за 1. Назвать виновным 2 значит назвать виновным пострадавшего.
-      Waiter[1] := 3; Blocker[1] := 2;
-      Waiter[2] := 2; Blocker[2] := 1;
-      Head := Parse.ChainHead(Waiter,Blocker,2,3,Depth,Cycle);
+      Waiter[1] := ChainSessionC; Blocker[1] := ChainSessionB;
+      Waiter[2] := ChainSessionB; Blocker[2] := ChainSessionA;
+      Head := Parse.ChainHead(Waiter,Blocker,ChainRows,ChainSessionC,Depth,Cycle);
       Check(Passed,Total,Report,ChkChainTxt,
-        (Head = 1) AND (Depth = 2) AND (NOT Cycle),
+        (Head = ChainSessionA) AND (Depth = ChainDepthExpected) AND (NOT Cycle),
         STRSUBSTNO(ChainTxt,Head,Depth,Cycle));
     END;
 
@@ -348,9 +352,9 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Кольцо 1 -> 2 -> 1. Это взаимоблокировка на подходе либо уже разобранная
       // сервером. Разматывание обязано оборваться и сказать об этом, а не зациклиться:
       // фоновая задача, ушедшая в вечный цикл, держит слот планировщика насмерть.
-      Waiter[1] := 1; Blocker[1] := 2;
-      Waiter[2] := 2; Blocker[2] := 1;
-      Head := Parse.ChainHead(Waiter,Blocker,2,1,Depth,Cycle);
+      Waiter[1] := ChainSessionA; Blocker[1] := ChainSessionB;
+      Waiter[2] := ChainSessionB; Blocker[2] := ChainSessionA;
+      Head := Parse.ChainHead(Waiter,Blocker,ChainRows,ChainSessionA,Depth,Cycle);
       // Глубина после обрыва приходит ЕДИНИЦЕЙ, а не числом пройденных шагов: головы в
       // кольце нет вовсе, и объявленный ответ - непосредственный блокирующий. Сравнение с
       // потолком шагов стояло здесь прежде и покраснеть не могло: единица меньше потолка у
@@ -364,8 +368,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // ждущего, и обе колонки называют одного и того же человека, пострадавшего.
       // На прежнем коде голова равнялась 1, то есть самой жертве, и проверка красная.
       Check(Passed,Total,Report,ChkRingHeadTxt,
-        (Head = 2) AND (Depth = 1),
-        STRSUBSTNO(RingHeadTxt,Head,2,Depth));
+        (Head = ChainSessionB) AND (Depth = 1),
+        STRSUBSTNO(RingHeadTxt,Head,ChainSessionB,Depth));
 
       // А это кольцо, в которое НАЧАЛО НЕ ВХОДИТ: 1 ждёт 3, 3 ждёт 2, 2 ждёт 3. Ветка
       // "вернулись в начало" сюда не заходит НИКОГДА - разматывание кончается только
@@ -376,12 +380,12 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // объявляет единицей. Мерится поэтому то, что видно: набор обязан ВЕРНУТЬСЯ (убери
       // потолок - этот REPEAT не кончится ничем, и прогон повиснет вместо красного
       // отчёта), назвать кольцо и ответить непосредственным блокирующим, а не жертвой.
-      Waiter[1] := 1; Blocker[1] := 3;
-      Waiter[2] := 3; Blocker[2] := 2;
-      Waiter[3] := 2; Blocker[3] := 3;
-      Head := Parse.ChainHead(Waiter,Blocker,3,1,Depth,Cycle);
+      Waiter[1] := ChainSessionA; Blocker[1] := ChainSessionC;
+      Waiter[2] := ChainSessionC; Blocker[2] := ChainSessionB;
+      Waiter[3] := ChainSessionB; Blocker[3] := ChainSessionC;
+      Head := Parse.ChainHead(Waiter,Blocker,RingRows,ChainSessionA,Depth,Cycle);
       Check(Passed,Total,Report,ChkCeilRingTxt,
-        Cycle AND (Head = 3) AND (Depth = 1) AND (Head <> 1),
+        Cycle AND (Head = ChainSessionC) AND (Depth = 1) AND (Head <> ChainSessionA),
         STRSUBSTNO(ChainTxt,Head,Depth,Cycle));
     END;
 
@@ -409,26 +413,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
         Blocker[Index] := Index + 1;
       END;
       Links := CeilingChainLinksUnderTest;
-      Head := Parse.ChainHead(Waiter,Blocker,Links,1,Depth,Cycle);
+      Head := Parse.ChainHead(Waiter,Blocker,Links,ChainSessionA,Depth,Cycle);
       Check(Passed,Total,Report,ChkCeilChainTxt,
-        (Links <= ChainBoundUnderTest) AND (Head = 2) AND (Depth = 1),
+        (Links <= ChainBoundUnderTest) AND (Head = ChainSessionB) AND (Depth = 1),
         STRSUBSTNO(CeilChainTxt,Links,ChainBoundUnderTest,Head,Depth,Cycle));
-    END;
-
-    LOCAL PROCEDURE ChainBoundUnderTest@76() : Integer;
-    BEGIN
-      // Размер массивов разбора - ARRAY [500]. Цепочку длиннее обкатка построить не может,
-      // и выросший выше этого потолок обязан покраснеть проверкой, а не уронить прогон
-      // отказом по индексу.
-      EXIT(500);
-    END;
-
-    LOCAL PROCEDURE CeilingChainLinksUnderTest@77() : Integer;
-    BEGIN
-      // На два звена больше потолка шагов. Голова такой цепочки лежит на шаге "потолок
-      // плюс два", то есть обрыв обязан случиться РАНЬШЕ, чем она найдётся, а без потолка
-      // разматывание дошло бы до неё и вернуло её же головой.
-      EXIT(Parse.MaxChainSteps + 2);
     END;
 
     LOCAL PROCEDURE CheckVictims@25(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -449,14 +437,15 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // ОДНОЙ головой за ней стоят все, и счёт жертв неотличим от счёта ждущих вовсе:
       // Behind := Count прошёл бы такую проверку зелёным, а на бою слил бы в одну беду
       // все споры сервера разом. Различает их только вторая голова: за ней жертва одна.
-      Waiter[1] := 3; Blocker[1] := 2;
-      Waiter[2] := 2; Blocker[2] := 1;
-      Waiter[3] := 4; Blocker[3] := 1;
-      Waiter[4] := 6; Blocker[4] := 5;
-      Parse.Chains(Waiter,Blocker,4,Head,Depth,Ring,Behind);
+      Waiter[1] := ChainSessionC; Blocker[1] := ChainSessionB;
+      Waiter[2] := ChainSessionB; Blocker[2] := ChainSessionA;
+      Waiter[3] := ChainSessionD; Blocker[3] := ChainSessionA;
+      Waiter[4] := ChainSessionF; Blocker[4] := ChainSessionE;
+      Parse.Chains(Waiter,Blocker,VictimRows,Head,Depth,Ring,Behind);
       Check(Passed,Total,Report,ChkVictimsTxt,
-        (Head[1] = 1) AND (Behind[1] = 3) AND (Behind[3] = 3) AND
-        (Head[4] = 5) AND (Behind[4] = 1),
+        (Head[1] = ChainSessionA) AND (Behind[1] = VictimsBehindSharedHead) AND
+        (Behind[3] = VictimsBehindSharedHead) AND (Head[4] = ChainSessionE) AND
+        (Behind[4] = VictimsBehindOtherHead),
         STRSUBSTNO(VictimsTxt,Behind[1],Behind[4]));
     END;
 
@@ -470,14 +459,14 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Спор за таблицу целиком старше сна, и первый случай про это: виновник спит, но
       // замок стоит на объекте - класс обязан назвать объект. Род ресурса приходит из
       // разбора описания ожидания, и сравнивается он с ИМЕНЕМ рода, а не с числом.
-      WholeTable := Parse.EpisodeClass(TRUE,FALSE,60000,TRUE);
-      Sleeping := Parse.EpisodeClass(TRUE,FALSE,60000,FALSE);
-      UnderThreshold := Parse.EpisodeClass(TRUE,FALSE,5000,FALSE);
+      WholeTable := Parse.EpisodeClass(TRUE,FALSE,SleepThresholdMs,TRUE);
+      Sleeping := Parse.EpisodeClass(TRUE,FALSE,SleepThresholdMs,FALSE);
+      UnderThreshold := Parse.EpisodeClass(TRUE,FALSE,UnderThresholdMs,FALSE);
       Working := Parse.EpisodeClass(FALSE,TRUE,0,FALSE);
       Check(Passed,Total,Report,ChkClassTxt,
         (WholeTable = Parse.ClassWholeTable) AND (Sleeping = Parse.ClassSleepingTran) AND
         (UnderThreshold = Parse.ClassPlain) AND (Working = Parse.ClassPlain) AND
-        (Parse.WholeTableKind = 'objectlock'),
+        (Parse.WholeTableKind = ResourceObjectLock),
         STRSUBSTNO(ClassTxt,WholeTable,Sleeping,UnderThreshold,Working));
     END;
 
@@ -523,16 +512,16 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // обязан быть один, и именно тот, у которого лечение точнее. Проверка на случае с
       // ОДНИМ признаком прошла бы и на коде, где правила переставлены местами, - то есть
       // была бы пустой.
-      WholeTable := Parse.Advise(Parse.ClassWholeTable,Parse.OutcomeTimedOut,9000,5000,7,TRUE,TRUE,
-                                 AdviceText);
-      Foreign := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,TRUE,TRUE,
-                              AdviceText);
-      Sift := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,TRUE,FALSE,
-                           AdviceText);
-      Queue := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,9000,5000,7,FALSE,FALSE,
-                            AdviceText);
-      Deadlock := Parse.Advise(Parse.ClassDeadlock,Parse.OutcomeDeadlocked,9000,5000,7,TRUE,TRUE,
-                               AdviceText);
+      WholeTable := Parse.Advise(Parse.ClassWholeTable,Parse.OutcomeTimedOut,AdviceWaitMs,
+                                 AdviceAlertMs,AdviceVictims,TRUE,TRUE,AdviceText);
+      Foreign := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,AdviceWaitMs,
+                              AdviceAlertMs,AdviceVictims,TRUE,TRUE,AdviceText);
+      Sift := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,AdviceWaitMs,
+                           AdviceAlertMs,AdviceVictims,TRUE,FALSE,AdviceText);
+      Queue := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,AdviceWaitMs,
+                            AdviceAlertMs,AdviceVictims,FALSE,FALSE,AdviceText);
+      Deadlock := Parse.Advise(Parse.ClassDeadlock,Parse.OutcomeDeadlocked,AdviceWaitMs,
+                               AdviceAlertMs,AdviceVictims,TRUE,TRUE,AdviceText);
       Check(Passed,Total,Report,ChkAdviceOrderTxt,
         (WholeTable = Parse.AdviceWholeTable) AND (Foreign = Parse.AdviceForeignHead) AND
         (Sift = Parse.AdviceSift) AND (Queue = Parse.AdviceQueue) AND
@@ -555,16 +544,16 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // единицу раньше. Числа держатся в переменных нарочно: порог подаётся разбору и
       // проверяется рядом, а не переписывается в проверку цифрой.
       Victims := Parse.AdviceQueueWaiters;
-      WaitMs := 7100;
-      AlertMs := 5000;
-      QueueOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,Victims,FALSE,FALSE,
-                              AdviceText) = Parse.AdviceQueue;
-      ShortOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,1000,0,Victims - 1,FALSE,FALSE,
-                              AdviceText) = Parse.AdviceNone;
+      WaitMs := AdviceLongWaitMs;
+      AlertMs := AdviceAlertMs;
+      QueueOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AdviceShortWaitMs,0,Victims,
+                              FALSE,FALSE,AdviceText) = Parse.AdviceQueue;
+      ShortOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AdviceShortWaitMs,0,Victims - 1,
+                              FALSE,FALSE,AdviceText) = Parse.AdviceNone;
       LongOk := (Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,WaitMs,AlertMs,1,FALSE,FALSE,
                               AdviceText) = Parse.AdviceLongWait) AND
-                (Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AlertMs - 1,AlertMs,1,FALSE,FALSE,
-                              AdviceText) = Parse.AdviceNone);
+                (Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AlertMs - 1,AlertMs,1,
+                              FALSE,FALSE,AdviceText) = Parse.AdviceNone);
       Check(Passed,Total,Report,ChkAdviceNumbersTxt,
         QueueOk AND ShortOk AND LongOk,
         STRSUBSTNO(AdviceNumbersTxt,Victims,Victims - 1,WaitMs,AlertMs));
@@ -581,13 +570,13 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Три случая молчания и один случай речи. Ноль в пороге означает "не уведомлять
       // вовсе": без этой оговорки совет получил бы КАЖДЫЙ эпизод.
       // Граница проверяется ровно на пороге - там, где ошибка на единицу и живёт.
-      Quiet := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,900,5000,1,FALSE,FALSE,
-                            AdviceText);
+      Quiet := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,QuietWaitMs,AdviceAlertMs,1,
+                            FALSE,FALSE,AdviceText);
       QuietOk := (Quiet = Parse.AdviceNone) AND (AdviceText = '');
-      Zero := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,900000,0,1,FALSE,FALSE,
-                           AdviceText);
-      Edge := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,5000,5000,1,FALSE,FALSE,
-                           AdviceText);
+      Zero := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,ZeroThresholdWaitMs,0,1,
+                           FALSE,FALSE,AdviceText);
+      Edge := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AdviceAlertMs,AdviceAlertMs,1,
+                           FALSE,FALSE,AdviceText);
       Check(Passed,Total,Report,ChkAdviceQuietTxt,
         QuietOk AND (Zero = Parse.AdviceNone) AND (Edge = Parse.AdviceLongWait),
         STRSUBSTNO(AdviceQuietTxt,Quiet,Zero,Edge));
@@ -605,12 +594,12 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Обнуление счётчика - единственное место накопительного слоя, где ошибка не видна
       // глазами: итог просто поедет назад, и объяснить это будет нечем. Три случая:
       // счётчик вырос, счётчик не двинулся, счётчик обнулился и успел набрать заново.
-      Grew := Parse.CounterDelta(1000,1200,GrewFlag);
-      Still := Parse.CounterDelta(1000,1000,StillFlag);
-      AfterReset := Parse.CounterDelta(1000,7,ResetFlag);
+      Grew := Parse.CounterDelta(CounterBase,CounterGrown,GrewFlag);
+      Still := Parse.CounterDelta(CounterBase,CounterBase,StillFlag);
+      AfterReset := Parse.CounterDelta(CounterBase,CounterAfterReset,ResetFlag);
       Check(Passed,Total,Report,ChkCounterDeltaTxt,
-        (Grew = 200) AND (NOT GrewFlag) AND (Still = 0) AND (NOT StillFlag) AND
-        (AfterReset = 7) AND ResetFlag,
+        (Grew = CounterGrowDelta) AND (NOT GrewFlag) AND (Still = 0) AND (NOT StillFlag) AND
+        (AfterReset = CounterAfterReset) AND ResetFlag,
         STRSUBSTNO(CounterDeltaTxt,Grew,Still,AfterReset,ResetFlag));
     END;
 
@@ -628,24 +617,6 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Report := Report + CrLf;
     END;
 
-    LOCAL PROCEDURE SampleKeyLock@51() : Text;
-    BEGIN
-      // Снято с живого ожидания на стенде 07.09.2026: держатель взял XLOCK на строку,
-      // жертва встала за UPDLOCK, съём шёл с третьего соединения.
-      EXIT('keylock hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=72057594261667840');
-    END;
-
-    LOCAL PROCEDURE SampleHobt@55() : BigInteger;
-    VAR
-      Value@1000000000 : BigInteger;
-    BEGIN
-      // Числовой литерал в C/AL - это Decimal, а он кончается на 999 999 999 999 999,99.
-      // hobt_id в семнадцать знаков через литерал не проходит вовсе: импорт объекта падает
-      // с "Decimal must be in the range of". Большое число входит в код только текстом.
-      EVALUATE(Value,'72057594261667840');
-      EXIT(Value);
-    END;
-
     LOCAL PROCEDURE CheckSqlNamePattern@57(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
     VAR
       Dotted@1000000003 : Text;
@@ -654,12 +625,12 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     BEGIN
       // Имена сняты с базы заказчика: "Acc. Schedule Name" лежит в SQL как "Acc_ Schedule
       // Name", а кириллица и амперсанд платформой не трогаются вовсе.
-      Dotted := Parse.SqlNamePattern('Acc. Sched. KPI Web Srv. Line');
-      Cyrillic := Parse.SqlNamePattern('Сумма НДС');
-      Kept := Parse.SqlNamePattern('Cash Flow & Budget');
+      Dotted := Parse.SqlNamePattern(PatternNavDotted);
+      Cyrillic := Parse.SqlNamePattern(PatternNavCyrillic);
+      Kept := Parse.SqlNamePattern(PatternNavKept);
       Check(Passed,Total,Report,ChkPatternTxt,
-        (Dotted = 'Acc_ Sched_ KPI Web Srv_ Line') AND (Cyrillic = 'Сумма НДС') AND
-        (Kept = 'Cash Flow _ Budget'),
+        (Dotted = PatternSqlDotted) AND (Cyrillic = PatternNavCyrillic) AND
+        (Kept = PatternSqlKept),
         STRSUBSTNO(PatternTxt,Dotted,Cyrillic,Kept));
     END;
 
@@ -672,27 +643,13 @@ OBJECT Codeunit 110231 LockWatch Parse Test
     BEGIN
       // Расхождение позволено только там, где в имени NAV стоит заменяемый знак. Иначе
       // "Gen_ Journal Line" совпало бы с "Gen. Journal Lint", и таблица нашлась бы не та.
-      Dot := Parse.SameSqlName('Gen_ Journal Line','Gen. Journal Line');
-      Slash := Parse.SameSqlName('G_L Entry','G/L Entry');
-      Other := Parse.SameSqlName('Gen_ Journal Lint','Gen. Journal Line');
-      Length := Parse.SameSqlName('Gen_ Journal Lines','Gen. Journal Line');
+      Dot := Parse.SameSqlName(SqlNamePart(SameNameNavDot),SameNameNavDot);
+      Slash := Parse.SameSqlName(SqlNamePart(SameNameNavSlash),SameNameNavSlash);
+      Other := Parse.SameSqlName(SqlNamePart(SameNameNavOther),SameNameNavDot);
+      Length := Parse.SameSqlName(SqlNamePart(SameNameNavLonger),SameNameNavDot);
       Check(Passed,Total,Report,ChkSameNameTxt,
         Dot AND Slash AND (NOT Other) AND (NOT Length),
         STRSUBSTNO(SameNameTxt,Dot,Slash,Other,Length));
-    END;
-
-    LOCAL PROCEDURE CraftedKeyLock@56() : Text;
-    BEGIN
-      // Строка собрана нарочно: hobtid= здесь встречается ВНУТРИ ahobtid=, и наивный
-      // поиск подстрокой вернёт 111 вместо настоящего числа - молча и правдоподобно.
-      // На строке, снятой с натуры, такого столкновения нет, и проверка на ней была бы
-      // пустой: проходила бы и с границей слова, и без неё.
-      EXIT('keylock ahobtid=111 hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=72057594261667840');
-    END;
-
-    LOCAL PROCEDURE SampleObjectLock@52() : Text;
-    BEGIN
-      EXIT('objectlock lockPartition=0 objid=1115203073 subresource=FULL dbid=7 id=lock1870ff96880 mode=X');
     END;
 
     LOCAL PROCEDURE CheckStatementCut@64(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
@@ -721,7 +678,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Check(Passed,Total,Report,ChkCutTxt,
         (STRPOS(Cut,Body) = 1) AND (STRLEN(Cut) > STRLEN(Body)) AND
         (STRPOS(Cut,FORMAT(CutWhole)) > 0) AND (STRPOS(Cut,FORMAT(STRLEN(Body))) > 0) AND
-        (COPYSTR(Cut,STRLEN(Body) + 3,2) = '--') AND
+        (COPYSTR(Cut,STRLEN(Body) + 3,2) = SqlCommentMark) AND
         (Whole = Body) AND (Blank = ''),
         STRSUBSTNO(CutMarkTxt,STRLEN(Body),CutWhole,STRLEN(Cut),
                    COPYSTR(Cut,STRLEN(Body) + 3,2),STRLEN(Whole),STRLEN(Blank)));
@@ -772,7 +729,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Тихо: кругов не было вовсе - молчание тут единственный честный ответ. Ноль кругов
       // и ноль графов - это исправная тишина, а не потеря.
       Silent := Parse.RingSilentNote(RingCirclesUnderTest,0);
-      Spoke := Parse.RingSilentNote(RingCirclesUnderTest,2);
+      Spoke := Parse.RingSilentNote(RingCirclesUnderTest,RingGraphsSeen);
       Quiet := Parse.RingSilentNote(0,0);
       Check(Passed,Total,Report,ChkRingTxt,
         (STRPOS(Silent,FORMAT(RingCirclesUnderTest)) > 0) AND (Spoke = '') AND (Quiet = ''),
@@ -804,7 +761,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       //
       // Остановлен: галку сняли нарочно, и молчание тут законно. Без этой половины сторож
       // кричал бы после каждой остановки и перестал бы читаться до того, как окажется прав.
-      Asked := CREATEDATETIME(DMY2DATE(1,6,2026),120000T);
+      Asked := SilentObservedAt;
       Ceiling := Parse.SilenceCeilingMs(PollPeriodUnderTest);
       Gap := SilentMinutesUnderTest * Parse.MsPerMinute;
       Fresh := Parse.WatchSilentNote(TRUE,Asked - Ceiling,Asked,PollPeriodUnderTest);
@@ -815,6 +772,531 @@ OBJECT Codeunit 110231 LockWatch Parse Test
         (Fresh = '') AND (Stopped = '') AND (Never <> '') AND (Silent <> Never) AND
         (STRPOS(Silent,FORMAT(SilentMinutesUnderTest)) > 0),
         STRSUBSTNO(SilentTxt,Fresh,Silent,Never,Stopped));
+    END;
+
+    LOCAL PROCEDURE SqlNamePart@142(Name@1000000000 : Text) : Text;
+    VAR
+      Part@1000000001 : Text;
+      Index@1000000002 : Integer;
+      Ch@1000000003 : Text[1];
+    BEGIN
+      // Имя объекта или поля NAV платформа переводит в имя SQL заменой точки, косой
+      // черты, обратной косой черты и кавычки подчёркиванием (FINDINGS, раздел 5).
+      // Вход теста обязан собираться тем же переводом, каким его собрала бы платформа.
+      FOR Index := 1 TO STRLEN(Name) DO BEGIN
+        Ch := COPYSTR(Name,Index,1);
+        IF (Ch = '.') OR (Ch = '/') OR (Ch = '\') OR (Ch = '"') THEN
+          Part := Part + '_'
+        ELSE
+          Part := Part + Ch;
+      END;
+      EXIT(Part);
+    END;
+
+    LOCAL PROCEDURE SqlObjectName@143(TableNo@1000000000 : Integer) : Text;
+    VAR
+      RecRef@1000000001 : RecordRef;
+    BEGIN
+      // Имя таблицы в SQL: <Компания>$<Таблица>. Компания берётся у сессии, а не из
+      // литерала: обкатка обязана работать в любой компании стенда.
+      RecRef.OPEN(TableNo);
+      EXIT(SqlNamePart(COMPANYNAME) + SqlObjectSeparator + SqlNamePart(RecRef.NAME));
+    END;
+
+    LOCAL PROCEDURE SampleTableName@144() : Text;
+    VAR
+      RecRef@1000000000 : RecordRef;
+    BEGIN
+      // Настоящее имя таблицы, а не догадка: имя для входа теста и имя для разбора - одно
+      // и то же, и переименование таблицы не оставит тест врать о ней.
+      RecRef.OPEN(DATABASE::"Sales Line");
+      EXIT(RecRef.NAME);
+    END;
+
+    LOCAL PROCEDURE SampleTableSql@145() : Text;
+    BEGIN
+      EXIT(SqlNamePart(SampleTableName));
+    END;
+
+    LOCAL PROCEDURE SampleCompanySql@146() : Text;
+    BEGIN
+      EXIT(SqlNamePart(COMPANYNAME));
+    END;
+
+    LOCAL PROCEDURE SampleSqlObjectName@147() : Text;
+    BEGIN
+      EXIT(SqlObjectName(SampleTableNo));
+    END;
+
+    LOCAL PROCEDURE SampleSiftSqlObjectName@148() : Text;
+    BEGIN
+      EXIT(SampleSqlObjectName + SiftViewMarker + FORMAT(SampleSiftKeyNo));
+    END;
+
+    LOCAL PROCEDURE SampleClusteredIndexName@149() : Text;
+    BEGIN
+      EXIT(SampleSqlObjectName + SqlObjectSeparator + FORMAT(ClusteredKeyNo));
+    END;
+
+    LOCAL PROCEDURE NoCompanyTableName@150() : Text;
+    VAR
+      RecRef@1000000000 : RecordRef;
+    BEGIN
+      // Своя таблица настройки объявлена с DataPerCompany=No: префикса компании у неё
+      // нет, и разбор обязан отдать её имя без компании.
+      RecRef.OPEN(DATABASE::"LockWatch Setup");
+      EXIT(RecRef.NAME);
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@78();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Обкатка не настраивается - её числа и тексты описывают проверяемые случаи, а не
+      // среду установки, - поэтому им место здесь, а не в настройке LockWatch Setup.
+    END;
+
+    LOCAL PROCEDURE ResourceKeyLock@79() : Text;
+    BEGIN
+      // Род ключевой блокировки в описании ресурса. Слово принадлежит платформе SQL:
+      // им размечен разбор описания ожидания, и других значений тут быть не может.
+      EXIT('keylock');
+    END;
+
+    LOCAL PROCEDURE ResourceObjectLock@80() : Text;
+    BEGIN
+      // Род блокировки на объект целиком. Второе слово платформы, с которым сверяется
+      // Parse.WholeTableKind, и его же обязана отдать проверка разбора.
+      EXIT('objectlock');
+    END;
+
+    LOCAL PROCEDURE SampleDatabaseId@81() : Integer;
+    BEGIN
+      // Номер базы из строки ожидания, снятой с натуры: в описании ресурса он стоит в dbid.
+      EXIT(7);
+    END;
+
+    LOCAL PROCEDURE SampleObjectId@82() : Integer;
+    BEGIN
+      // objid из строки блокировки на объект, снятой с натуры.
+      EXIT(1115203073);
+    END;
+
+    LOCAL PROCEDURE SampleKeyLock@51() : Text;
+    BEGIN
+      // Снято с живого ожидания на стенде 07.09.2026: держатель взял XLOCK на строку,
+      // жертва встала за UPDLOCK, съём шёл с третьего соединения.
+      EXIT('keylock hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=72057594261667840');
+    END;
+
+    LOCAL PROCEDURE SampleObjectLock@52() : Text;
+    BEGIN
+      EXIT('objectlock lockPartition=0 objid=1115203073 subresource=FULL dbid=7 id=lock1870ff96880 mode=X');
+    END;
+
+    LOCAL PROCEDURE CraftedKeyLock@56() : Text;
+    BEGIN
+      // Строка собрана нарочно: hobtid= здесь встречается ВНУТРИ ahobtid=, и наивный
+      // поиск подстрокой вернёт 111 вместо настоящего числа - молча и правдоподобно.
+      // На строке, снятой с натуры, такого столкновения нет, и проверка на ней была бы
+      // пустой: проходила бы и с границей слова, и без неё.
+      EXIT('keylock ahobtid=111 hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=72057594261667840');
+    END;
+
+    LOCAL PROCEDURE SampleHobt@55() : BigInteger;
+    VAR
+      Value@1000000000 : BigInteger;
+    BEGIN
+      // Числовой литерал в C/AL - это Decimal, а он кончается на 999 999 999 999 999,99.
+      // hobt_id в семнадцать знаков через литерал не проходит вовсе: импорт объекта падает
+      // с "Decimal must be in the range of". Большое число входит в код только текстом.
+      EVALUATE(Value,'72057594261667840');
+      EXIT(Value);
+    END;
+
+    LOCAL PROCEDURE JunkWaitResource@83() : Text;
+    BEGIN
+      // Строка, в которой нет ни рода, ни номера базы: разбор обязан отказать целиком,
+      // а не разобрать её наполовину.
+      EXIT('something else entirely');
+    END;
+
+    LOCAL PROCEDURE SampleLockHashPadded@84() : Text;
+    BEGIN
+      // Хэш ключа, добитый пробелами до ширины столбца DMV - так его отдаёт dm_tran_locks.
+      EXIT('(92410d4f079d)                    ');
+    END;
+
+    LOCAL PROCEDURE SamplePageResource@85() : Text;
+    BEGIN
+      // Страничный ресурс вида 1:25456 хэшем не является вовсе, и добивка пробелами его
+      // хэшем не делает.
+      EXIT('1:25456   ');
+    END;
+
+    LOCAL PROCEDURE SampleLockHash@86() : Text;
+    BEGIN
+      // Тот же хэш без добивки: ровно то, что обязан вернуть TrimLockHash.
+      EXIT('(92410d4f079d)');
+    END;
+
+    LOCAL PROCEDURE SqlObjectSeparator@87() : Text[1];
+    BEGIN
+      // Разделитель частей имени объекта SQL. Он один и тот же у платформы на всякой
+      // установке, и другой такой величины быть не может.
+      EXIT('$');
+    END;
+
+    LOCAL PROCEDURE PlatformSqlObjectName@88() : Text;
+    BEGIN
+      // Платформенный объект базы: таких около дюжины, и таблицей компании они не
+      // являются. Разбор обязан отказать, а не выдать безымянную компанию.
+      EXIT('$ndo$dbproperty');
+    END;
+
+    LOCAL PROCEDURE SiftViewMarker@89() : Text;
+    BEGIN
+      // Метка SIFT-представления в имени объекта SQL: <Компания>$<Таблица>$VSIFT$<номер>.
+      EXIT('$VSIFT$');
+    END;
+
+    LOCAL PROCEDURE SiftIndexName@90() : Text;
+    BEGIN
+      // Имя индекса у всех SIFT-представлений одно и то же, и номера ключа оно не несёт:
+      // номер лежит в имени самого представления.
+      EXIT('VSIFTIDX');
+    END;
+
+    LOCAL PROCEDURE SampleSiftKeyNo@91() : Integer;
+    BEGIN
+      // Номер ключа, лежащий в имени SIFT-представления: число после метки.
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE SampleSecondaryKeyNo@92() : Integer;
+    BEGIN
+      // Номер вторичного ключа из имени индекса $13: номера не сплошные, дыры - норма.
+      EXIT(13);
+    END;
+
+    LOCAL PROCEDURE SampleSecondaryIndexName@93() : Text;
+    BEGIN
+      // Имя вторичного индекса: у них в SQL только суффикс, без компании и таблицы.
+      EXIT('$13');
+    END;
+
+    LOCAL PROCEDURE ClusteredKeyNo@94() : Integer;
+    BEGIN
+      // Ноль - это ответ, а не пустота: у NAV кластерный ключ и есть ключ 0, и в SQL он
+      // зовётся $0.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE SampleTableNo@95() : Integer;
+    BEGIN
+      // Штатная таблица строк заказа: есть на всякой установке NAV, и переименований
+      // заказчика на ней не бывает.
+      EXIT(DATABASE::"Sales Line");
+    END;
+
+    LOCAL PROCEDURE SampleObservedAt@96() : DateTime;
+    BEGIN
+      // Момент наблюдения в опыте: дата постоянна, время суток берётся текущее. Проверке
+      // нужен промежуток, а не конкретный час.
+      EXIT(CREATEDATETIME(DMY2DATE(7,9,2026),TIME));
+    END;
+
+    LOCAL PROCEDURE SilentObservedAt@97() : DateTime;
+    BEGIN
+      // Момент вопроса о молчании в проверке сторожа: дата постоянна, время суток
+      // 12:00:00 - полдень, чтобы проверка не зависела от часа запуска.
+      EXIT(CREATEDATETIME(DMY2DATE(1,6,2026),120000T));
+    END;
+
+    LOCAL PROCEDURE SampleStartWaitMs@98() : Integer;
+    BEGIN
+      // Длительность ожидания, снятого с натуры: начало эпизода считается назад ровно
+      // на неё.
+      EXIT(4500);
+    END;
+
+    LOCAL PROCEDURE SampleLongWaitMs@99() : Integer;
+    BEGIN
+      // Долгое ожидание первого съёма. Второй съём даёт 120, то есть счётчик пошёл назад,
+      // и это новый эпизод, а не продолжение.
+      EXIT(9000);
+    END;
+
+    LOCAL PROCEDURE SampleShortWaitMs@100() : Integer;
+    BEGIN
+      // Короткое ожидание второго съёма: меньше предыдущего, значит эпизод начался заново.
+      EXIT(120);
+    END;
+
+    LOCAL PROCEDURE SamplePeriodMs@101() : Integer;
+    BEGIN
+      // Период опроса по умолчанию: при нём судится исход, и другой период мерил бы
+      // не ту установку.
+      EXIT(3000);
+    END;
+
+    LOCAL PROCEDURE OutcomeAtLimitWaitMs@102() : Integer;
+    BEGIN
+      // Ожидание на пределе NAV: 10 000 мс плюс запас больше периода - исход "не дождался".
+      EXIT(10120);
+    END;
+
+    LOCAL PROCEDURE OutcomeShortWaitMs@103() : Integer;
+    BEGIN
+      // Ожидание заметно короче периода - исход "дождался".
+      EXIT(1200);
+    END;
+
+    LOCAL PROCEDURE OutcomeNarrowGapWaitMs@104() : Integer;
+    BEGIN
+      // Ожидание между порогом и пределом: зазор меньше периода, и исход честно
+      // называется незнанием.
+      EXIT(8000);
+    END;
+
+    LOCAL PROCEDURE OutcomeForeignWaitMs@105() : Integer;
+    BEGIN
+      // Ожидание чужой, не NAV, сессии: исход не приписывается ей вовсе.
+      EXIT(10527);
+    END;
+
+    LOCAL PROCEDURE ChainSessionA@106() : Integer;
+    BEGIN
+      // Первый сеанс цепочки. Номера - метки сценария, а не настоящие spid.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE ChainSessionB@107() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE ChainSessionC@108() : Integer;
+    BEGIN
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE ChainSessionD@109() : Integer;
+    BEGIN
+      EXIT(4);
+    END;
+
+    LOCAL PROCEDURE ChainSessionE@110() : Integer;
+    BEGIN
+      EXIT(5);
+    END;
+
+    LOCAL PROCEDURE ChainSessionF@111() : Integer;
+    BEGIN
+      EXIT(6);
+    END;
+
+    LOCAL PROCEDURE ChainRows@112() : Integer;
+    BEGIN
+      // Две строки очереди в самой короткой цепочке и в самом коротком кольце.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE RingRows@113() : Integer;
+    BEGIN
+      // Три строки в кольце, в которое начало не входит.
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE VictimRows@114() : Integer;
+    BEGIN
+      // Четыре строки очереди: три ждущих за общей головой и один за своей.
+      EXIT(4);
+    END;
+
+    LOCAL PROCEDURE VictimsBehindSharedHead@115() : Integer;
+    BEGIN
+      // За общей головой стоят трое ждущих: одна беда, а не три.
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE VictimsBehindOtherHead@116() : Integer;
+    BEGIN
+      // За чужой головой стоит одна жертва: этим счёт жертв и отличается от счёта ждущих.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE ChainDepthExpected@117() : Integer;
+    BEGIN
+      // Голова цепочки 3 -> 2 -> 1 лежит на глубине двух звеньев.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE SleepThresholdMs@118() : Integer;
+    BEGIN
+      // Спящая транзакция: простой дольше минуты считается сном, и класс эпизода меняется.
+      EXIT(60000);
+    END;
+
+    LOCAL PROCEDURE UnderThresholdMs@119() : Integer;
+    BEGIN
+      // Простой ниже порога сна: эпизод остаётся обычным случаем.
+      EXIT(5000);
+    END;
+
+    LOCAL PROCEDURE AdviceWaitMs@120() : Integer;
+    BEGIN
+      // Долгое ожидание в сцене советчика: выше порога уведомления.
+      EXIT(9000);
+    END;
+
+    LOCAL PROCEDURE AdviceAlertMs@121() : Integer;
+    BEGIN
+      // Порог уведомления в сцене советчика: пять секунд, как в умолчании настройки.
+      EXIT(5000);
+    END;
+
+    LOCAL PROCEDURE AdviceVictims@122() : Integer;
+    BEGIN
+      // Жертв за головой больше порога очереди: совет обязан назвать очередь.
+      EXIT(7);
+    END;
+
+    LOCAL PROCEDURE AdviceLongWaitMs@123() : Integer;
+    BEGIN
+      // Ожидание выше порога уведомления, но ниже других признаков: совет - долгое ожидание.
+      EXIT(7100);
+    END;
+
+    LOCAL PROCEDURE AdviceShortWaitMs@124() : Integer;
+    BEGIN
+      // Ожидание ниже порога: само по себе оно совет не поднимает.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE QuietWaitMs@125() : Integer;
+    BEGIN
+      // Ожидание короткое, порог высокий: советчик обязан молчать.
+      EXIT(900);
+    END;
+
+    LOCAL PROCEDURE ZeroThresholdWaitMs@126() : Integer;
+    BEGIN
+      // Ожидание огромное при нулевом пороге: ноль значит "не уведомлять", а не
+      // "уведомлять обо всём".
+      EXIT(900000);
+    END;
+
+    LOCAL PROCEDURE CounterBase@127() : Integer;
+    BEGIN
+      // Первое чтение счётчика сервера в сцене прироста.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE CounterGrown@128() : Integer;
+    BEGIN
+      // Второе чтение больше первого: прирост положителен и равен их разности.
+      EXIT(1200);
+    END;
+
+    LOCAL PROCEDURE CounterAfterReset@129() : Integer;
+    BEGIN
+      // Значение после обнуления счётчика: меньше прежнего, и разность была бы
+      // отрицательной, если бы обнуление не замечалось.
+      EXIT(7);
+    END;
+
+    LOCAL PROCEDURE CounterGrowDelta@130() : Integer;
+    BEGIN
+      // Прирост между чтениями считается из самих чтений, а не переписывается числом:
+      // смена одной величины не должна оставить проверку про другую.
+      EXIT(CounterGrown - CounterBase);
+    END;
+
+    LOCAL PROCEDURE SqlCommentMark@131() : Text[2];
+    BEGIN
+      // Отметка усечения - комментарий SQL: текст из журнала копируют в studio и
+      // запускают, и отметка не должна ломать запуск.
+      EXIT('--');
+    END;
+
+    LOCAL PROCEDURE RingGraphsSeen@132() : Integer;
+    BEGIN
+      // Кольцо отдало графы - значит оно не молчало, и слова о молчании быть не должно.
+      // Два - число, которого нет в самих словах подсказки.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE PatternNavDotted@133() : Text;
+    BEGIN
+      // Имя NAV с точками: платформа заменяет их подчёркиванием.
+      EXIT('Acc. Sched. KPI Web Srv. Line');
+    END;
+
+    LOCAL PROCEDURE PatternSqlDotted@134() : Text;
+    BEGIN
+      // Тот же образец после замены: каждая точка стала подчёркиванием.
+      EXIT('Acc_ Sched_ KPI Web Srv_ Line');
+    END;
+
+    LOCAL PROCEDURE PatternNavCyrillic@135() : Text;
+    BEGIN
+      // Кириллица платформой не трогается вовсе: образец совпадает с именем.
+      EXIT('Сумма НДС');
+    END;
+
+    LOCAL PROCEDURE PatternNavKept@136() : Text;
+    BEGIN
+      // Амперсанд имени NAV остаётся на месте, но в образце LIKE он тоже значащий знак.
+      EXIT('Cash Flow & Budget');
+    END;
+
+    LOCAL PROCEDURE PatternSqlKept@137() : Text;
+    BEGIN
+      // Образец, который обязан получиться: амперсанд заменён подчёркиванием, остальное
+      // сохранено.
+      EXIT('Cash Flow _ Budget');
+    END;
+
+    LOCAL PROCEDURE SameNameNavDot@138() : Text;
+    BEGIN
+      // Имя NAV с точкой: SQL-вариант получается из него заменой, и это допустимое
+      // расхождение.
+      EXIT('Gen. Journal Line');
+    END;
+
+    LOCAL PROCEDURE SameNameNavSlash@139() : Text;
+    BEGIN
+      // Имя NAV с косой чертой: тоже заменяемый знак.
+      EXIT('G/L Entry');
+    END;
+
+    LOCAL PROCEDURE SameNameNavOther@140() : Text;
+    BEGIN
+      // Другая буква на месте заменяемого знака: такое расхождение недопустимо, иначе
+      // нашлась бы не та таблица.
+      EXIT('Gen. Journal Lint');
+    END;
+
+    LOCAL PROCEDURE SameNameNavLonger@141() : Text;
+    BEGIN
+      // Другая длина: замена знака длины не меняет, значит имена разные.
+      EXIT('Gen. Journal Lines');
+    END;
+
+    LOCAL PROCEDURE ChainBoundUnderTest@76() : Integer;
+    BEGIN
+      // Размер массивов разбора - ARRAY [500]. Цепочку длиннее обкатка построить не может,
+      // и выросший выше этого потолок обязан покраснеть проверкой, а не уронить прогон
+      // отказом по индексу.
+      EXIT(500);
+    END;
+
+    LOCAL PROCEDURE CeilingChainLinksUnderTest@77() : Integer;
+    BEGIN
+      // На два звена больше потолка шагов. Голова такой цепочки лежит на шаге "потолок
+      // плюс два", то есть обрыв обязан случиться РАНЬШЕ, чем она найдётся, а без потолка
+      // разматывание дошло бы до неё и вернуло её же головой.
+      EXIT(Parse.MaxChainSteps + 2);
     END;
 
     LOCAL PROCEDURE PollPeriodUnderTest@73() : Integer;

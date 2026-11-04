@@ -46,8 +46,8 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $PassCodeunitId  = 110235,
-    [int]    $BenchCodeunitId = 110242
+    [int]    $PassCodeunitId  = 110234,
+    [int]    $BenchCodeunitId = 110247
 )
 
 $ErrorActionPreference = 'Stop'

@@ -29,7 +29,7 @@ param(
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
     [int]    $Waiters  = 100,
-    [int]    $PassCodeunitId = 110235,
+    [int]    $PassCodeunitId = 110234,
     [switch] $StopInstance
 )
 

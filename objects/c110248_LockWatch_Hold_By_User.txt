@@ -1,8 +1,8 @@
-OBJECT Codeunit 110243 LockWatch Hold By User
+OBJECT Codeunit 110248 LockWatch Hold By User
 {
   OBJECT-PROPERTIES
   {
-    Date=08.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -79,9 +79,9 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       // Отметка ищется СВОЯ - по номеру экземпляра и сеанса. Ответ едет в сообщении не для
       // красоты: без него отказ дороги к имени и молчание переходника выглядят одинаково,
       // а это разные беды - в первом случае чинить инструмент, во втором ставить подписку.
-      MarkSeen := 'no';
+      MarkSeen := MarkSeenNo;
       IF Mark.GET(SERVICEINSTANCEID,SESSIONID) THEN
-        MarkSeen := 'yes';
+        MarkSeen := MarkSeenYes;
 
       // COMMIT здесь не делается нарочно: транзакция держится открытой, и вместе с ней
       // держатся ОБЕ блокировки - на строке документа и на отметке контекста. Отпустит их
@@ -129,7 +129,7 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       // настоящим, а имени в журнале всё равно не появится, и разбираться придётся вслепую.
       IF NOT Mark.GET(SERVICEINSTANCEID,SESSIONID) THEN
         ERROR(NoMarkErr);
-      MarkSeen := 'yes';
+      MarkSeen := MarkSeenYes;
 
       // Дальше - за спорной строкой. Ожидание настоящее, и кончится оно ПРЕДЕЛОМ: у NAV
       // это 10 000 мс, и сессию снесёт отказом. Отказ здесь ожидаемый конец опыта, а не
@@ -145,6 +145,13 @@ OBJECT Codeunit 110243 LockWatch Hold By User
         ERROR(NoRowErr,HoldDocumentNo,Context."Table Name");
       RecRef.MODIFY;
       MESSAGE(TookTxt,USERID,SESSIONID,HoldDocumentNo,MarkSeen);
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@19();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Объект мерный, его числа описывают поставленный показ, а не среду установки;
+      // в настройке LockWatch Setup им места нет.
     END;
 
     LOCAL PROCEDURE WaitDocumentNo@6() : Code[20];
@@ -173,11 +180,25 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       EXIT('LOCKWATCH-LIVE');
     END;
 
+    LOCAL PROCEDURE MarkSeenNo@20() : Text[3];
+    BEGIN
+      // Машиночитаемый ответ "своей отметки не нашли". Слово обязано быть коротким и
+      // одинаковым на обоих языках: его разбирает прогон, а не читает человек.
+      EXIT('no');
+    END;
+
+    LOCAL PROCEDURE MarkSeenYes@21() : Text[3];
+    BEGIN
+      // Ответ "отметка есть". Пара к MarkSeenNo: отказ дороги к имени и молчание
+      // переходника выглядят одинаково, и различает их только это слово.
+      EXIT('yes');
+    END;
+
     BEGIN
     {
       Держатель блокировки ОТ ИМЕНИ ЧЕЛОВЕКА.
 
-      Codeunit 110242 держит блокировку на своей же таблице отметок и отвечает на вопрос
+      Codeunit 110247 держит блокировку на своей же таблице отметок и отвечает на вопрос
       "видит ли штатная карта транзакций сессию NAV". Этот отвечает на другой, и он дороже:
       "назовёт ли журнал ЧЕЛОВЕКА, который держит строку документа".
 
@@ -200,7 +221,7 @@ OBJECT Codeunit 110243 LockWatch Hold By User
       отказался бы работать. Мишень ищется ДО LOCKTABLE и тем же отбором, каким читается:
       строка с номером HoldDocumentNo.
 
-      Объект мерный, как и Codeunit 110233: в бою он не нужен и вреда не приносит - без
+      Объект мерный, как и Codeunit 110245: в бою он не нужен и вреда не приносит - без
       строки-мишени он отказывается работать вовсе.
     }
     END.

@@ -1,8 +1,8 @@
-OBJECT Codeunit 110237 LockWatch Context Adapter
+OBJECT Codeunit 110244 LockWatch Context Adapter
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -57,14 +57,6 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
       Mark.Mark(TableNo,DocumentNo(Rec));
     END;
 
-    LOCAL PROCEDURE TableNo@5() : Integer;
-    BEGIN
-      // Номер таблицы у подписки - КОНСТАНТА времени компиляции, настройкой он не
-      // задаётся вовсе (FINDINGS, раздел 10). Отсюда и устройство: на каждую таблицу
-      // контекста - свой переходник, а настройка отвечает только за разбор.
-      EXIT(DATABASE::"Sales Line");
-    END;
-
     LOCAL PROCEDURE DocumentNo@6(VAR Rec@1000000000 : Record 37) : Code[20];
     BEGIN
       // Поле берётся ПО ИМЕНИ, а не по номеру из настройки: номер поля в настройке нужен
@@ -107,6 +99,26 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
       EXIT(Calls);
     END;
 
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@13();
+    BEGIN
+      // Разделитель, а не работа: здесь собраны величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Такая величина тут одна - номер таблицы подписки:
+      // он константа времени компиляции, и настройкой его не задать (FINDINGS, раздел 10).
+      //
+      // Блок стоит здесь, а не в самом конце объекта, нарочно: всё, что ниже SelfTest,
+      // скрипт scripts/New-ContextAdapter.ps1 заменяет своей обкаткой, и блок в конце
+      // пропал бы из собранного переходника вместе с TableNo, который зовёт Remember.
+    END;
+
+    LOCAL PROCEDURE TableNo@5() : Integer;
+    BEGIN
+      // Номер таблицы у подписки - КОНСТАНТА времени компиляции, настройкой он не
+      // задаётся вовсе (FINDINGS, раздел 10). Отсюда и устройство: на каждую таблицу
+      // контекста - свой переходник, а настройка отвечает только за разбор.
+      EXIT(DATABASE::"Sales Line");
+    END;
+
     [External]
     PROCEDURE SelfTest@7();
     VAR
@@ -132,7 +144,7 @@ OBJECT Codeunit 110237 LockWatch Context Adapter
       IF NOT Existed THEN BEGIN
         ContextTable.INIT;
         ContextTable.VALIDATE("Table No.",TableNo);
-        ContextTable."Document Field No." := 3;
+        ContextTable."Document Field No." := SalesLine.FIELDNO("Document No.");
         ContextTable.Enabled := TRUE;
         ContextTable.INSERT;
       END ELSE

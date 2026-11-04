@@ -1,8 +1,8 @@
-OBJECT Codeunit 110236 LockWatch Task
+OBJECT Codeunit 110235 LockWatch Task
 {
   OBJECT-PROPERTIES
   {
-    Date=07.09.26;
+    Date=19.10.26;
     Time=12:00:00;
     Modified=Yes;
     Version List=LockWatch;
@@ -95,7 +95,7 @@ OBJECT Codeunit 110236 LockWatch Task
     [External]
     PROCEDURE RunOnce@3();
     VAR
-      Pass@1000000000 : Codeunit 110235;
+      Pass@1000000000 : Codeunit 110234;
     BEGIN
       // Вручную - напрямую и БЕЗ перехвата: человек, нажавший кнопку, должен увидеть
       // отказ окном, а не вычитать его потом из сообщения сторожа.
@@ -116,9 +116,9 @@ OBJECT Codeunit 110236 LockWatch Task
       // разные ответы, и второй значит, что настройка разошлась с базой и это заметили.
       IF ContextTable.FINDSET(TRUE) THEN
         REPEAT
-          Before := ContextTable."Table Name" + '|' + ContextTable."Document Field Name";
+          Before := ContextTable."Table Name" + NameSeparator + ContextTable."Document Field Name";
           ContextTable.FillNames;
-          IF Before <> ContextTable."Table Name" + '|' + ContextTable."Document Field Name" THEN BEGIN
+          IF Before <> ContextTable."Table Name" + NameSeparator + ContextTable."Document Field Name" THEN BEGIN
             ContextTable.MODIFY;
             Changed := Changed + 1;
           END;
@@ -340,6 +340,21 @@ OBJECT Codeunit 110236 LockWatch Task
       // Доля времени, которую наблюдателю позволено занимать: одна десятая. Число это -
       // не про удобство, а про обещание заказчику. Всё, что дороже, само себя разредит.
       EXIT(10);
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@17();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Здесь такой величины нет: разделитель - семантика сравнения имён.
+    END;
+
+    LOCAL PROCEDURE NameSeparator@16() : Text[1];
+    BEGIN
+      // Знак, которым склеиваются два имени для сравнения "было - стало". Выбран так,
+      // чтобы не встречаться в именах таблиц и полей NAV: с ним "AB" и "C" дают не ту же
+      // строку, что "A" и "BC", а без него имена слились бы в одно неразличимое.
+      EXIT('|');
     END;
 
     BEGIN

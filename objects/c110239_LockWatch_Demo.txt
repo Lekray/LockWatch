@@ -1,4 +1,4 @@
-OBJECT Codeunit 110244 LockWatch Demo
+OBJECT Codeunit 110239 LockWatch Demo
 {
   OBJECT-PROPERTIES
   {
@@ -29,7 +29,7 @@ OBJECT Codeunit 110244 LockWatch Demo
       NoWaitTxt@1000000009 : TextConst 'ENU=The demo raised NO wait: the sessions took the row one after the other instead of queueing, and there is nothing for the pass to see. That is not a fault of the watch - compare the holding time with the poll period.;RUS=Показ НЕ поднял ожидания: сессии взяли строку по очереди, а не встали за ней, и смотреть проходу нечего. Это не беда сторожа - сверьте время удержания с периодом опроса.';
       NoQueueTxt@1000000010 : TextConst 'ENU=The server queue could not be asked, so whether the wait came up stays UNKNOWN: %1;RUS=Очередь сервера спросить не удалось, и поднялось ли ожидание - НЕИЗВЕСТНО: %1';
       Parse@1000000011 : Codeunit 110230;
-      Sql@1000000012 : Codeunit 110234;
+      Sql@1000000012 : Codeunit 110233;
 
     [External]
     PROCEDURE RunDemo@1();
@@ -73,7 +73,7 @@ OBJECT Codeunit 110244 LockWatch Demo
       IF NOT STARTSESSION(WaitSession,CODEUNIT::"LockWatch Demo Wait",COMPANYNAME) THEN
         ERROR(NoSessionErr);
 
-      Note := STRSUBSTNO(StartedTxt,HoldMs DIV 1000);
+      Note := STRSUBSTNO(StartedTxt,HoldMs DIV MsPerSecond);
       // Спрашивается ФАКТ ожидания, а не "сессии отправлены, а дальше как получится". Порядок
       // спора держится на слепом SLEEP: ждущий может подняться раньше держателя, взять
       // строку первым - и тогда показ отчитается "пошёл", а в очереди сервера не будет
@@ -133,6 +133,26 @@ OBJECT Codeunit 110244 LockWatch Demo
       EXIT(0);
     END;
 
+    LOCAL PROCEDURE EnsureTarget@5();
+    BEGIN
+      // Строка заводится один раз за жизнь установки и дальше только переписывается.
+      // Удалять её после показа незачем: по ней видно, чем показ кончился в прошлый раз.
+      IF Demo.GET(TargetNo) THEN
+        EXIT;
+      Demo.INIT;
+      Demo."Entry No." := TargetNo;
+      Demo.Note := TargetTxt;
+      Demo."Touched At" := CURRENTDATETIME;
+      Demo.INSERT;
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@19();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Числа показа описывают сценарий демонстрации, а не среду установки, поэтому
+      // им место здесь, а не в настройке LockWatch Setup.
+    END;
+
     LOCAL PROCEDURE VerifyTries@7() : Integer;
     BEGIN
       // Двенадцать попыток с четвертью секунды между ними - три секунды на подъём сеанса
@@ -183,17 +203,11 @@ OBJECT Codeunit 110244 LockWatch Demo
       EXIT(500);
     END;
 
-    LOCAL PROCEDURE EnsureTarget@5();
+    LOCAL PROCEDURE MsPerSecond@20() : Integer;
     BEGIN
-      // Строка заводится один раз за жизнь установки и дальше только переписывается.
-      // Удалять её после показа незачем: по ней видно, чем показ кончился в прошлый раз.
-      IF Demo.GET(TargetNo) THEN
-        EXIT;
-      Demo.INIT;
-      Demo."Entry No." := TargetNo;
-      Demo.Note := TargetTxt;
-      Demo."Touched At" := CURRENTDATETIME;
-      Demo.INSERT;
+      // Тысяча миллисекунд в секунде. Показ называет удержание человеку в СЕКУНДАХ, а
+      // держит в миллисекундах, и перевод тут единица измерения, а не настройка.
+      EXIT(1000);
     END;
 
     BEGIN
@@ -223,7 +237,7 @@ OBJECT Codeunit 110244 LockWatch Demo
       2. ПО ЭПИЗОДУ ПОКАЗА НЕ УВЕДОМЛЯЮТ. Показ держит строку шесть секунд против
          порога уведомления пять по умолчанию, то есть уведомление ушло бы наружу по
          нажатию кнопки. Помечен эпизод показа своей же таблицей мишени, и создаёт
-         уведомление по нему Codeunit 110240: строку уведомления негде пометить "это был
+         уведомление по нему Codeunit 110237: строку уведомления негде пометить "это был
          показ", и такая строка читалась бы потом как настоящая беда.
     }
     END.

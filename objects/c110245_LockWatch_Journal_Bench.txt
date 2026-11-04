@@ -1,4 +1,4 @@
-OBJECT Codeunit 110233 LockWatch Journal Bench
+OBJECT Codeunit 110245 LockWatch Journal Bench
 {
   OBJECT-PROPERTIES
   {
@@ -20,8 +20,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     VAR
       Parse@1000000000 : Codeunit 110230;
       Journal@1000000001 : Codeunit 110232;
-      Coverage@1000000028 : Codeunit 110238;
-      Alerts@1000000033 : Codeunit 110240;
+      Coverage@1000000028 : Codeunit 110236;
+      Alerts@1000000033 : Codeunit 110237;
       Episode@1000000002 : Record 110231;
       Moved@1000000046 : Record 110238;
       MailGroup@1000000118 : Integer;
@@ -283,19 +283,21 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // промежутку между последним наблюдением и закрывающим проходом. Малый
       // период при долгом промежутке не должен читаться как "предоставлено",
       // короткий промежуток должен, а месяц и больше не должен переполнять Integer.
-      RegLongOutcome := RegEpisode(901,SecondWaitMs,100,Parse.NavLockTimeoutMs + 2000);
+      RegLongOutcome := RegEpisode(RegLongVictimSpid,SecondWaitMs,RegPeriodMs,
+                                Parse.NavLockTimeoutMs + RegGapSurplusMs);
       Check(Passed,Total,Report,ChkCloseGapLongTxt,
             RegLongOutcome = Parse.OutcomeUnknown,
-            STRSUBSTNO(CloseGapLongTxt,RegLongOutcome,100,Parse.NavLockTimeoutMs + 2000));
-      RegShortOutcome := RegEpisode(902,SecondWaitMs,100,100);
+            STRSUBSTNO(CloseGapLongTxt,RegLongOutcome,RegPeriodMs,
+                       Parse.NavLockTimeoutMs + RegGapSurplusMs));
+      RegShortOutcome := RegEpisode(RegShortVictimSpid,SecondWaitMs,RegPeriodMs,RegShortAgeMs);
       Check(Passed,Total,Report,ChkCloseGapShortTxt,
             RegShortOutcome = Parse.OutcomeGranted,
-            STRSUBSTNO(CloseGapShortTxt,RegShortOutcome,100,100));
-      RegHugeGap := 31 * Parse.MsPerDay;
-      RegHugeOutcome := RegEpisode(903,SecondWaitMs,100,RegHugeGap);
+            STRSUBSTNO(CloseGapShortTxt,RegShortOutcome,RegPeriodMs,RegShortAgeMs));
+      RegHugeGap := RegHugeGapDays * Parse.MsPerDay;
+      RegHugeOutcome := RegEpisode(RegHugeVictimSpid,SecondWaitMs,RegPeriodMs,RegHugeGap);
       Check(Passed,Total,Report,ChkCloseGapHugeTxt,
             RegHugeOutcome = Parse.OutcomeUnknown,
-            STRSUBSTNO(CloseGapHugeTxt,RegHugeOutcome,31));
+            STRSUBSTNO(CloseGapHugeTxt,RegHugeOutcome,RegHugeGapDays));
 
       // Сводка проверяется ЗДЕСЬ, до состаривания и уборки: журнал в этот миг содержит
       // ровно то, что мерный прогон в него положил, - пятьсот закрытых эпизодов одной
@@ -327,44 +329,52 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // накопитель считает по нему приросты - значит, буфер можно подать руками. Строка
       // берётся с ОТРИЦАТЕЛЬНЫМ номером объекта: в SQL номера положительны, и столкнуться
       // с настоящей строкой такая не может.
-      MakeCounterReading(Reading,100,5000,FirstEscalationsUnderTest);
+      MakeCounterReading(Reading,CovFirstWaits,CovFirstMs,FirstEscalationsUnderTest);
       Coverage.Accumulate(Reading,TRUE);
-      MakeCounterReading(Reading,150,8000,SecondEscalationsUnderTest);
+      MakeCounterReading(Reading,CovSecondWaits,CovSecondMs,SecondEscalationsUnderTest);
       Coverage.Accumulate(Reading,FALSE);
       Cov.GET(BenchObjectId,BenchIndexId);
       // Эскалации во ВТОРОМ чтении не те же, что в первом, и прирост спрашивается не
       // нулевой: с равными числами ожидаемый ноль вышел бы и у кода, который эскалации не
       // считает вовсе, - утверждение было бы пустым.
       Check(Passed,Total,Report,ChkCoverageTxt,
-            (Cov.Waits = 50) AND (Cov."Wait (ms)" = 3000) AND
+            (Cov.Waits = CovSecondWaits - CovFirstWaits) AND
+            (Cov."Wait (ms)" = CovSecondMs - CovFirstMs) AND
             (Cov.Escalations = SecondEscalationsUnderTest - FirstEscalationsUnderTest),
-            STRSUBSTNO(CoverageTxt,Cov.Waits,50,Cov."Wait (ms)",3000,Cov.Escalations,
+            STRSUBSTNO(CoverageTxt,Cov.Waits,CovSecondWaits - CovFirstWaits,
+                       Cov."Wait (ms)",CovSecondMs - CovFirstMs,Cov.Escalations,
                        SecondEscalationsUnderTest - FirstEscalationsUnderTest));
 
       // Обнуление счётчика сервером выглядит как значение МЕНЬШЕ прежнего. Разность в этом
       // случае была бы отрицательной, и итог поехал бы назад - молча и правдоподобно.
-      MakeCounterReading(Reading,10,200,0);
+      MakeCounterReading(Reading,CovResetWaits,CovResetMs,0);
       Coverage.Accumulate(Reading,FALSE);
       Coverage.PassCounts(CovAdded,CovChanged,CovResets);
       Cov.GET(BenchObjectId,BenchIndexId);
       Check(Passed,Total,Report,ChkCoverageResetTxt,
-            (CovResets = 1) AND (Cov.Resets = 1) AND (Cov.Waits = 60) AND (Cov."Wait (ms)" = 3200),
-            STRSUBSTNO(CoverageResetTxt,Cov.Resets,Cov.Waits,60,Cov."Wait (ms)",3200));
+            (CovResets = 1) AND (Cov.Resets = 1) AND
+            (Cov.Waits = (CovSecondWaits - CovFirstWaits) + CovResetWaits) AND
+            (Cov."Wait (ms)" = (CovSecondMs - CovFirstMs) + CovResetMs),
+            STRSUBSTNO(CoverageResetTxt,Cov.Resets,Cov.Waits,
+                       (CovSecondWaits - CovFirstWaits) + CovResetWaits,Cov."Wait (ms)",
+                       (CovSecondMs - CovFirstMs) + CovResetMs));
       Cov.DELETE;
 
       // Первый положительный замер без базы - это полный прирост; тот же замер
       // с BaselineOnly=TRUE только задаёт базу и ничего не добавляет.
-      MakeCounterReading(Reading,40,1200,3);
+      MakeCounterReading(Reading,CovFreshWaits,CovFreshMs,CovFreshEscalations);
       Coverage.Accumulate(Reading,FALSE);
       Cov.RESET;
       Cov.INIT;
       CovFound := Cov.GET(BenchObjectId,BenchIndexId);
       Check(Passed,Total,Report,ChkCovFreshTxt,
-            (Cov.Waits = 40) AND (Cov."Wait (ms)" = 1200) AND (Cov.Escalations = 3),
-            STRSUBSTNO(CovFreshTxt,Cov.Waits,40,Cov."Wait (ms)",1200,Cov.Escalations,3));
+            (Cov.Waits = CovFreshWaits) AND (Cov."Wait (ms)" = CovFreshMs) AND
+            (Cov.Escalations = CovFreshEscalations),
+            STRSUBSTNO(CovFreshTxt,Cov.Waits,CovFreshWaits,Cov."Wait (ms)",CovFreshMs,
+                       Cov.Escalations,CovFreshEscalations));
       IF CovFound THEN
         Cov.DELETE;
-      MakeCounterReading(Reading,40,1200,3);
+      MakeCounterReading(Reading,CovFreshWaits,CovFreshMs,CovFreshEscalations);
       Coverage.Accumulate(Reading,TRUE);
       Cov.RESET;
       Cov.INIT;
@@ -380,15 +390,15 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // настоящем spid отрицательных не бывает, и столкнуться с чужим уведомлением нельзя.
       Alerts.BeginPass;
       MakeAlertEpisode(AlertEp,AlertHeadA,AlertWaitMs);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,NoNotifGroup);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,NoNotifGroup);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,NoNotifGroup);
       MakeAlertEpisode(AlertEp,AlertHeadB,AlertWaitMs);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,NoNotifGroup);
       // Ниже порога уведомления нет вовсе, и это тоже часть защёлки: порог, который не
       // отсекает, превращает уведомление в поток.
       MakeAlertEpisode(AlertEp,AlertHeadC,AlertThresholdMs - 1);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,NoNotifGroup);
       Alerts.PassCounts(AlertRaised,AlertLatched);
       AlertRows := AlertRowCount;
       Alert.RESET;
@@ -396,19 +406,21 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       IF Alert.FINDFIRST THEN
         AlertEpisodes := Alert.Episodes;
       Check(Passed,Total,Report,ChkLatchTxt,
-            (AlertRaised = 2) AND (AlertLatched = 2) AND (AlertRows = 2) AND (AlertEpisodes = 3),
-            STRSUBSTNO(LatchTxt,AlertRaised,2,AlertLatched,2,AlertRows,AlertEpisodes));
+            (AlertRaised = AlertExpectedRaised) AND (AlertLatched = AlertExpectedLatched) AND
+            (AlertRows = AlertExpectedRows) AND (AlertEpisodes = AlertEpisodesBehindHead),
+            STRSUBSTNO(LatchTxt,AlertRaised,AlertExpectedRaised,AlertLatched,AlertExpectedLatched,
+                       AlertRows,AlertEpisodes));
 
       // Окно защёлки проверяется тем, что его СДВИГАЮТ: строка состаривается за окно, и
       // следующее уведомление по той же голове обязано завестись заново. Без этой проверки
       // защёлка, залипшая навсегда, выглядела бы точно так же.
       AgeAlerts;
       MakeAlertEpisode(AlertEp,AlertHeadA,AlertWaitMs);
-      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,0);
+      Alerts.Raise(AlertEp,AlertThresholdMs,FALSE,'',FALSE,NoNotifGroup);
       AlertRows := AlertRowCount;
       Check(Passed,Total,Report,ChkLatchWindowTxt,
-            AlertRows = 3,
-            STRSUBSTNO(LatchWindowTxt,AlertRows,3));
+            AlertRows = AlertRowsAfterAged,
+            STRSUBSTNO(LatchWindowTxt,AlertRows,AlertRowsAfterAged));
       // Канал "Почта" проверяется здесь же, до уборки: строки заводятся теми же
       // отрицательными головами, и убирает их тот же SweepAlerts.
       CheckMail(Passed,Total,Report);
@@ -585,8 +597,8 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // переехавших: на стенде в истории могут лежать и настоящие эпизоды, и свод обязан
       // сложить их тоже. Сравнение с числом переехавших прошло бы только на пустой истории
       // и краснело бы у всякого, кто уже наблюдал.
-      SummedJournal := Journal.Summarize(Line,0DT,CURRENTDATETIME,0,FALSE);
-      SummedBoth := Journal.Summarize(Line,0DT,CURRENTDATETIME,0,TRUE);
+      SummedJournal := Journal.Summarize(Line,0DT,CURRENTDATETIME,NoSummaryThreshold,FALSE);
+      SummedBoth := Journal.Summarize(Line,0DT,CURRENTDATETIME,NoSummaryThreshold,TRUE);
       InHistoryNow := HistoryRowsUpTo(CURRENTDATETIME);
       Check(Passed,Total,Report,ChkSummaryHistoryTxt,
             (SummedBoth - SummedJournal = InHistoryNow) AND (InHistoryNow > 0),
@@ -620,8 +632,10 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       NamePickedAgain := Journal.PickUnresolved(NamePending,Parse.MaxDocumentsPerPass);
       NameBufferAgain := NamePending.COUNT;
       Check(Passed,Total,Report,ChkNameAgainTxt,
-            (NamePickedFirst = 2) AND (NamePickedAgain = 2) AND
-            (NameBufferFirst = 2) AND (NameBufferAgain = 2) AND
+            (NamePickedFirst = NamePickedExpected) AND
+            (NamePickedAgain = NamePickedExpected) AND
+            (NameBufferFirst = NamePickedExpected) AND
+            (NameBufferAgain = NamePickedExpected) AND
             NamePending.GET(NameA) AND NamePending.GET(NameB),
             STRSUBSTNO(NameAgainTxt,NamePickedFirst,NamePickedAgain,
                        NameBufferFirst,NameBufferAgain));
@@ -630,7 +644,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Episode.GET(NameA);
       NameAttemptsA := Episode."Name Attempts";
       Journal.SetDocument(NameA,NameDocument,NameCulprit,Parse.DocSourceFromMark,'',NameVictim,
-                          NameDocument,Parse.UserSourceFromMark,'17');
+                          NameDocument,Parse.UserSourceFromMark,NameSessions);
       Episode.GET(NameA);
       Check(Passed,Total,Report,ChkNameLateTxt,
             (NameAttemptsA = 1) AND (Episode."User Name" = NameCulprit) AND
@@ -647,7 +661,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       Check(Passed,Total,Report,ChkNameHeldTxt,
             (Episode."User Name" = NameCulprit) AND (Episode."Victim User Name" = NameVictim) AND
             (Episode."Document No." = NameDocument) AND
-            (Episode."Culprit NAV Sessions" = '17') AND (NamePickedNamed = 0),
+            (Episode."Culprit NAV Sessions" = NameSessions) AND (NamePickedNamed = 0),
             STRSUBSTNO(NameHeldTxt,Episode."User Name",Episode."Victim User Name",
                        Episode."Document No.",Episode."Culprit NAV Sessions",NamePickedNamed));
 
@@ -703,7 +717,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Первый проход открывает строку без порога, второй приходит с порогом выше нового
       // ожидания. Обновление обязано случиться: иначе длинный эпизод, пойманный однажды,
       // пропадал бы на первом же коротком проходе.
-      OneWaitPass(ThresholdIndex,FirstWaitMs,0,ThrStarted,Opened,Updated);
+      OneWaitPass(ThresholdIndex,FirstWaitMs,NoMinWait,ThrStarted,Opened,Updated);
       OneWaitPass(ThresholdIndex,UpdateWaitUnderTest,MinWaitUnderTest,ThrStarted + ThrGap,Opened,Updated);
       Episode.RESET;
       Episode.SETRANGE("Victim SPID",-ThresholdIndex);
@@ -717,7 +731,7 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
             STRSUBSTNO(MinWaitUpdateTxt,MinWaitUnderTest,UpdateWaitUnderTest,Updated,Opened,ThrStoredWait));
       Sweep;
 
-      OneWaitPass(ThresholdIndex,TinyWaitUnderTest,0,ThrStarted,Opened,Updated);
+      OneWaitPass(ThresholdIndex,TinyWaitUnderTest,NoMinWait,ThrStarted,Opened,Updated);
       Check(Passed,Total,Report,ChkMinWaitOffTxt,
             (Opened = 1) AND (BenchRowCount = 1) AND
             (BenchRowsWithWait(TinyWaitUnderTest) = 1),
@@ -835,50 +849,21 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // Замер на пустой строке был бы вдвое бодрее того, что случится на бою.
       Observed.INIT;
       Observed."Victim SPID" := -Index;
-      Observed."Victim Transaction Id" := 4000000000 + Index;
+      Observed."Victim Transaction Id" := ObservedTransactionBase + Index;
       Observed."Victim Is NAV" := Observed."Victim Is NAV"::Yes;
       Observed."Blocker SPID" := -Index - 1;
-      Observed."Blocker Transaction Id" := 5000000000 + Index;
+      Observed."Blocker Transaction Id" := ObservedBlockerTransactionBase + Index;
       Observed."Head SPID" := -1;
-      Observed."Chain Depth" := 2;
+      Observed."Chain Depth" := ObservedChainDepth;
       Observed."Victims Behind Head" := Index;
-      Observed."Resource Kind" := 'KEYLOCK';
+      Observed."Resource Kind" := ObservedResourceKind;
       Observed."Hobt Id" := SampleHobt + Index;
-      Observed."Database Id" := 7;
-      Observed."SQL Object Name" := 'Company Name$Sales Line';
-      Observed."NAV Table Name" := 'Sales Line';
-      Observed."NAV Key No." := 1;
+      Observed."Database Id" := ObservedDatabaseId;
+      Observed."SQL Object Name" := ObservedSqlObjectName;
+      Observed."NAV Table Name" := ObservedTableName;
+      Observed."NAV Key No." := ObservedKeyNo;
       Observed."Last Wait (ms)" := WaitMs;
-      Observed."Blocker Statement" := 'UPDATE "Company Name$Sales Line" SET "Quantity" ' +
-        'WHERE "Document Type" AND "Document No_" AND "Line No_"';
-    END;
-
-    LOCAL PROCEDURE SampleHobt@20() : BigInteger;
-    VAR
-      Value@1000000000 : BigInteger;
-    BEGIN
-      // Числовой литерал в C/AL - это Decimal, а Decimal не переваривает больше
-      // 999 999 999 999 999,99. Настоящий hobt длиннее, и написанный литералом он не
-      // компилируется вовсе. Единственный способ внести его в код - через EVALUATE.
-      EVALUATE(Value,'72057594261667840');
-      EXIT(Value);
-    END;
-
-    LOCAL PROCEDURE NoHistoryThreshold@70() : Integer;
-    BEGIN
-      // Ноль: порога нет, уезжает всё. Мерный объект меряет ПЕРЕЕЗД - сколько ушло из
-      // журнала и сколько доехало до истории, - и порог здесь увёл бы часть строк в
-      // удаление, то есть подменил бы измеряемое. Сам порог проверяется на стенде, где
-      // эпизоды настоящие и длительность у них не выдуманная.
-      EXIT(0);
-    END;
-
-    LOCAL PROCEDURE NoMinWait@83() : Integer;
-    BEGIN
-      // Ноль: порога записи нет, открывается всё. Им зовут журнал замер и прежние сцены -
-      // они держатся на том, что каждый ждущий даёт строку. Сам порог проверяется
-      // отдельными сценами ниже.
-      EXIT(0);
+      Observed."Blocker Statement" := ObservedUpdateStatement;
     END;
 
     LOCAL PROCEDURE Backdate@5(Rows@1000000000 : Integer;Days@1000000001 : Integer) : Integer;
@@ -1053,50 +1038,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       EXIT(Row.GET(EntryNo));
     END;
 
-    LOCAL PROCEDURE CeilingSurplus@56() : Integer;
-    BEGIN
-      // Семь строк сверх потолка. Не десять: состаренных ровно десять, и совпади числа -
-      // подмена одного предела другим прошла бы проверку незамеченной.
-      EXIT(7);
-    END;
-
-    LOCAL PROCEDURE DropThresholdMs@58() : Integer;
-    BEGIN
-      // Час. Заведомо больше любого ожидания, какое кладёт мерный прогон, - значит из
-      // журнала не уедет НИЧЕГО, всё уйдёт в удаление. Смесь переезда с удалением мерила
-      // бы обе дороги разом, и покрасневшая проверка не сказала бы, которая сломана.
-      EXIT(3600000);
-    END;
-
-    LOCAL PROCEDURE DropSurplus@59() : Integer;
-    BEGIN
-      // Пять строк сверх потолка. Не семь: столько уезжает в сцене потолка, и совпади
-      // числа - проверка прошла бы на чужом остатке.
-      EXIT(5);
-    END;
-
-    LOCAL PROCEDURE FutureMark@60() : DateTime;
-    BEGIN
-      // Отметка охвата в завтрашнем дне: ни одна строка журнала в срок не попадает.
-      // Сутки, а не секунда: часы у базы и у сессии расходятся, и отметка "сейчас плюс
-      // чуть-чуть" оказалась бы позади половины строк на чужой машине.
-      EXIT(CURRENTDATETIME + 86400000);
-    END;
-
-    LOCAL PROCEDURE DropPlantEpisodes@61() : Integer;
-    BEGIN
-      // Три эпизода. Не один: единица прошла бы и там, где охват прибавляет не накопитель,
-      // а признак "он непуст".
-      EXIT(3);
-    END;
-
-    LOCAL PROCEDURE DropPlantMs@62() : Integer;
-    BEGIN
-      // Сто одиннадцать миллисекунд. Число нарочно не круглое и не кратное числу эпизодов:
-      // подмена одного накопителя другим или счёт "по эпизоду" выдали бы себя сразу.
-      EXIT(111);
-    END;
-
     LOCAL PROCEDURE PlantDropped@63(Episodes@1000000000 : Integer;WaitMs@1000000001 : Integer);
     VAR
       State@1000000002 : Record 110237;
@@ -1221,11 +1162,410 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // бы десятые доли, которых в нём не считалось. А показывать десятые доли
       // микросекунды незачем: таких различий не видно ни на одной машине.
       IF Rows > 0 THEN BEGIN
-        Exact := Milliseconds * 1000.0;
+        Exact := Milliseconds * MicrosPerMs;
         Exact := Exact / Rows;
-        PerRow := ROUND(Exact,1);
+        PerRow := ROUND(Exact,PerRowPrecision);
       END;
       EXIT(STRSUBSTNO(TimingTxt,Phase,Milliseconds,Rows,PerRow) + CrLf);
+    END;
+
+    LOCAL PROCEDURE CheckMail@89(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    VAR
+      Row@1000000003 : Record 110236;
+      Ep@1000000004 : Record 110231;
+      MailSub@1000000005 : Codeunit 110245;
+      Bound@1000000006 : Boolean;
+      Found@1000000007 : Boolean;
+      StartedAt@1000000008 : DateTime;
+      Sessions@1000000009 : Text[250];
+      SubjectLen@1000000010 : Integer;
+      BodyLen@1000000011 : Integer;
+    BEGIN
+      // Подписчик проверяется НАСТОЯЩИЙ: второй экземпляр этого же кодюнита, привязанный
+      // вручную. Подменить вызов события заглушкой значило бы проверить заглушку, а не
+      // доставку. Ручная привязка живёт до UNBINDSUBSCRIPTION или до конца процедуры.
+      StartedAt := CURRENTDATETIME - MailStartedAgoMs;
+      Sessions := MailSessions;
+
+      // (а) Группа 0: подписчик привязан и обязан молчать, а строка - назвать причину.
+      MailSub.MailModeSet(MailModeSent);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadNoGroup,AlertThresholdMs + MailOvertimeMs);
+      Ep."Started At" := StartedAt;
+      Ep."Culprit NAV Sessions" := Sessions;
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,NoNotifGroup);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadNoGroup,Row);
+      Check(Passed,Total,Report,ChkMailNoGroupTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 0) AND
+            (Row."Channel Note" = ExpectNoGroupTxt),
+            STRSUBSTNO(MailNoGroupDetailTxt,Bound,MailSub.MailCallsGet(),Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (б) Подписчика нет вовсе: строка обязана сказать и об этом.
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadNoHandler,AlertThresholdMs + MailOvertimeMs);
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadNoHandler,Row);
+      Check(Passed,Total,Report,ChkMailNoHandlerTxt,
+            Found AND (MailSub.MailCallsGet() = 0) AND (Row."Channel Note" = ExpectNoHandlerTxt),
+            STRSUBSTNO(MailNoHandlerDetailTxt,MailSub.MailCallsGet(),Row."Channel Note"));
+
+      // (в) Отказ: текст отказа приходит от подписчика и ложится в заметку целиком.
+      MailSub.MailModeSet(MailModeRefused);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadRefused,AlertThresholdMs + MailOvertimeMs);
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadRefused,Row);
+      Check(Passed,Total,Report,ChkMailRefusedTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
+            (Row."Channel Note" = MailRefusedTxt),
+            STRSUBSTNO(MailRefusedDetailTxt,MailSub.MailCallsGet(),
+                       Row.Channel = Row.Channel::Mail,Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (г) Ошибка внутри подписчика: доставка ловит её, строка остаётся, причина в заметке.
+      MailSub.MailModeSet(MailModeError);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadError,AlertThresholdMs + MailOvertimeMs);
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadError,Row);
+      Check(Passed,Total,Report,ChkMailErrorTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
+            (STRPOS(Row."Channel Note",MailErrorTxt) > 0),
+            STRSUBSTNO(MailErrorDetailTxt,MailSub.MailCallsGet(),Found,Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (д) Отправлено: канал в строке - почта, а не журнал.
+      MailSub.MailModeSet(MailModeSent);
+      Bound := BINDSUBSCRIPTION(MailSub);
+      Alerts.BeginPass;
+      MakeAlertEpisode(Ep,MailHeadSent,AlertThresholdMs + MailOvertimeMs);
+      Ep."Started At" := StartedAt;
+      Ep."Culprit NAV Sessions" := Sessions;
+      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
+      Alerts.DeliverPending;
+      Found := GetAlert(MailHeadSent,Row);
+      Check(Passed,Total,Report,ChkMailSentTxt,
+            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
+            (Row.Channel = Row.Channel::Mail) AND (Row."Channel Note" = ExpectSentTxt),
+            STRSUBSTNO(MailSentDetailTxt,MailSub.MailCallsGet(),
+                       Row.Channel = Row.Channel::Mail,Row."Channel Note"));
+      Bound := UNBINDSUBSCRIPTION(MailSub);
+
+      // (е) Содержимое: группа, поданная в Raise, и настоящие тема с телом - в теле стоят
+      // таблица, сеансы и начало ожидания, то есть всё, ради чего письмо и пишется.
+      SubjectLen := STRLEN(MailSub.MailSubjectGet());
+      BodyLen := STRLEN(MailSub.MailBodyGet());
+      Check(Passed,Total,Report,ChkMailContentTxt,
+            (MailSub.MailGroupGet() = MailGroupId) AND (SubjectLen > 0) AND (BodyLen > 0) AND
+            (STRPOS(MailSub.MailBodyGet(),ObservedTableName) > 0) AND
+            (STRPOS(MailSub.MailBodyGet(),Sessions) > 0) AND
+            (STRPOS(MailSub.MailBodyGet(),FORMAT(StartedAt,0,0)) > 0),
+            STRSUBSTNO(MailContentDetailTxt,MailSub.MailGroupGet(),MailGroupId,SubjectLen,BodyLen,
+                       ObservedTableName,Sessions,FORMAT(StartedAt,0,0)));
+    END;
+
+    LOCAL PROCEDURE GetAlert@90(Spid@1000000000 : Integer;VAR Row@1000000001 : Record 110236) : Boolean;
+    BEGIN
+      // Строка ищется по голове, а не счётом: проверке нужна именно СВОЯ строка, и её
+      // заметка, а не количество строк в журнале.
+      Row.RESET;
+      Row.SETRANGE("Head SPID",Spid);
+      EXIT(Row.FINDLAST);
+    END;
+
+    [EventSubscriber(Codeunit,110237,OnSendAlertMail)]
+    PROCEDURE OnSendAlertMail@91(NotifGroupID@1000000000 : Integer;Subject@1000000001 : Text;Body@1000000002 : Text;VAR Handled@1000000003 : Boolean;VAR Sent@1000000004 : Boolean;VAR ErrorText@1000000005 : Text);
+    BEGIN
+      // Подписчик мерного прогона: он не шлёт писем, а записывает, ЧТО ему дали, и
+      // отвечает так, как просит выставленный режим. Так проверяется вся дорога доставки,
+      // включая отказ и падение, без единого SMTP.
+      MailCalls := MailCalls + 1;
+      MailGroup := NotifGroupID;
+      MailSubject := Subject;
+      MailBody := Body;
+      Handled := TRUE;
+      IF MailMode = MailModeSent THEN
+        Sent := TRUE
+      ELSE
+        IF MailMode = MailModeRefused THEN BEGIN
+          Sent := FALSE;
+          ErrorText := MailRefusedTxt;
+        END ELSE
+          IF MailMode = MailModeError THEN
+            ERROR(MailErrorTxt);
+    END;
+
+    PROCEDURE MailModeSet@92(Mode@1000000000 : Integer);
+    BEGIN
+      // Режим и захваченные поля обнуляются вместе: иначе счёт вызовов переехал бы из
+      // одной проверки в следующую, и "вызван один раз" зеленело бы на втором вызове.
+      MailMode := Mode;
+      MailCalls := 0;
+      MailGroup := 0;
+      MailSubject := '';
+      MailBody := '';
+    END;
+
+    PROCEDURE MailGroupGet@93() : Integer;
+    BEGIN
+      EXIT(MailGroup);
+    END;
+
+    PROCEDURE MailCallsGet@94() : Integer;
+    BEGIN
+      EXIT(MailCalls);
+    END;
+
+    PROCEDURE MailSubjectGet@95() : Text;
+    BEGIN
+      EXIT(MailSubject);
+    END;
+
+    PROCEDURE MailBodyGet@96() : Text;
+    BEGIN
+      EXIT(MailBody);
+    END;
+
+    LOCAL PROCEDURE MakeAlertEpisode@25(VAR Episode@1000000000 : Record 110231;HeadSpid@1000000001 : Integer;WaitMs@1000000002 : Integer);
+    BEGIN
+      Episode.INIT;
+      Episode."Entry No." := 0;
+      Episode."Head SPID" := HeadSpid;
+      Episode."Victim SPID" := HeadSpid - 1;
+      Episode."NAV Table Name" := ObservedTableName;
+      Episode."NAV Key No." := ObservedKeyNo;
+      Episode."Max Wait (ms)" := WaitMs;
+      Episode.Open := TRUE;
+    END;
+
+    LOCAL PROCEDURE AlertRowCount@26() : Integer;
+    VAR
+      Alert@1000000000 : Record 110236;
+    BEGIN
+      Alert.RESET;
+      Alert.SETFILTER("Head SPID",'<%1',0);
+      EXIT(Alert.COUNT);
+    END;
+
+    LOCAL PROCEDURE AgeAlerts@27();
+    VAR
+      Alert@1000000000 : Record 110236;
+      Back@1000000001 : Duration;
+    BEGIN
+      // Состаривание правкой поля, а не ожиданием пяти минут. Сдвиг берётся с запасом в
+      // одну секунду: ровно на границе окна проверка проверяла бы часы, а не защёлку.
+      Back := Parse.AlertLatchMs + AgeMarginMs;
+      Alert.RESET;
+      Alert.SETFILTER("Head SPID",'<%1',0);
+      IF Alert.FINDSET(TRUE) THEN
+        REPEAT
+          Alert."Last Seen At" := CURRENTDATETIME - Back;
+          Alert.MODIFY;
+        UNTIL Alert.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SweepAlerts@28();
+    VAR
+      Alert@1000000000 : Record 110236;
+    BEGIN
+      Alert.RESET;
+      Alert.SETFILTER("Head SPID",'<%1',0);
+      Alert.DELETEALL;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE NamePass@34(FirstIndex@1000000000 : Integer;SecondIndex@1000000001 : Integer);
+    VAR
+      Observed@1000000002 : Record 110231;
+    BEGIN
+      // Оба ждущих обязаны приходить КАЖДЫМ проходом: FinishPass закрывает эпизод,
+      // которого в проходе не было, а закрытый эпизод не разбирается вовсе.
+      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest,NoMinWait);
+      MakeObserved(Observed,FirstIndex,FirstWaitMs);
+      Journal.Observe(Observed);
+      MakeObserved(Observed,SecondIndex,FirstWaitMs);
+      Journal.Observe(Observed);
+      Journal.FinishPass;
+    END;
+
+    LOCAL PROCEDURE EntryOfIndex@35(Index@1000000000 : Integer) : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETRANGE("Victim SPID",-Index);
+      Episode.FINDFIRST;
+      EXIT(Episode."Entry No.");
+    END;
+
+    LOCAL PROCEDURE MakeCounterReading@22(VAR Reading@1000000000 : TEMPORARY Record 110235;Waits@1000000001 : Integer;WaitMs@1000000002 : Integer;Escalations@1000000003 : Integer);
+    BEGIN
+      Reading.RESET;
+      Reading.DELETEALL;
+      Reading.INIT;
+      Reading."SQL Object Id" := BenchObjectId;
+      Reading."Index Id" := BenchIndexId;
+      Reading."SQL Object Name" := ObservedSqlObjectName;
+      Reading."NAV Table Name" := ObservedTableName;
+      Reading."NAV Key No." := ObservedKeyNo;
+      // В буфере лежат СЫРЫЕ значения счётчика сервера. Приростом их делает накопитель,
+      // и подавать сюда сразу прирост значило бы проверять не то, что работает на бою.
+      Reading."Last Waits" := Waits;
+      Reading."Last Wait (ms)" := WaitMs;
+      Reading."Last Escalations" := Escalations;
+      Reading.INSERT;
+    END;
+
+    LOCAL PROCEDURE PickNameNow@76(EntryNo@1000000000 : Integer) : Integer;
+    VAR
+      Buffer@1000000001 : TEMPORARY Record 110231;
+    BEGIN
+      // Спрашивается не только счёт выбранных, но и сам эпизод: проход мог ответить "взял"
+      // и не положить в буфер ничего. Выбор идёт тем же вызовом, что и в проходе.
+      Journal.PickUnresolved(Buffer,Parse.MaxDocumentsPerPass);
+      IF Buffer.GET(EntryNo) THEN
+        EXIT(1);
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE SqlNamePart@106(Name@1000000000 : Text) : Text;
+    VAR
+      Part@1000000001 : Text;
+      Index@1000000002 : Integer;
+      Ch@1000000003 : Text[1];
+    BEGIN
+      // Имя объекта NAV платформа переводит в имя SQL заменой точки, косой черты,
+      // обратной косой черты и кавычки подчёркиванием (FINDINGS, раздел 5). Вход опыта
+      // обязан собираться тем же переводом, каким его собрала бы платформа.
+      FOR Index := 1 TO STRLEN(Name) DO BEGIN
+        Ch := COPYSTR(Name,Index,1);
+        IF (Ch = '.') OR (Ch = '/') OR (Ch = '\') OR (Ch = '"') THEN
+          Part := Part + '_'
+        ELSE
+          Part := Part + Ch;
+      END;
+      EXIT(Part);
+    END;
+
+    LOCAL PROCEDURE ObservedTableName@107() : Text;
+    VAR
+      RecRef@1000000000 : RecordRef;
+    BEGIN
+      // Настоящее имя таблицы, а не догадка: имя для входа опыта и имя для разбора -
+      // одно и то же, и переименование таблицы не оставит опыт врать о ней.
+      RecRef.OPEN(DATABASE::"Sales Line");
+      EXIT(RecRef.NAME);
+    END;
+
+    LOCAL PROCEDURE ObservedSqlObjectName@108() : Text;
+    BEGIN
+      // Имя таблицы в SQL: <Компания>$<Таблица>. Компания берётся у сессии, а не из
+      // литерала: мерный прогон обязан идти в любой компании стенда.
+      EXIT(SqlNamePart(COMPANYNAME) + SqlObjectSeparator + SqlNamePart(ObservedTableName));
+    END;
+
+    LOCAL PROCEDURE ObservedUpdateStatement@109() : Text;
+    BEGIN
+      // Оператор виновника собирается из того же имени объекта, каким он лежит в SQL.
+      // Имена полей приходят из самого SQL, где точка на конце стала подчёркиванием.
+      EXIT('UPDATE "' + ObservedSqlObjectName + '" SET "' + ObservedFieldQuantity + '" ' +
+           'WHERE "' + ObservedFieldDocumentType + '" AND "' + ObservedFieldDocumentNo + '" ' +
+           'AND "' + ObservedFieldLineNo + '"');
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@45();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Мерный прогон не настраивается - его числа и тексты описывают поставленные
+      // сцены, а не среду установки, - поэтому им место здесь, а не в настройке.
+    END;
+
+    LOCAL PROCEDURE SampleHobt@20() : BigInteger;
+    VAR
+      Value@1000000000 : BigInteger;
+    BEGIN
+      // Числовой литерал в C/AL - это Decimal, а Decimal не переваривает больше
+      // 999 999 999 999 999,99. Настоящий hobt длиннее, и написанный литералом он не
+      // компилируется вовсе. Единственный способ внести его в код - через EVALUATE.
+      EVALUATE(Value,'72057594261667840');
+      EXIT(Value);
+    END;
+
+    LOCAL PROCEDURE CrLf@19() : Text[2];
+    VAR
+      Cr@1000000000 : Char;
+      Lf@1000000001 : Char;
+    BEGIN
+      Cr := 13;
+      Lf := 10;
+      EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
+    LOCAL PROCEDURE NoHistoryThreshold@70() : Integer;
+    BEGIN
+      // Ноль: порога нет, уезжает всё. Мерный объект меряет ПЕРЕЕЗД - сколько ушло из
+      // журнала и сколько доехало до истории, - и порог здесь увёл бы часть строк в
+      // удаление, то есть подменил бы измеряемое. Сам порог проверяется на стенде, где
+      // эпизоды настоящие и длительность у них не выдуманная.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE NoMinWait@83() : Integer;
+    BEGIN
+      // Ноль: порога записи нет, открывается всё. Им зовут журнал замер и прежние сцены -
+      // они держатся на том, что каждый ждущий даёт строку. Сам порог проверяется
+      // отдельными сценами ниже.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CeilingSurplus@56() : Integer;
+    BEGIN
+      // Семь строк сверх потолка. Не десять: состаренных ровно десять, и совпади числа -
+      // подмена одного предела другим прошла бы проверку незамеченной.
+      EXIT(7);
+    END;
+
+    LOCAL PROCEDURE DropThresholdMs@58() : Integer;
+    BEGIN
+      // Час. Заведомо больше любого ожидания, какое кладёт мерный прогон, - значит из
+      // журнала не уедет НИЧЕГО, всё уйдёт в удаление. Смесь переезда с удалением мерила
+      // бы обе дороги разом, и покрасневшая проверка не сказала бы, которая сломана.
+      EXIT(3600000);
+    END;
+
+    LOCAL PROCEDURE DropSurplus@59() : Integer;
+    BEGIN
+      // Пять строк сверх потолка. Не семь: столько уезжает в сцене потолка, и совпади
+      // числа - проверка прошла бы на чужом остатке.
+      EXIT(5);
+    END;
+
+    LOCAL PROCEDURE FutureMark@60() : DateTime;
+    BEGIN
+      // Отметка охвата в завтрашнем дне: ни одна строка журнала в срок не попадает.
+      // Сутки, а не секунда: часы у базы и у сессии расходятся, и отметка "сейчас плюс
+      // чуть-чуть" оказалась бы позади половины строк на чужой машине.
+      EXIT(CURRENTDATETIME + Parse.MsPerDay);
+    END;
+
+    LOCAL PROCEDURE DropPlantEpisodes@61() : Integer;
+    BEGIN
+      // Три эпизода. Не один: единица прошла бы и там, где охват прибавляет не накопитель,
+      // а признак "он непуст".
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE DropPlantMs@62() : Integer;
+    BEGIN
+      // Сто одиннадцать миллисекунд. Число нарочно не круглое и не кратное числу эпизодов:
+      // подмена одного накопителя другим или счёт "по эпизоду" выдали бы себя сразу.
+      EXIT(111);
     END;
 
     LOCAL PROCEDURE PeriodMs@12() : Integer;
@@ -1322,172 +1662,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       EXIT(911);
     END;
 
-
-    LOCAL PROCEDURE CheckMail@89(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
-    VAR
-      Row@1000000003 : Record 110236;
-      Ep@1000000004 : Record 110231;
-      MailSub@1000000005 : Codeunit 110233;
-      Bound@1000000006 : Boolean;
-      Found@1000000007 : Boolean;
-      StartedAt@1000000008 : DateTime;
-      Sessions@1000000009 : Text[250];
-      SubjectLen@1000000010 : Integer;
-      BodyLen@1000000011 : Integer;
-    BEGIN
-      // Подписчик проверяется НАСТОЯЩИЙ: второй экземпляр этого же кодюнита, привязанный
-      // вручную. Подменить вызов события заглушкой значило бы проверить заглушку, а не
-      // доставку. Ручная привязка живёт до UNBINDSUBSCRIPTION или до конца процедуры.
-      StartedAt := CURRENTDATETIME - 9000;
-      Sessions := '4242,4243';
-
-      // (а) Группа 0: подписчик привязан и обязан молчать, а строка - назвать причину.
-      MailSub.MailModeSet(MailModeSent);
-      Bound := BINDSUBSCRIPTION(MailSub);
-      Alerts.BeginPass;
-      MakeAlertEpisode(Ep,MailHeadNoGroup,AlertThresholdMs + 1000);
-      Ep."Started At" := StartedAt;
-      Ep."Culprit NAV Sessions" := Sessions;
-      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,0);
-      Alerts.DeliverPending;
-      Found := GetAlert(MailHeadNoGroup,Row);
-      Check(Passed,Total,Report,ChkMailNoGroupTxt,
-            Bound AND Found AND (MailSub.MailCallsGet() = 0) AND
-            (Row."Channel Note" = ExpectNoGroupTxt),
-            STRSUBSTNO(MailNoGroupDetailTxt,Bound,MailSub.MailCallsGet(),Row."Channel Note"));
-      Bound := UNBINDSUBSCRIPTION(MailSub);
-
-      // (б) Подписчика нет вовсе: строка обязана сказать и об этом.
-      Alerts.BeginPass;
-      MakeAlertEpisode(Ep,MailHeadNoHandler,AlertThresholdMs + 1000);
-      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
-      Alerts.DeliverPending;
-      Found := GetAlert(MailHeadNoHandler,Row);
-      Check(Passed,Total,Report,ChkMailNoHandlerTxt,
-            Found AND (MailSub.MailCallsGet() = 0) AND (Row."Channel Note" = ExpectNoHandlerTxt),
-            STRSUBSTNO(MailNoHandlerDetailTxt,MailSub.MailCallsGet(),Row."Channel Note"));
-
-      // (в) Отказ: текст отказа приходит от подписчика и ложится в заметку целиком.
-      MailSub.MailModeSet(MailModeRefused);
-      Bound := BINDSUBSCRIPTION(MailSub);
-      Alerts.BeginPass;
-      MakeAlertEpisode(Ep,MailHeadRefused,AlertThresholdMs + 1000);
-      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
-      Alerts.DeliverPending;
-      Found := GetAlert(MailHeadRefused,Row);
-      Check(Passed,Total,Report,ChkMailRefusedTxt,
-            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
-            (Row."Channel Note" = MailRefusedTxt),
-            STRSUBSTNO(MailRefusedDetailTxt,MailSub.MailCallsGet(),
-                       Row.Channel = Row.Channel::Mail,Row."Channel Note"));
-      Bound := UNBINDSUBSCRIPTION(MailSub);
-
-      // (г) Ошибка внутри подписчика: доставка ловит её, строка остаётся, причина в заметке.
-      MailSub.MailModeSet(MailModeError);
-      Bound := BINDSUBSCRIPTION(MailSub);
-      Alerts.BeginPass;
-      MakeAlertEpisode(Ep,MailHeadError,AlertThresholdMs + 1000);
-      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
-      Alerts.DeliverPending;
-      Found := GetAlert(MailHeadError,Row);
-      Check(Passed,Total,Report,ChkMailErrorTxt,
-            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
-            (STRPOS(Row."Channel Note",MailErrorTxt) > 0),
-            STRSUBSTNO(MailErrorDetailTxt,MailSub.MailCallsGet(),Found,Row."Channel Note"));
-      Bound := UNBINDSUBSCRIPTION(MailSub);
-
-      // (д) Отправлено: канал в строке - почта, а не журнал.
-      MailSub.MailModeSet(MailModeSent);
-      Bound := BINDSUBSCRIPTION(MailSub);
-      Alerts.BeginPass;
-      MakeAlertEpisode(Ep,MailHeadSent,AlertThresholdMs + 1000);
-      Ep."Started At" := StartedAt;
-      Ep."Culprit NAV Sessions" := Sessions;
-      Alerts.Raise(Ep,AlertThresholdMs,FALSE,'',TRUE,MailGroupId);
-      Alerts.DeliverPending;
-      Found := GetAlert(MailHeadSent,Row);
-      Check(Passed,Total,Report,ChkMailSentTxt,
-            Bound AND Found AND (MailSub.MailCallsGet() = 1) AND
-            (Row.Channel = Row.Channel::Mail) AND (Row."Channel Note" = ExpectSentTxt),
-            STRSUBSTNO(MailSentDetailTxt,MailSub.MailCallsGet(),
-                       Row.Channel = Row.Channel::Mail,Row."Channel Note"));
-      Bound := UNBINDSUBSCRIPTION(MailSub);
-
-      // (е) Содержимое: группа, поданная в Raise, и настоящие тема с телом - в теле стоят
-      // таблица, сеансы и начало ожидания, то есть всё, ради чего письмо и пишется.
-      SubjectLen := STRLEN(MailSub.MailSubjectGet());
-      BodyLen := STRLEN(MailSub.MailBodyGet());
-      Check(Passed,Total,Report,ChkMailContentTxt,
-            (MailSub.MailGroupGet() = MailGroupId) AND (SubjectLen > 0) AND (BodyLen > 0) AND
-            (STRPOS(MailSub.MailBodyGet(),'Sales Line') > 0) AND
-            (STRPOS(MailSub.MailBodyGet(),Sessions) > 0) AND
-            (STRPOS(MailSub.MailBodyGet(),FORMAT(StartedAt,0,0)) > 0),
-            STRSUBSTNO(MailContentDetailTxt,MailSub.MailGroupGet(),MailGroupId,SubjectLen,BodyLen,
-                       'Sales Line',Sessions,FORMAT(StartedAt,0,0)));
-    END;
-
-    LOCAL PROCEDURE GetAlert@90(Spid@1000000000 : Integer;VAR Row@1000000001 : Record 110236) : Boolean;
-    BEGIN
-      // Строка ищется по голове, а не счётом: проверке нужна именно СВОЯ строка, и её
-      // заметка, а не количество строк в журнале.
-      Row.RESET;
-      Row.SETRANGE("Head SPID",Spid);
-      EXIT(Row.FINDLAST);
-    END;
-
-    [EventSubscriber(Codeunit,110240,OnSendAlertMail)]
-    PROCEDURE OnSendAlertMail@91(NotifGroupID@1000000000 : Integer;Subject@1000000001 : Text;Body@1000000002 : Text;VAR Handled@1000000003 : Boolean;VAR Sent@1000000004 : Boolean;VAR ErrorText@1000000005 : Text);
-    BEGIN
-      // Подписчик мерного прогона: он не шлёт писем, а записывает, ЧТО ему дали, и
-      // отвечает так, как просит выставленный режим. Так проверяется вся дорога доставки,
-      // включая отказ и падение, без единого SMTP.
-      MailCalls := MailCalls + 1;
-      MailGroup := NotifGroupID;
-      MailSubject := Subject;
-      MailBody := Body;
-      Handled := TRUE;
-      IF MailMode = MailModeSent THEN
-        Sent := TRUE
-      ELSE
-        IF MailMode = MailModeRefused THEN BEGIN
-          Sent := FALSE;
-          ErrorText := MailRefusedTxt;
-        END ELSE
-          IF MailMode = MailModeError THEN
-            ERROR(MailErrorTxt);
-    END;
-
-    PROCEDURE MailModeSet@92(Mode@1000000000 : Integer);
-    BEGIN
-      // Режим и захваченные поля обнуляются вместе: иначе счёт вызовов переехал бы из
-      // одной проверки в следующую, и "вызван один раз" зеленело бы на втором вызове.
-      MailMode := Mode;
-      MailCalls := 0;
-      MailGroup := 0;
-      MailSubject := '';
-      MailBody := '';
-    END;
-
-    PROCEDURE MailGroupGet@93() : Integer;
-    BEGIN
-      EXIT(MailGroup);
-    END;
-
-    PROCEDURE MailCallsGet@94() : Integer;
-    BEGIN
-      EXIT(MailCalls);
-    END;
-
-    PROCEDURE MailSubjectGet@95() : Text;
-    BEGIN
-      EXIT(MailSubject);
-    END;
-
-    PROCEDURE MailBodyGet@96() : Text;
-    BEGIN
-      EXIT(MailBody);
-    END;
-
     LOCAL PROCEDURE MailModeSent@97() : Integer;
     BEGIN
       // Ноль - "подписчик отправил". Имена вместо чисел: в проверке видно, ЧТО подано,
@@ -1540,54 +1714,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       EXIT(4242);
     END;
 
-    LOCAL PROCEDURE MakeAlertEpisode@25(VAR Episode@1000000000 : Record 110231;HeadSpid@1000000001 : Integer;WaitMs@1000000002 : Integer);
-    BEGIN
-      Episode.INIT;
-      Episode."Entry No." := 0;
-      Episode."Head SPID" := HeadSpid;
-      Episode."Victim SPID" := HeadSpid - 1;
-      Episode."NAV Table Name" := 'Sales Line';
-      Episode."NAV Key No." := 1;
-      Episode."Max Wait (ms)" := WaitMs;
-      Episode.Open := TRUE;
-    END;
-
-    LOCAL PROCEDURE AlertRowCount@26() : Integer;
-    VAR
-      Alert@1000000000 : Record 110236;
-    BEGIN
-      Alert.RESET;
-      Alert.SETFILTER("Head SPID",'<%1',0);
-      EXIT(Alert.COUNT);
-    END;
-
-    LOCAL PROCEDURE AgeAlerts@27();
-    VAR
-      Alert@1000000000 : Record 110236;
-      Back@1000000001 : Duration;
-    BEGIN
-      // Состаривание правкой поля, а не ожиданием пяти минут. Сдвиг берётся с запасом в
-      // одну секунду: ровно на границе окна проверка проверяла бы часы, а не защёлку.
-      Back := Parse.AlertLatchMs + 1000;
-      Alert.RESET;
-      Alert.SETFILTER("Head SPID",'<%1',0);
-      IF Alert.FINDSET(TRUE) THEN
-        REPEAT
-          Alert."Last Seen At" := CURRENTDATETIME - Back;
-          Alert.MODIFY;
-        UNTIL Alert.NEXT = 0;
-    END;
-
-    LOCAL PROCEDURE SweepAlerts@28();
-    VAR
-      Alert@1000000000 : Record 110236;
-    BEGIN
-      Alert.RESET;
-      Alert.SETFILTER("Head SPID",'<%1',0);
-      Alert.DELETEALL;
-      COMMIT;
-    END;
-
     LOCAL PROCEDURE AlertHeadA@29() : Integer;
     BEGIN
       EXIT(-101);
@@ -1611,28 +1737,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
     LOCAL PROCEDURE AlertThresholdMs@33() : Integer;
     BEGIN
       EXIT(5000);
-    END;
-
-    LOCAL PROCEDURE NamePass@34(FirstIndex@1000000000 : Integer;SecondIndex@1000000001 : Integer);
-    VAR
-      Observed@1000000002 : Record 110231;
-    BEGIN
-      // Оба ждущих обязаны приходить КАЖДЫМ проходом: FinishPass закрывает эпизод,
-      // которого в проходе не было, а закрытый эпизод не разбирается вовсе.
-      Journal.BeginPass(CURRENTDATETIME,PeriodMs,AlertUnderTest,NoMinWait);
-      MakeObserved(Observed,FirstIndex,FirstWaitMs);
-      Journal.Observe(Observed);
-      MakeObserved(Observed,SecondIndex,FirstWaitMs);
-      Journal.Observe(Observed);
-      Journal.FinishPass;
-    END;
-
-    LOCAL PROCEDURE EntryOfIndex@35(Index@1000000000 : Integer) : Integer;
-    BEGIN
-      Episode.RESET;
-      Episode.SETRANGE("Victim SPID",-Index);
-      Episode.FINDFIRST;
-      EXIT(Episode."Entry No.");
     END;
 
     LOCAL PROCEDURE NameIndexA@36() : Integer;
@@ -1670,24 +1774,6 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       // на службе, язык которой не наш, и русская строка из кода легла бы в колонку
       // журнала рядом с английской подписью.
       EXIT(NoAnswerTxt);
-    END;
-
-    LOCAL PROCEDURE MakeCounterReading@22(VAR Reading@1000000000 : TEMPORARY Record 110235;Waits@1000000001 : Integer;WaitMs@1000000002 : Integer;Escalations@1000000003 : Integer);
-    BEGIN
-      Reading.RESET;
-      Reading.DELETEALL;
-      Reading.INIT;
-      Reading."SQL Object Id" := BenchObjectId;
-      Reading."Index Id" := BenchIndexId;
-      Reading."SQL Object Name" := 'Company Name$Sales Line';
-      Reading."NAV Table Name" := 'Sales Line';
-      Reading."NAV Key No." := 1;
-      // В буфере лежат СЫРЫЕ значения счётчика сервера. Приростом их делает накопитель,
-      // и подавать сюда сразу прирост значило бы проверять не то, что работает на бою.
-      Reading."Last Waits" := Waits;
-      Reading."Last Wait (ms)" := WaitMs;
-      Reading."Last Escalations" := Escalations;
-      Reading.INSERT;
     END;
 
     LOCAL PROCEDURE BenchObjectId@23() : Integer;
@@ -1754,26 +1840,281 @@ OBJECT Codeunit 110233 LockWatch Journal Bench
       EXIT(Parse.MaxNameAttempts);
     END;
 
-    LOCAL PROCEDURE PickNameNow@76(EntryNo@1000000000 : Integer) : Integer;
-    VAR
-      Buffer@1000000001 : TEMPORARY Record 110231;
+    LOCAL PROCEDURE SqlObjectSeparator@110() : Text[1];
     BEGIN
-      // Спрашивается не только счёт выбранных, но и сам эпизод: проход мог ответить "взял"
-      // и не положить в буфер ничего. Выбор идёт тем же вызовом, что и в проходе.
-      Journal.PickUnresolved(Buffer,Parse.MaxDocumentsPerPass);
-      IF Buffer.GET(EntryNo) THEN
-        EXIT(1);
+      // Разделитель частей имени объекта SQL. Он один и тот же у платформы на всякой
+      // установке, и другой такой величины быть не может.
+      EXIT('$');
+    END;
+
+    LOCAL PROCEDURE ObservedTransactionBase@111() : Decimal;
+    BEGIN
+      // База номера транзакции в мерной строке. Настоящий номер на два порядка меньше,
+      // и столкнуться с живой транзакцией такая строка не может.
+      EXIT(4000000000);
+    END;
+
+    LOCAL PROCEDURE ObservedBlockerTransactionBase@112() : Decimal;
+    BEGIN
+      // База номера транзакции блокирующего: на тысячу выше базы жертвы, чтобы стороны
+      // спора различались даже при одном и том же индексе строки.
+      EXIT(5000000000);
+    END;
+
+    LOCAL PROCEDURE ObservedChainDepth@113() : Integer;
+    BEGIN
+      // Глубина цепочки в мерной строке: жертва ждёт блокирующего, а тот уже держит
+      // блокировку сам, - то есть в цепочке два звена.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE ObservedKeyNo@114() : Integer;
+    BEGIN
+      // Ключ штатной таблицы строк заказа. Он же кладётся в сводку и в уведомление,
+      // и проверки сверяют его как имя ключа, а не как число.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE ObservedDatabaseId@115() : Integer;
+    BEGIN
+      // Номер базы из живой строки ожидания: в описании ресурса он стоит в dbid.
+      EXIT(7);
+    END;
+
+    LOCAL PROCEDURE ObservedResourceKind@116() : Text;
+    BEGIN
+      // Род ресурса в поле эпизода. Слово платформы; в журнале оно хранится так, как
+      // пришло из снятой строки, и разбор на него не опирается.
+      EXIT('KEYLOCK');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldQuantity@117() : Text;
+    BEGIN
+      // Имя поля в SQL. Поле "Quantity" точки в имени не несёт, поэтому совпадает
+      // с именем NAV.
+      EXIT('Quantity');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldDocumentType@118() : Text;
+    BEGIN
+      // Поле NAV "Document Type" в SQL: пробел сохраняется, точка не появляется.
+      EXIT('Document Type');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldDocumentNo@119() : Text;
+    BEGIN
+      // Поле NAV "Document No." в SQL кончается подчёркиванием: точка на конце имени
+      // платформой заменяется, и имя поля без неё не нашлось бы.
+      EXIT('Document No_');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldLineNo@120() : Text;
+    BEGIN
+      // Поле NAV "Line No." в SQL - по тому же правилу, что и номер документа.
+      EXIT('Line No_');
+    END;
+
+    LOCAL PROCEDURE RegPeriodMs@121() : Integer;
+    BEGIN
+      // Период регрессионного эпизода: любое небольшое число, важно лишь, что исход
+      // считается по настоящему промежутку, а не по нему.
+      EXIT(100);
+    END;
+
+    LOCAL PROCEDURE RegGapSurplusMs@122() : Integer;
+    BEGIN
+      // Запас сверх предела ожидания NAV: промежуток заведомо перекрывает предел, и
+      // исход обязан быть "неизвестно", а не "предоставлено".
+      EXIT(2000);
+    END;
+
+    LOCAL PROCEDURE RegShortAgeMs@123() : Integer;
+    BEGIN
+      // Короткое состаривание предыдущего наблюдения: промежуток короче периода, и
+      // исход обязан остаться "предоставлено".
+      EXIT(100);
+    END;
+
+    LOCAL PROCEDURE RegHugeGapDays@124() : Integer;
+    BEGIN
+      // Месяц с лишним. В миллисекундах это больше предела Integer, и в целых числах
+      // промежуток обернулся бы отрицательным - проверка ловит именно это.
+      EXIT(31);
+    END;
+
+    LOCAL PROCEDURE RegLongVictimSpid@125() : Integer;
+    BEGIN
+      // Номер жертвы регрессионного эпизода. Настоящий spid положителен, и с чужой
+      // строкой такой не столкнётся: метка своя у каждой сцены.
+      EXIT(901);
+    END;
+
+    LOCAL PROCEDURE RegShortVictimSpid@126() : Integer;
+    BEGIN
+      // Второй spid регрессионной сцены: сцена своя, и отметка у неё своя.
+      EXIT(902);
+    END;
+
+    LOCAL PROCEDURE RegHugeVictimSpid@127() : Integer;
+    BEGIN
+      // Третий spid регрессионной сцены: сцена своя, и отметка у неё своя.
+      EXIT(903);
+    END;
+
+    LOCAL PROCEDURE CovFirstWaits@128() : Integer;
+    BEGIN
+      // Первое чтение счётчика охвата. Оно задаёт базу, поэтому число любое: важно, что
+      // второе чтение от него отличается.
+      EXIT(100);
+    END;
+
+    LOCAL PROCEDURE CovFirstMs@129() : Integer;
+    BEGIN
+      // Миллисекунды первого чтения. Второе их перекрывает, поэтому годится любое.
+      EXIT(5000);
+    END;
+
+    LOCAL PROCEDURE CovSecondWaits@130() : Integer;
+    BEGIN
+      // Второе чтение больше первого: прирост ожиданий равен их разности.
+      EXIT(150);
+    END;
+
+    LOCAL PROCEDURE CovSecondMs@131() : Integer;
+    BEGIN
+      // Миллисекунды второго чтения: больше первого, и прирост виден разностью.
+      EXIT(8000);
+    END;
+
+    LOCAL PROCEDURE CovResetWaits@132() : Integer;
+    BEGIN
+      // Чтение после обнуления счётчика сервером: меньше прежнего, и разность была бы
+      // отрицательной, если бы обнуление не замечалось.
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE CovResetMs@133() : Integer;
+    BEGIN
+      // Миллисекунды после сброса счётчиков: меньше обоих чтений, иначе сброс не виден.
+      EXIT(200);
+    END;
+
+    LOCAL PROCEDURE CovFreshWaits@134() : Integer;
+    BEGIN
+      // Первый положительный замер без базы: целиком становится приростом.
+      EXIT(40);
+    END;
+
+    LOCAL PROCEDURE CovFreshMs@135() : Integer;
+    BEGIN
+      // Миллисекунды свежего замера без базы: целое число становится приростом.
+      EXIT(1200);
+    END;
+
+    LOCAL PROCEDURE CovFreshEscalations@136() : Integer;
+    BEGIN
+      // Эскалации в том же замере. Не ноль: с нулём "счётчик берётся как есть" и
+      // "счётчик не читается вовсе" дали бы один и тот же ответ.
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE NoNotifGroup@137() : Integer;
+    BEGIN
+      // Группа уведомлений не задана: ноль значит "письмо некуда слать", и подписчик
+      // обязан не зваться вовсе.
       EXIT(0);
     END;
 
-    LOCAL PROCEDURE CrLf@19() : Text[2];
-    VAR
-      Cr@1000000000 : Char;
-      Lf@1000000001 : Char;
+    LOCAL PROCEDURE AlertExpectedRaised@138() : Integer;
     BEGIN
-      Cr := 13;
-      Lf := 10;
-      EXIT(FORMAT(Cr) + FORMAT(Lf));
+      // Две головы из пяти сцен проходят порог - по одной строке на голову.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE AlertExpectedLatched@139() : Integer;
+    BEGIN
+      // Три повтора по первой голове придержаны защёлкой: поднято два, придержано два.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE AlertExpectedRows@140() : Integer;
+    BEGIN
+      // Строк уведомлений - по одной на голову, а не на эпизод.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE AlertEpisodesBehindHead@141() : Integer;
+    BEGIN
+      // За первой головой стоят три эпизода: защёлка считает их, не поднимая новых.
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE AlertRowsAfterAged@142() : Integer;
+    BEGIN
+      // Состаренное уведомление перестаёт придерживать: третья голова заводит третью
+      // строку, и это признак живого окна, а не залипшей защёлки.
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE AgeMarginMs@143() : Integer;
+    BEGIN
+      // Запас в секунду при состаривании: ровно на границе окна проверка мерила бы
+      // часы, а не защёлку.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE MailSessions@144() : Text;
+    BEGIN
+      // Строка сеансов в письме: несколько номеров через запятую, как их называет
+      // эпизод. Числа вымышленные - настоящие сеансы в письмо не попадают.
+      EXIT('4242,4243');
+    END;
+
+    LOCAL PROCEDURE MailStartedAgoMs@145() : Integer;
+    BEGIN
+      // Начало ожидания в письме - девять секунд назад, чтобы отметка времени была
+      // настоящей и попадала в тело письма.
+      EXIT(9000);
+    END;
+
+    LOCAL PROCEDURE MailOvertimeMs@146() : Integer;
+    BEGIN
+      // Надбавка к порогу в сценах почты: эпизод обязан пройти порог, иначе письма не
+      // будет вовсе и проверять окажется нечего.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE NoSummaryThreshold@147() : Integer;
+    BEGIN
+      // Ноль значит "порога нет": колонка "выше порога" тогда не считается, и свод по
+      // истории складывает все её строки.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE NamePickedExpected@148() : Integer;
+    BEGIN
+      // В проверке имён заводятся ровно два своих эпизода, и оба обязаны быть выбраны.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE NameSessions@149() : Text;
+    BEGIN
+      // Номер сеанса NAV в строке виновника. Текст, а не число: колонка хранит список
+      // сеансов, и проверка сверяет его дословно.
+      EXIT('17');
+    END;
+
+    LOCAL PROCEDURE MicrosPerMs@150() : Decimal;
+    BEGIN
+      // Миллисекунда - это тысяча микросекунд. Единица измерения, а не настройка.
+      EXIT(1000.0);
+    END;
+
+    LOCAL PROCEDURE PerRowPrecision@151() : Integer;
+    BEGIN
+      // Один знак после запятой у микросекунд на строку: десятые доли микросекунды не
+      // видны ни на одной машине, а целое число выдавало бы мнимую точность.
+      EXIT(1);
     END;
 
     BEGIN

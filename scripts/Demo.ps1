@@ -61,7 +61,7 @@ param(
     [int]    $FieldNo    = $env:LW_DOC_FIELD_NO,
     [string] $PlainTable = 'G/L Entry',
     [int]    $EpisodesPageId = 110231,
-    [int]    $TaskCodeunitId = 110236,
+    [int]    $TaskCodeunitId = 110235,
     [switch] $NoClient,
     [switch] $NoMenu,
     [switch] $Clean
@@ -879,14 +879,14 @@ VALUES (-1,-1,N'$demoHolder',N'$Company',$TableNo,N'$docMark',GETUTCDATE());
     $script:scenePids += $blocker
     Start-Sleep -Seconds 2
 
-    # Жертвой становится Codeunit 110242: он берёт LOCKTABLE на ту же строку отметки из
+    # Жертвой становится Codeunit 110247: он берёт LOCKTABLE на ту же строку отметки из
     # сессии NAV и встаёт в очередь по-настоящему. Ждать его окончания нельзя - взяв
     # блокировку, он держит её минуту, и это его мерная задержка, а не наша.
     $holdFile = Join-Path $outDir 'demo-nav-victim.ps1'
     Write-Ps51 $holdFile @"
 `$ErrorActionPreference = 'Stop'
 $navImport
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110242 -MethodName Hold -ErrorAction Stop
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110247 -MethodName Hold -ErrorAction Stop
 "@
     $navVictim = Start-Process -FilePath $ps51 -PassThru -WindowStyle Hidden -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $holdFile)
