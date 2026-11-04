@@ -29,7 +29,7 @@ OBJECT Page 110232 LockWatch Context Tables
                       Image=Refresh;
                       PromotedCategory=Process;
                       OnAction=VAR
-                                 Task@1000000000 : Codeunit 110235;
+                                 Task@1000000000 : Codeunit 110232;
                                BEGIN
                                  MESSAGE(RefreshedTxt,Task.RefreshContextNames);
                                  CurrPage.UPDATE(FALSE);
@@ -103,19 +103,11 @@ OBJECT Page 110232 LockWatch Context Tables
                 ApplicationArea=#All;
                 SourceExpr=Enabled }
 
-    { 8   ;2   ;Field     ;
-                Name=MarksSeen;
-                ToolTipML=[ENU=Specifies whether marks for this table have actually arrived. It is evidence, not a declaration: an adapter that never fired is no different from one that does not exist, and a tick put here by hand would lie with more confidence than an empty field.;
-                           RUS=Определяет, приходят ли отметки по этой таблице на самом деле. Это улика, а не заявление: переходник, который ни разу не сработал, ничем не отличается от отсутствующего, а галка, поставленная рукой, врала бы увереннее, чем пустое поле.];
-                ApplicationArea=#All;
-                Editable=FALSE;
-                SourceExpr="Marks Seen" }
-
   }
   CODE
   {
     VAR
-      RefreshedTxt@1000000000 : TextConst 'ENU=Rows whose names changed: %1;RUS=Строк, у которых имена изменились: %1';
+      RefreshedTxt@1000000001 : TextConst 'ENU=Rows whose names changed: %1;RUS=Строк, у которых имена изменились: %1';
 
     BEGIN
     {
@@ -123,10 +115,9 @@ OBJECT Page 110232 LockWatch Context Tables
       доработанных объектов заказчика вообще появляются, - и появляются они в ДАННЫХ, а не
       в коде: код уезжает в публичный репозиторий, данные остаются на контуре.
 
-      Колонка "отметки приходят" - улика, а не заявление, и смотреть на неё надо в первую
-      очередь: номер таблицы в подписке на событие - константа времени компиляции, поэтому
-      на каждую таблицу нужен свой маленький объект-переходник. Строка без него выглядит
-      рабочей и молчит.
+      Строка настройки нужна разбору: спорную строку SQL называет физическим адресом, а не
+      номером, и обратный поиск по хэшу без этой строки не находит документ. Пустая клетка
+      документа тогда честно объясняется полем "Почему документа нет".
     }
     END.
   }

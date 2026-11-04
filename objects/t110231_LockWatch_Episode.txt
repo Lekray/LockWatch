@@ -26,19 +26,9 @@ OBJECT Table 110231 LockWatch Episode
                                                                     RUS=Не опознана,Да,Нет];
                                                    OptionString=Unknown,Yes,No }
     { 20  ;   ;Blocker SPID        ;Integer       ;CaptionML=[ENU=Blocker SPID;
-                                                              RUS=Непосредственный блокирующий, spid] }
+                                                              RUS=Виновник, spid] }
     { 21  ;   ;Blocker Transaction Id;BigInteger  ;CaptionML=[ENU=Blocker Transaction Id;
                                                               RUS=Блокирующий, транзакция] }
-    { 22  ;   ;Head SPID           ;Integer       ;CaptionML=[ENU=Head SPID;
-                                                              RUS=Голова цепочки, spid] }
-    { 23  ;   ;Chain Depth         ;Integer       ;CaptionML=[ENU=Chain Depth;
-                                                              RUS=Глубина цепочки] }
-    { 24  ;   ;Victims Behind Head ;Integer       ;CaptionML=[ENU=Victims Behind Head;
-                                                              RUS=Жертв за головой] }
-    { 25  ;   ;Chain Ring          ;Boolean       ;CaptionML=[ENU=Chain Ring;
-                                                              RUS=Цепочка замкнулась в кольцо] }
-    { 26  ;   ;Head Is Foreign     ;Boolean       ;CaptionML=[ENU=Head Is Foreign;
-                                                              RUS=Голова не наша] }
     { 29  ;   ;SQL Object Id       ;Integer       ;CaptionML=[ENU=SQL Object Id;
                                                               RUS=Номер объекта SQL] }
     { 30  ;   ;Resource Kind       ;Code20        ;CaptionML=[ENU=Resource Kind;
@@ -73,11 +63,6 @@ OBJECT Table 110231 LockWatch Episode
                                                    OptionCaptionML=[ENU=Undetermined,Granted,Timed out,Rolled back by the server;
                                                                     RUS=Не определён,Дождался,Отказ по пределу,Откат сервером];
                                                    OptionString=Undetermined,Granted,TimedOut,Deadlocked }
-    { 48  ;   ;Class               ;Option        ;CaptionML=[ENU=Class;
-                                                              RUS=Класс];
-                                                   OptionCaptionML=[ENU=Plain,Whole table,Sleeping transaction,Deadlock;
-                                                                    RUS=Спор за строку,Спор за таблицу целиком,Спит в транзакции,Взаимоблокировка];
-                                                   OptionString=Plain,WholeTable,SleepingTran,Deadlock }
     { 49  ;   ;Deadlock Id         ;Code20        ;CaptionML=[ENU=Deadlock Id;
                                                               RUS=Отпечаток графа];
                                                    Editable=No }
@@ -85,21 +70,18 @@ OBJECT Table 110231 LockWatch Episode
                                                               RUS=Документ] }
     { 51  ;   ;Document Source     ;Option        ;CaptionML=[ENU=Document Source;
                                                               RUS=Откуда документ];
-                                                   OptionCaptionML=[ENU=None,From lock hash,From context mark,Sources disagree;
-                                                                    RUS=Нет,По хэшу блокировки,По отметке контекста,Ответы разошлись];
-                                                   OptionString=None,FromHash,FromMark,Disagree }
+                                                   OptionCaptionML=[ENU=None,From lock hash;
+                                                                    RUS=Нет,По хэшу блокировки];
+                                                   OptionString=None,FromHash }
     { 52  ;   ;No Document Reason  ;Text100       ;CaptionML=[ENU=No Document Reason;
                                                               RUS=Почему документа нет] }
-    { 53  ;   ;Culprit Document No.;Code20        ;CaptionML=[ENU=Culprit Document;
-                                                              RUS=Документ виновника];
-                                                   Editable=No }
     { 60  ;   ;User Name           ;Code50        ;CaptionML=[ENU=User Name;
                                                               RUS=Пользователь] }
     { 61  ;   ;User Source         ;Option        ;CaptionML=[ENU=User Source;
                                                               RUS=Откуда имя];
-                                                   OptionCaptionML=[ENU=None,From context mark,From platform,From culprit row;
-                                                                    RUS=Нет,По отметке контекста,От платформы,По строке виновника];
-                                                   OptionString=None,FromMark,FromPlatform,FromCulpritRow }
+                                                   OptionCaptionML=[ENU=None,From platform;
+                                                                    RUS=Нет,От платформы];
+                                                   OptionString=None,FromPlatform }
     { 62  ;   ;Victim User Name    ;Code50        ;CaptionML=[ENU=Victim User Name;
                                                               RUS=Кто ждал];
                                                    Editable=No }
@@ -125,18 +107,12 @@ OBJECT Table 110231 LockWatch Episode
                                                               RUS=Запрос виновника целиком];
                                                    SubType=Memo;
                                                    Compressed=No }
-    { 80  ;   ;Advice              ;Text250       ;CaptionML=[ENU=Advice;
-                                                              RUS=Совет] }
-    { 82  ;   ;Culprit NAV Sessions;Text250       ;CaptionML=[ENU=Culprit NAV Sessions;
-                                                              RUS=Сеансы NAV виновника];
-                                                   Editable=No }
   }
   KEYS
   {
     {    ;Entry No.                               ;Clustered=Yes }
     {    ;Open,Victim SPID,Victim Transaction Id,Hobt Id }
     {    ;Started At                               }
-    {    ;Head SPID,Open                           }
     {    ;NAV Table Name,Started At                }
     {    ;Deadlock Id                              }
   }
@@ -168,20 +144,19 @@ OBJECT Table 110231 LockWatch Episode
       FlowField'ов со счётом по журналу.
 
       Ключ "Entry No." сквозной, и это осознанно: в эту таблицу пишет ОДНА фоновая
-      задача, поэтому спора за последнюю страницу индекса не возникает. У таблицы
-      отметки контекста (110233), куда пишут все сессии сразу, ключ другой - по сеансу,
-      и там строка своя у каждого.
+      задача, поэтому спора за последнюю страницу индекса не возникает.
 
-      Журнал, история и уведомления разделены по компаниям (DataPerCompany=Yes), и это тоже
-      осознанно: строка называет учётную запись, документ и таблицу компании, а общий
-      журнал показывал бы чужой компании чужие строки. Наблюдение при этом одно на БАЗУ -
-      см. настройку и состояние сторожа, - и заводить его надо ОДНОЙ задачей: вторая
-      цепочка пишет в ту же строку состояния и потому видна.
+      Журнал разделён по компаниям (DataPerCompany=Yes), и это тоже осознанно: строка
+      называет учётную запись, документ и таблицу компании, а общий журнал показывал бы
+      чужой компании чужие строки. Наблюдение при этом одно на БАЗУ - см. настройку и
+      состояние сторожа, - и заводить его надо ОДНОЙ задачей: вторая цепочка пишет в ту
+      же строку состояния и потому видна.
 
-      Три поля названы честно и потому длинно:
-        "Непосредственный блокирующий" - кого назвал SQL, а не кто виноват;
-        "Голова цепочки" - кто не ждёт сам, то есть настоящий виновник;
-        "Последняя наблюдённая, мс" - по ней видно, насколько твёрд вывод об исходе.
+      Поля виновника называют ГОЛОВУ цепочки, а не непосредственного блокирующего:
+      в цепочке A -> B -> C держит B, но сам он ждёт за A, и записать B значит назвать
+      виновным пострадавшего. Логин, узел, программа и текст оператора принадлежат ей же.
+      "Последняя наблюдённая, мс" названа длинно по той же причине: по ней видно,
+      насколько твёрд вывод об исходе.
 
       Неопознанный ресурс - не повод выбросить строку: он показывается сырым именем
       SQL, и молчаливый пропуск был бы ложью.

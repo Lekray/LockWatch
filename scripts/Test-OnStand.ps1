@@ -47,16 +47,16 @@ param(
     [string] $Instance       = $env:LW_INSTANCE,
     [string] $Company        = $env:LW_COMPANY,
     [int]    $MgmtPort       = 7145,
-    [int]    $TestCodeunitId = 110231,
-    [int]    $BenchCodeunitId = 110245,
-    [int]    $AdapterCodeunitId = 110244,
-    [int]    $PermissionsCodeunitId = 110242,
-    [int]    $SetupTableId    = 110230,
-    [int]    $SetupPageId     = 110230,
+    [int]    $TestCodeunitId = 110233,
+    [int]    $BenchCodeunitId = 110234,
+    # Таблица и страница настройки, по которым сверяются надписи в документах. Номера - не
+    # число в правиле, а имя объекта: разойдись они с составом, гейт скажет об этом сразу.
+    [int]    $SetupTableId  = 110230,
+    [int]    $SetupPageId   = 110230,
     # Диапазон, занятый инструментом целиком. Всё, что вне его, - чужое, и о чужом надо
     # сказать вслух: репозиторий служит материалом для согласования установки.
     [int]    $OurFirstObject  = 110230,
-    [int]    $OurLastObject   = 110249,
+    [int]    $OurLastObject   = 110235,
     # Номер таблицы документа - такая же конкретика установки, как имя базы, и берётся он
     # оттуда же. Номер ПОЛЯ рядом не проверяется нарочно: это однозначное число, и искать
     # его по репозиторию значило бы находить его всюду.
@@ -84,6 +84,12 @@ $typeOrder = @{ 't' = 1; 'c' = 2; 'r' = 3; 'p' = 4; 'x' = 5; 'q' = 6; 'm' = 7 }
 $files = Get-ChildItem (Join-Path $objects '*.txt') |
     Sort-Object @{ Expression = { $order = $typeOrder[$_.Name.Substring(0,1)]; if ($order) { $order } else { 99 } } }, Name
 if (-not $files) { Fail "в $objects нет ни одного объекта" }
+
+# Новый объект до первого коммита в git не значится, и проверки на утечку и кодировку
+# видели бы его пустым местом. Список файлов поэтому - рабочее дерево, а не индекс.
+$objectRels = @($files | ForEach-Object { [IO.Path]::GetRelativePath($root, $_.FullName) -replace '\\', '/' })
+$repoRels = @(@(& git -C $root ls-files) + $objectRels | Sort-Object -Unique)
+$encRels  = @(@(& git -C $root ls-files '*.ps1' '*.txt' '*.sql') + $objectRels | Sort-Object -Unique)
 
 # "Служба запущена" по мнению SCM и "служба отвечает по порту управления" - разные события,
 # и между ними минуты: первый старт компилирует business assemblies. Проверять ОТКРЫТОСТЬ
@@ -186,7 +192,7 @@ if ($docRows.Count -eq 0) { Fail 'таблицы с номером из наст
 $secretNames['имя таблицы документа'] = $docRows[0].Trim()
 
 $leaks = @()
-foreach ($rel in (& git -C $root ls-files)) {
+foreach ($rel in $repoRels) {
     $full = Join-Path $root $rel
     if (-not (Test-Path $full)) { continue }
     $lines = [IO.File]::ReadAllLines($full)
@@ -229,7 +235,7 @@ if ($leaks) {
 # консоли. Скрипт ручного разбора пишет про это в своей же шапке; теперь про это знает и
 # сборка.
 $encProblems = @()
-foreach ($rel in (& git -C $root ls-files '*.ps1' '*.txt' '*.sql')) {
+foreach ($rel in $encRels) {
     $full = Join-Path $root $rel
     if (-not (Test-Path $full)) { continue }
     $bytes = [IO.File]::ReadAllBytes($full)
@@ -328,65 +334,6 @@ if ($sqlProblems) {
     Fail ("текст .sql зависит от сортировки чужой базы:`n  " + (($sqlProblems | Sort-Object) -join "`n  "))
 }
 
-# Подписчик - единственный наш объект, исполняющийся В ЧУЖОМ СЕАНСЕ: платформа зовёт его
-# внутри транзакции того, кто пишет строку документа. Права на запись отметки проверяются
-# поэтому у ТОГО человека, а не у нас, и отказ прилетает ВНУТРЬ его транзакции - проведение
-# падает. На стенде этого не увидеть ничем: там всё ходит под SUPER, а на бою пользователи
-# не SUPER почти никогда.
-#
-# Свойство Permissions эту беду НЕ закрывает - замерено лестницей из восьми ступеней
-# (docs/FINDINGS.md, раздел 92): работают только ПРЯМЫЕ права пользователя на обе наши
-# таблицы, и о них сказано в порядке установки, где им и место. Но снятие свойства делает
-# хуже: без него не проходит даже чтение строки контекста (ступень 6). Поэтому свойство
-# остаётся и сверяется здесь - снять его легко и незаметно.
-#
-# Обещать сторожу больше, чем он даёт, нельзя: сторож, на которого надеются зря, опаснее
-# отсутствующего. Потому и слова его - про объявленные права, а не про «чужой сеанс».
-#
-# Номера таблиц берутся ИЗ ПАКЕТА по именам, а не пишутся числом: перенумеруй объект - и
-# сторож, знающий число, промолчал бы (то же правило, что в разделе 81).
-function Get-ObjectNo([string]$name) {
-    foreach ($rel in (& git -C $root ls-files 'objects/*.txt')) {
-        $full = Join-Path $root $rel
-        if (-not (Test-Path $full)) { continue }
-        $m = [regex]::Match([IO.File]::ReadAllText($full), "(?m)^OBJECT\s+Table\s+(\d+)\s+$([regex]::Escape($name))\s*$")
-        if ($m.Success) { return [int]$m.Groups[1].Value }
-    }
-    return 0
-}
-$markNo = Get-ObjectNo 'LockWatch Context Mark'
-$ctxNo  = Get-ObjectNo 'LockWatch Context Table'
-$permProblems = @()
-if (($markNo -eq 0) -or ($ctxNo -eq 0)) {
-    $permProblems += "таблицы отметок и контекста не нашлись в пакете по именам ($markNo, $ctxNo)"
-} else {
-    foreach ($rel in (& git -C $root ls-files 'objects/c*.txt')) {
-        $full = Join-Path $root $rel
-        if (-not (Test-Path $full)) { continue }
-        $text = [IO.File]::ReadAllText($full)
-        # Сторож - про подписчиков на события ТАБЛИЦ, то есть про адаптеры контекста: это они
-        # пишут отметки в чужой транзакции. Мерный подписчик на событие почты (Codeunit
-        # 110245) таблиц контекста не касается, и требовать от него прав было бы ложным отказом.
-        if ($text -notmatch '\[EventSubscriber\(Table,') { continue }
-        # Свойство C/SIDE переносит по строкам, поэтому оно склеивается в одну.
-        $props = ([regex]::Match($text, '(?s)Permissions=(.*?);')).Groups[1].Value -replace '\s', ''
-        foreach ($need in @(@{ No = $markNo; Rights = 'rimd'; What = 'таблицу отметок' },
-                            @{ No = $ctxNo;  Rights = 'rim';  What = 'строку контекста' })) {
-            $m = [regex]::Match($props, "TableData$($need.No)=([rimd]+)")
-            if (-not $m.Success) {
-                $permProblems += "$rel : подписчик не объявляет прав на $($need.What) ($($need.No)) - без них не проходит даже чтение (раздел 92)"
-            } else {
-                $missing = ($need.Rights.ToCharArray() | Where-Object { $m.Groups[1].Value -notmatch $_ }) -join ''
-                if ($missing) {
-                    $permProblems += "$rel : у прав на $($need.What) ($($need.No)) не хватает букв «$missing» - объявлено «$($m.Groups[1].Value)»"
-                }
-            }
-        }
-    }
-}
-if ($permProblems) {
-    Fail ("подписчик не объявил прав на свои таблицы:`n  " + (($permProblems | Sort-Object) -join "`n  "))
-}
 function Invoke-Finsql([string]$argLine, [string]$logName) {
     $log = Join-Path $outDir $logName
     # Лог от прежнего захода читать нельзя: имя файла - это время вызова, и совпасть оно
@@ -564,16 +511,13 @@ if ($idProblems) {
           (($idProblems | Select-Object -Unique | Select-Object -First 5) -join "`n"))
 }
 
-# Пятый признак, и найден он пять раз подряд - разделы 54, 61, 62, 63, 64: мерный прогон
-# зовёт чистую функцию САМ, передаёт ей то, чего живая дорога не передаёт, и остаётся
-# зелёным. В разделе 64 это стоило целого класса эпизодов: живая дорога звала EpisodeClass
-# с нулём на месте признака, мерный прогон - с двойкой, и проверка мерила свободу, которой
-# у продукта не было ни дня.
+# Пятый признак: мерный прогон зовёт чистую функцию САМ, передаёт ей то, чего живая дорога
+# не передаёт, и остаётся зелёным - проверка мерит свободу, которой у продукта нет.
 #
 # Ловится это точным совпадением, а не подозрением: ВСЕ боевые вызовы функции пришпилили
 # один и тот же довод к постоянной, а мерный объект подставил на то же место другое.
-# Законная постоянная так не выглядит: у неё либо есть боевой вызов с переменной (как у
-# SetDocument, где вторая дорога зовёт с именами), либо мерный объект согласен с боевым.
+# Законная постоянная так не выглядит: у неё либо есть боевой вызов с переменной, либо
+# мерный объект согласен с боевым.
 function Split-CalArgs([string]$src, [int]$openAt) {
     # Накопитель зовётся $list, а не $args: $args у PowerShell свой, встроенный, и внутри
     # функции присваивание ему - не ошибка разбора, а тихая подмена.
@@ -592,13 +536,14 @@ function Split-CalArgs([string]$src, [int]$openAt) {
     # обязана понимать C/AL целиком, она обязана не врать.
     return ,@()
 }
-# Чистые кодюниты, которые меряются без базы, и мерные объекты, которые их меряют.
-# Ключ объекта - РОД И НОМЕР, а не номер: таблица 110230, кодюнит 110230 и страница 110230
-# живут рядом, и по одному номеру кодюнит разбора подменялся таблицей настройки.
-$pureCodeunits = @(110230, 110232)
-# 110248 держит замок от имени названного пользователя и живёт одними прогонами - в этом
-# списке он потому же, почему и остальные: мерный объект не делает функцию живой.
-$benchCodeunits = @(110231, 110245, 110246, 110247, 110248)
+# Чистые функции разбора и журнала теперь живут в одном кодюните 110230, и меряет их
+# Parse Test 110233. Ключ объекта - РОД И НОМЕР, а не номер: таблица 110230, кодюнит 110230
+# и страница 110230 живут рядом, и по одному номеру кодюнит подменялся таблицей настройки.
+$pureCodeunits = @(110230)
+# Мерные кодюниты: Parse Test 110233, Journal Bench 110234, Hold Bench 110235. В этом
+# списке они потому, что мерный объект не делает функцию живой и корнем достижимости не
+# считается.
+$benchCodeunits = @(110233, 110234, 110235)
 $heads = [regex]::Matches($monolith, '(?m)^OBJECT\s+(\w+)\s+(\d+)\s+(.+?)\s*$')
 if ($heads.Count -ne $files.Count) {
     Fail "заголовков объектов в пакете $($heads.Count) при $($files.Count) файлах - разбор пакета не полон"
@@ -613,31 +558,39 @@ for ($i = 0; $i -lt $heads.Count; $i++) {
     }
 }
 
-# Образец подписчика в ПАКЕТ НЕ ЕДЕТ, и правило это ВЫВОДИТСЯ, а не пишется номером.
-# Номер таблицы у подписки - константа времени компиляции, поэтому всякий подписчик,
-# лежащий в git, по определению образец: на бою на его месте стоит объект, СОБРАННЫЙ под
-# таблицу установки (scripts/New-ContextAdapter.ps1). Заведётся второй образец - отсеется
-# сам, и списка править не придётся.
-#
-# Везти его было бы не мелочью. Это живой подписчик на ШТАТНОЙ таблице NAV: он срабатывает
-# на каждой её записи ни за чем (раздел 23 - надбавка от двух процентов до двенадцати даже
-# при выключенной строке контекста), а его обкатка в эту таблицу ПИШЕТ. На стенде ему
-# место, на бою - нет.
-#
-# Проверки выше смотрят на ВСЕ объекты папки, включая образец: он настоящий C/AL, и
-# сортировка, кодировки, номера переменных и объявленные права нужны ему не меньше. Отсев
-# касается только того, что повезём.
-$shipFiles = @(); $shipParts = @(); $sampleParts = @()
-for ($i = 0; $i -lt $parts.Count; $i++) {
-    # Образец - подписчик на событие ТАБЛИЦЫ. Мерный подписчик на событие почты живёт в
-    # Codeunit 110245 и едет вместе с ним: это часть обкатки, а не переходник.
-    if ($parts[$i].Body -match '\[EventSubscriber\(Table,') { $sampleParts += $parts[$i] }
-    else { $shipParts += $parts[$i]; $shipFiles += $files[$i] }
+# Состав v2 перечислен явно и сверяется целиком: лишний файл в objects/ компилируется молча
+# и уезжает в поставку, а пропавший ломает зависимых. Числа - состав из брифа.
+$expected = @(
+    'Table 110230', 'Table 110231', 'Table 110232', 'Table 110233',
+    'Page 110230', 'Page 110231', 'Page 110232',
+    'Codeunit 110230', 'Codeunit 110231', 'Codeunit 110232',
+    'Codeunit 110233', 'Codeunit 110234', 'Codeunit 110235'
+)
+$present = @($parts | ForEach-Object { "$($_.Kind) $($_.No)" })
+$outside = @($parts | Where-Object { ($_.No -lt $OurFirstObject) -or ($_.No -gt $OurLastObject) } |
+             ForEach-Object { "$($_.Kind) $($_.No) $($_.Name)" })
+if ($outside) {
+    Fail ("в objects/ есть объекты вне своего диапазона $OurFirstObject-$OurLastObject`: " +
+          ($outside -join ', '))
 }
-if ($sampleParts.Count -ne 1) {
-    Fail ("образцов подписчика в objects/ $($sampleParts.Count) при одном ожидаемом - " +
-          'сборщик переходника берёт образец единственным, и выбирать ему не из чего')
+$missing = @($expected | Where-Object { $present -notcontains $_ })
+$extra   = @($present | Where-Object { $expected -notcontains $_ })
+if ($missing -or $extra) {
+    $noMissing = if ($missing) { $missing -join ', ' } else { 'ничего' }
+    $noExtra   = if ($extra)   { $extra -join ', ' }   else { 'ничего' }
+    Fail ("состав v2 разошёлся с обещанным: нет - $noMissing; лишние - $noExtra")
 }
+
+# Переходника контекста в v2 нет: чужих таблиц, кроме штатных, инструмент не касается,
+# и образца подписчика в objects/ тоже нет. В пакет едет всё, что лежит в папке.
+$shipFiles = $files
+$shipParts = $parts
+# А вот «Что встаёт в базу» считает ПОСТАВКУ, и мерные кодюниты в неё не едут: они остаются
+# дома и без своих строк-мишеней не работают. Считать их поставкой значило бы обещать
+# установке три объекта, которых там не будет.
+$deliveredParts = @($parts | Where-Object {
+    -not (($_.Kind -eq 'Codeunit') -and ($benchCodeunits -contains $_.No))
+})
 $pinProblems = @()
 foreach ($pureNo in $pureCodeunits) {
     $pure = $parts | Where-Object { ($_.Kind -eq 'Codeunit') -and ($_.No -eq $pureNo) }
@@ -711,10 +664,9 @@ if ($pinProblems) {
 }
 
 # Тот же вопрос с другого конца, и он проще: а ЗОВЁТ ли эту функцию хоть кто-нибудь на
-# живой дороге? Разделы 54 и 61-65 ловили мерку, которая меряет не то; здесь ловится
-# продукт, до которого не дойти. Найдено этим 12.09.2026 сразу двое: срез уведомлений по сроку,
-# которого не звал ни один проход, и показ блокировок платформы, написанный ровно для того
-# мига, когда имя не назвалось, - и не выведенный ни на одну страницу.
+# живой дороге? Выше ловилась мерка, которая меряет не то; здесь ловится продукт, до
+# которого не дойти: написанная и не выведенная на страницу функция выглядит готовой, а
+# не работает ни у кого.
 #
 # Считается достижимостью от корней, а корня три:
 #   - тело объекта вне функций: триггеры страницы, полей и OnRun зовёт платформа;
@@ -724,11 +676,6 @@ if ($pinProblems) {
 # Мерные объекты корнями не считаются вовсе: в том и беда, что мерка держит функцию живой
 # на вид. Зато считается своя же ссылка внутри объекта - функция, работающая на соседнюю,
 # доходит до боя через неё.
-$mould = Join-Path $root 'scripts\New-ContextAdapter.ps1'
-if (-not (Test-Path $mould)) { Fail 'сборщика переходника нет на месте - правило о нём протухло' }
-# Переходник в objects/ - ОБРАЗЕЦ: живой его вид собирает подстановкой этот скрипт, и
-# обкатку он подменяет целиком. Значит и вызовы его функций надо искать там же.
-$mouldText = [IO.File]::ReadAllText($mould)
 $installDoc = [IO.File]::ReadAllText((Join-Path $root 'docs\INSTALL.md'))
 $docNames = @()
 foreach ($m in [regex]::Matches($installDoc, '`([A-Za-z][A-Za-z0-9_]*)`')) { $docNames += $m.Groups[1].Value }
@@ -773,7 +720,7 @@ foreach ($p in $parts) {
         # живой даже тогда, когда из OnAction вызов вынут вовсе: первая же поломка это и показала.
         # Свойства, чьё значение - голое имя, а не код, из разбора выкидываются целиком.
         $text = $r.Text -replace '(?m)^[ ]*(?:Name|Image|PromotedCategory|ApplicationArea|ActionContainerType|GroupType|ContainerType|PageType)[ ]*=.*', ''
-        if (($p.Kind -eq 'Codeunit') -and ($p.No -eq $AdapterCodeunitId) -and ($r.Func -eq '(тело)')) { $text += $mouldText }
+        # Переходника-подписчика в пакете нет: подмешивать к его телу нечего.
         foreach ($v in $varsOf[$key].Keys) {
             $target = $varsOf[$key][$v]
             if (-not $funcsOf.ContainsKey($target)) { continue }
@@ -824,6 +771,13 @@ if ($unreachable) {
     Fail ("до боевой функции не доходит живая дорога:`n  " + (($unreachable | Sort-Object) -join "`n  "))
 }
 
+# --- Документы ---
+#
+# Ниже - гейты согласованности документов, и они здесь не ради красоты. Порядок установки
+# читают перед установкой и согласуют по нему доступ; расхождение в нём стоит дороже
+# расхождения в коде: код падает на стенде, а документ ведёт человека на чужую базу.
+# Гейт спрашивает документ о том же, о чём пакет, и чинится документ, а не гейт.
+#
 # Надпись поля живёт в ДВУХ местах, и человек видит ту, что на странице: свой CaptionML у
 # контрола перекрывает надпись поля таблицы. Замер 13.09.2026: у потолка строк в журнале они
 # разные - страница говорит «Потолок строк в журнале», таблица «Сколько строк в журнале,
@@ -958,10 +912,10 @@ if ($hidden) {
 # выйдет в dbo.[Object] и какие кодюниты мерные. Пересчитывать их было некому: добавленный
 # объект молча оставлял список прежним, и служба безопасности согласовывала бы не то, что
 # приедет. Считает теперь сборка, и считает по ТОМУ САМОМУ пакету, который и повезёт
-# объекты, - не по папке и не по списку рядом. Образец подписчика в счёт не идёт по той же
-# причине: в пакет он не едет, и обещать его установке значит обещать не то.
+# объекты, - не по папке и не по списку рядом. Мерные кодюниты в счёт не идут: в поставку
+# они не едут, и обещать их установке значит обещать не то.
 $kindCount = @{}; $kindFrom = @{}; $kindTo = @{}
-foreach ($p in $shipParts) {
+foreach ($p in $deliveredParts) {
     if (-not $kindCount.ContainsKey($p.Kind)) {
         $kindCount[$p.Kind] = 0; $kindFrom[$p.Kind] = $p.No; $kindTo[$p.Kind] = $p.No
     }
@@ -972,7 +926,7 @@ foreach ($p in $shipParts) {
 $listProblems = @()
 $namedKinds = @()
 foreach ($m in [regex]::Matches($installDoc,
-        '(?m)^\|\s*(?<kind>[A-Za-z]+)\s*\|\s*(?<from>\d+)\s*[-\u2013]\s*(?<to>\d+)\s*\|\s*(?<count>\d+)\s*\|')) {
+        '(?m)^\|\s*(?<kind>[A-Za-z]+)\s*\|\s*(?<from>\d+)\s*[-–]\s*(?<to>\d+)\s*\|\s*(?<count>\d+)\s*\|')) {
     $kind = $m.Groups['kind'].Value
     if (-not $kindCount.ContainsKey($kind)) {
         $listProblems += "в пакете нет ни одного объекта рода $kind, а раздел «Что встаёт в базу» его называет"
@@ -991,12 +945,12 @@ foreach ($kind in $kindCount.Keys) {
 
 # Всего объектов и диапазон, который инструмент занимает целиком. Границы диапазона - те же
 # параметры, по которым сборка судит о своём и чужом, а не число, переписанное в документ.
-$whole = [regex]::Match($installDoc, '(?<n>\d+)\s+объект\w*\s+в диапазоне\s+\*\*(?<from>\d+)\s*[-\u2013]\s*(?<to>\d+)\*\*')
+$whole = [regex]::Match($installDoc, '(?<n>\d+)\s+объект\w*\s+в диапазоне\s+\*\*(?<from>\d+)\s*[-–]\s*(?<to>\d+)\*\*')
 if (-not $whole.Success) {
     $listProblems += 'в docs/INSTALL.md нет строки «N объектов в диапазоне A-B» - правило о ней протухло'
 } else {
-    if ([int]$whole.Groups['n'].Value -ne $shipParts.Count) {
-        $listProblems += "объектов обещано $($whole.Groups['n'].Value), а в пакете $($shipParts.Count)"
+    if ([int]$whole.Groups['n'].Value -ne $deliveredParts.Count) {
+        $listProblems += "объектов обещано $($whole.Groups['n'].Value), а в поставке $($deliveredParts.Count)"
     }
     if (([int]$whole.Groups['from'].Value -ne $OurFirstObject) -or ([int]$whole.Groups['to'].Value -ne $OurLastObject)) {
         $listProblems += ("диапазон обещан $($whole.Groups['from'].Value)-$($whole.Groups['to'].Value), " +
@@ -1010,13 +964,13 @@ $objRows = [regex]::Match($installDoc, 'В таблице `dbo\.\[Object\]` эт
 if (-not $objRows.Success) {
     $listProblems += 'в docs/INSTALL.md нет строки о числе строк в dbo.[Object] - правило о ней протухло'
 } else {
-    $wantRows = $shipParts.Count + $(if ($kindCount.ContainsKey('Table')) { $kindCount['Table'] } else { 0 })
+    $wantRows = $deliveredParts.Count + $(if ($kindCount.ContainsKey('Table')) { $kindCount['Table'] } else { 0 })
     if ([int]$objRows.Groups['n'].Value -ne $wantRows) {
         $listProblems += "строк в dbo.[Object] обещано $($objRows.Groups['n'].Value), а выйдет $wantRows"
     }
     # Число объектов названо в той же строке второй раз, и разойтись эти два могут порознь.
-    if ([int]$objRows.Groups['objs'].Value -ne $shipParts.Count) {
-        $listProblems += "там же объектов названо $($objRows.Groups['objs'].Value), а в пакете $($shipParts.Count)"
+    if ([int]$objRows.Groups['objs'].Value -ne $deliveredParts.Count) {
+        $listProblems += "там же объектов названо $($objRows.Groups['objs'].Value), а в поставке $($deliveredParts.Count)"
     }
     # И ТРЕТИЙ раз - в разделе о снятии, где перечислено, что уходит. Живёт оно там своей
     # жизнью, и сверка выше его не видела вовсе: 15.09.2026 оно отстало от пакета на объект
@@ -1040,9 +994,9 @@ $cmdProblems = @()
 foreach ($m in [regex]::Matches($installDoc, '-CodeunitId\s+(?<no>\d+)\s+-MethodName\s+(?<name>[A-Za-z0-9_]+)')) {
     $cmdNo = [int]$m.Groups['no'].Value
     $cmdName = $m.Groups['name'].Value
-    $cmdPart = $shipParts | Where-Object { ($_.Kind -eq 'Codeunit') -and ($_.No -eq $cmdNo) }
+    $cmdPart = $deliveredParts | Where-Object { ($_.Kind -eq 'Codeunit') -and ($_.No -eq $cmdNo) }
     if (-not $cmdPart) {
-        $cmdProblems += "документ зовёт Codeunit $cmdNo, а пакет его не везёт"
+        $cmdProblems += "документ зовёт Codeunit $cmdNo, а поставка его не везёт"
         continue
     }
     if ($cmdPart.Body -notmatch "(?m)^\s*\[External\]\s*\r?\n\s*PROCEDURE\s+$cmdName@") {
@@ -1071,14 +1025,11 @@ if ($cmdProblems) {
           (($cmdProblems | Sort-Object -Unique) -join "`n  "))
 }
 
-# Списков в разделе два, и у обоих есть в сборке настоящий двойник: мерные кодюниты она
-# знает поимённо, объекты показа зовутся словом Demo. Сверяются они целиком - разойтись
-# список может в обе стороны, и забытым именем, и лишним, - а номер берётся только из
-# обратных кавычек: число из пояснения рядом списком не является.
+# Мерные кодюниты перечислены в разделе дважды: словами и номерами. Номер берётся только из
+# обратных кавычек: число из пояснения рядом списком не является. Сверяется список целиком -
+# разойтись он может в обе стороны, и забытым именем, и лишним.
 $toldLists = @(
     @{ Head = '**Мерные кодюниты**'; Want = @($benchCodeunits) }
-    @{ Head = '**Кодюниты показа и таблица к ним**'
-       Want = @($shipParts | Where-Object { $_.Name -match 'Demo' } | ForEach-Object { $_.No }) }
 )
 foreach ($told in $toldLists) {
     $saidBody = [regex]::Match($installDoc, '(?s)' + [regex]::Escape($told.Head) + '(.*?)\r?\n\r?\n').Groups[1].Value
@@ -1097,6 +1048,7 @@ if ($listProblems) {
     Fail ("раздел «Что встаёт в базу» разошёлся с пакетом - по нему согласуют установку:`n  " +
           (($listProblems | Sort-Object) -join "`n  "))
 }
+
 # Число в этом проекте обязано иметь того, кто его меряет. У чисел, которыми документы
 # описывают САМИ СЕБЯ - сколько проверок делает прогон, сколько прогонов в смете, - такой
 # был всегда: ведомость сметы и сами обкатки. Но списывали их оттуда РУКАМИ, и 13.09.2026
@@ -1140,9 +1092,9 @@ foreach ($m in [regex]::Matches($ledgerText,
 # Разбор обязан найти ВСЕ строки ведомости, а не сколько получится: потерянный прогон увёл
 # бы итог вниз, и документ с верным числом покраснел бы вместо разбора. Сколько их
 # объявлено, считается отдельно и проще - по имени прогона.
-$declared = ([regex]::Matches($ledgerText, "Name\s*=\s*'")).Count
-if ($runCount -ne $declared) {
-    Fail "ведомость сметы разобралась не вся: прогонов объявлено $declared, разобрано $runCount"
+$ledgerDeclared = ([regex]::Matches($ledgerText, "Name\s*=\s*'")).Count
+if ($runCount -ne $ledgerDeclared) {
+    Fail "ведомость сметы разобралась не вся: прогонов объявлено $ledgerDeclared, разобрано $runCount"
 }
 
 function Doc-Line([string]$text, [int]$at) {
@@ -1224,6 +1176,7 @@ if ($docProblems) {
     Fail ("документ обещает не то число, что делает прогон:`n  " +
           (($docProblems | Sort-Object -Unique) -join "`n  "))
 }
+
 # Документы указывают человеку на кнопки, поля и страницы ПО ИМЕНИ: «действие „Проверить
 # дорогу от платформы“», «галка „Кнопка показа доступна“». Имя на экране - такая же
 # величина, как число, и сверял его тот же, кто и числа: никто. 14.09.2026 нашлось
@@ -1250,8 +1203,12 @@ foreach ($m in [regex]::Matches($monolith, '(?s)OptionCaptionML=\[ENU=.*?;\s*RUS
 $pointer = 'кнопк\w*|действи\w*|галк\w*|страниц\w*|колонк\w*|пол[еяю]\w*|отметк\w*|вкладк\w*'
 $nameProblems = @()
 $nameChecked = 0
+# USERNAME.md - запись исследования v1: он нарочно называет экраны, которых в v2 нет, и
+# переписывать его нельзя. Гейт проверяет живые экраны, а не историю; на удалённую функцию
+# он не распространяется.
+$uiRecordDocs = @($recordDocs + 'docs/USERNAME.md')
 foreach ($rel in (& git -C $root ls-files '*.md')) {
-    if ($recordDocs -contains $rel) { continue }
+    if ($uiRecordDocs -contains $rel) { continue }
     $full = Join-Path $root $rel
     if (-not (Test-Path $full)) { continue }
     $text = [IO.File]::ReadAllText($full)
@@ -1269,6 +1226,7 @@ if ($nameProblems) {
     Fail ("документ указывает на то, чего человек на экране не найдёт:`n  " +
           (($nameProblems | Sort-Object) -join "`n  "))
 }
+
 # Пакет собирается из ТОГО, ЧТО ЕДЕТ. Тела берутся уже разобранные: каждое кончается
 # переводом строки, и склейка возвращает те же байты за вычетом отсеянного.
 #
@@ -1335,9 +1293,6 @@ $pack    = Join-Path $outDir 'LockWatch.cp866.txt'
 [IO.File]::WriteAllText($packUtf, $shipMonolith, (New-Object System.Text.UTF8Encoding($false)))
 [IO.File]::WriteAllBytes($pack, $cp866.GetBytes($shipMonolith))
 Write-Host ("  объектов {0}, штамп сборки {1} {2}, пакет {3:N0} байт" -f $shipParts.Count, $buildDate, $buildTime, (Get-Item $pack).Length)
-foreach ($s in $sampleParts) {
-    Write-Host "  образец в пакет не едет: $($s.Kind) $($s.No) $($s.Name)" -ForegroundColor DarkYellow
-}
 
 # Состояние ДО: чужой отказ не должен засчитываться нашей выкладке.
 $uncompiledBefore = [int]((Invoke-Sql 'SELECT COUNT(*) FROM [dbo].[Object] WHERE [Compiled] = 0;')[0])
@@ -1449,11 +1404,8 @@ $body = @"
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TestCodeunitId -MethodName SelfTest -ErrorAction Stop
 Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $BenchCodeunitId -MethodName Bench -ErrorAction Stop
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $PermissionsCodeunitId -MethodName SelfTest -ErrorAction Stop
+
 "@
-# Обкатки образца здесь больше нет, и не потому, что она лишняя: образец в пакет не едет,
-# значит на стенде после выкладки его нет вовсе. Выкладывает его теперь один прогон -
-# Test-Adapter.ps1, - он же его и спрашивает.
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 
 # Обкатка и мерный прогон идут одной сессией: первая проверяет разбор без базы, второй -
@@ -1481,7 +1433,9 @@ if ($testFailed -or ($report -match 'FAIL')) { Fail 'обкатка не про�
 # самого $body, а не переписывается рядом: переписанный разошёлся бы с ним молча.
 if ($countClaims) {
     $suiteIds = @([regex]::Matches($body, '-CodeunitId\s+(\d+)') | ForEach-Object { [int]$_.Groups[1].Value })
-    $said = @([regex]::Matches($report, 'passed\s+(\d+)\s+of\s+(\d+)'))
+    # Язык отчёта задаёт служба, а не документ: на стенде он английский, на русской
+    # установке - русский. Обе формы итога означают одно и то же число.
+    $said = @([regex]::Matches($report, '(?:пройдено|passed)\s+(\d+)\s+(?:из|of)\s+(\d+)'))
     if ($said.Count -ne $suiteIds.Count) {
         Fail "обкаток запущено $($suiteIds.Count), а итогов в отчёте $($said.Count) - числа документов сверять не с чем"
     }

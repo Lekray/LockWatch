@@ -1,4 +1,4 @@
-﻿#requires -Version 7
+#requires -Version 7
 <#
 .SYNOPSIS
     Взаимоблокировки из кольцевого буфера сервера: настоящий круг между двумя сеансами,
@@ -36,9 +36,13 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $TaskCodeunitId = 110235,
-    [int]    $PassCodeunitId = 110234,
+    [int]    $TaskCodeunitId = 110232,
+    [int]    $PassCodeunitId = 110230,
     [switch] $KeepJournal,
+    # Перезавести сессию system_health перед опытом. Нужно стенду, упёршемуся в предел
+    # выдачи кольцевого приёмника (FINDINGS, раздел 62): события кругов в неё больше не
+    # попадают, и опыт краснел бы на состоянии сервера, а не на инструменте.
+    [switch] $CycleRing,
     [switch] $StopInstance
 )
 
@@ -56,7 +60,11 @@ $episode = "[$Company`$LockWatch Episode]"
 # Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
 $setup   = '[LockWatch Setup]'
 $state   = '[LockWatch Watchdog]'
-$mark    = "[$Company`$LockWatch Context Mark]"
+# Таблица контекста - общая на компанию, поэтому в её SQL-имени приставка компании есть.
+# Замок круга ставится на её строки, а в журнале она называется без приставки: так её
+# разбирает SplitSqlObjectName, и так же её спрашивают проверки.
+$context = "[$Company`$LockWatch Context Table]"
+$contextName = 'LockWatch Context Table'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 # Имена рабочих станций сторон. Логин у обоих соединений один - учётная запись, под которой
 # идёт прогон, - и программа одна, sqlcmd; узел остаётся единственным, чем они отличаются.
@@ -82,9 +90,10 @@ $winnerLogin = 'LW Probe Dead Winner'
 $blankDate = "CONVERT(datetime,'17530101')"
 $stateSeed = @"
 IF NOT EXISTS (SELECT 1 FROM $state)
-  INSERT INTO $state ([Primary Key],[Deadlocks Read Until],[Deadlocks Read At],[Coverage Since],
-                      [Last Pass At],[Last Pass (ms)],[Last Pass Rows],[Last Pass Truncated],[Watchdog Message])
-  VALUES (N'',$blankDate,$blankDate,$blankDate,$blankDate,0,0,0,N'');
+  INSERT INTO $state ([Primary Key],[Deadlocks Read Until],[Deadlocks Read At],[Deadlocks Counted],
+                      [Last Pass At],[Last Pass (ms)],[Last Pass Rows],[Last Pass Truncated],
+                      [Watchdog Message],[Watch Generation])
+  VALUES (N'',$blankDate,$blankDate,0,$blankDate,0,0,0,N'',0);
 "@
 
 function Invoke-Sql([string]$query) {
@@ -135,7 +144,7 @@ function New-ProbeLogin([string]$login) {
     Invoke-Sql @"
 IF SUSER_ID(N'$login') IS NULL CREATE LOGIN [$login] WITH PASSWORD = '$password', CHECK_POLICY = OFF;
 IF DATABASE_PRINCIPAL_ID(N'$login') IS NULL CREATE USER [$login] FOR LOGIN [$login];
-GRANT SELECT, UPDATE ON $mark TO [$login];
+GRANT SELECT, UPDATE ON $context TO [$login];
 "@ | Out-Null
 }
 
@@ -210,7 +219,7 @@ function CircleHold {
 $staleRing = $false
 # Найденные значения настройки. Пусто значит "прочитать не удалось": тогда уборка вернёт
 # 0 и 1 и скажет об этом вслух.
-$enabledWas = ''; $deadlocksWas = ''
+$enabledWas = ''; $deadlocksWas = ''; $statementsWas = ''
 # Кольцо, которое не отдаёт НИЧЕГО, - не то же самое, что кольцо, отдающее с запозданием.
 # Первое видно только по счётчику сервера, второе - по метке времени в самой выдаче.
 $blindRing = $false
@@ -251,8 +260,8 @@ function Invoke-Deadlock([string]$why) {
         # "жертва та самая" стала бы угадыванием.
         # EXECUTE AS стоит ДО открытия транзакции: в граф обязан попасть тот логин, под
         # которым сессия взяла блокировку, а не тот, под которым она подключилась.
-        $a = "EXECUTE AS LOGIN = N'$victimLogin'`nSET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'A1' WHERE [Server Instance Id]=-11`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'A2' WHERE [Server Instance Id]=-12`nCOMMIT`n"
-        $b = "EXECUTE AS LOGIN = N'$winnerLogin'`nSET DEADLOCK_PRIORITY HIGH`nBEGIN TRAN`nUPDATE $mark SET [Document No_]=N'B1' WHERE [Server Instance Id]=-12`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $mark SET [Document No_]=N'B2' WHERE [Server Instance Id]=-11`nCOMMIT`n"
+        $a = "EXECUTE AS LOGIN = N'$victimLogin'`nSET DEADLOCK_PRIORITY LOW`nBEGIN TRAN`nUPDATE $context SET [Table Name]=N'A1' WHERE [Table No_]=-11`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $context SET [Table Name]=N'A2' WHERE [Table No_]=-12`nCOMMIT`n"
+        $b = "EXECUTE AS LOGIN = N'$winnerLogin'`nSET DEADLOCK_PRIORITY HIGH`nBEGIN TRAN`nUPDATE $context SET [Table Name]=N'B1' WHERE [Table No_]=-12`nWAITFOR DELAY '$(CircleHold)'`nUPDATE $context SET [Table Name]=N'B2' WHERE [Table No_]=-11`nCOMMIT`n"
         $script:pa = Start-Sqlcmd 'dead-a.sql' $a $victimHost
         $script:pb = Start-Sqlcmd 'dead-b.sql' $b $winnerHost
         $pa = $script:pa
@@ -354,32 +363,50 @@ try {
     # Измерено 11.09.2026: круг состоялся, граф в буфере лежал, журнал остался пустым.
     # Проходы здесь делаются РУКАМИ, и сторож прогону не нужен вовсе.
     #
-    # Два поля настройки прогон трогает и потому помнит их НАЙДЕННЫМИ: выключатель сторожа и
-    # сбор взаимоблокировок принадлежат установке, и возврат "заводского" оставил бы чужой
-    # заведённый сторож погашенным - а заметили бы это не здесь, а на следующем прогоне,
-    # зелёном по неверной причине.
+    # Три поля настройки прогон трогает и потому помнит их НАЙДЕННЫМИ: выключатель сторожа,
+    # сбор взаимоблокировок и сбор текстов операторов принадлежат установке, и возврат
+    # "заводского" оставил бы чужой заведённый сторож погашенным - а заметили бы это не
+    # здесь, а на следующем прогоне, зелёном по неверной причине. Тексты гасятся нарочно:
+    # проверка "без разрешения не собраны" обязана мерить запрет, а не то, что галку забыли.
     $enabledWas = Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"
     $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
+    $statementsWas = Scalar "SELECT CONVERT(varchar(2),[Collect Statement Values]) FROM $setup;"
     Invoke-Sql @"
-UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 1, [Enabled] = 0;
-DELETE FROM [dbo].[Scheduled Task] WHERE [Run Codeunit] = $TaskCodeunitId;
+UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 1, [Enabled] = 0,
+                 [Collect Statement Values] = 0;
+DELETE FROM [dbo].[Scheduled Task] WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';
 $stateSeed
 UPDATE $state SET [Watchdog Message] = N'',
   [Deadlocks Read Until] = GETUTCDATE(), [Deadlocks Read At] = $blankDate;
 "@ | Out-Null
     $mark0 = Scalar "SELECT CONVERT(varchar(30),[Deadlocks Read Until],126) FROM $state;"
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
-    Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] IN (-11,-12);" | Out-Null
+    Invoke-Sql "DELETE FROM $context WHERE [Table No_] BETWEEN -6000 AND -1;" | Out-Null
     Invoke-Sql @"
-INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-11,-11,N'STAND',N'$Company',0,N'DEAD-ONE',GETUTCDATE()),
-       (-12,-12,N'STAND',N'$Company',0,N'DEAD-TWO',GETUTCDATE());
+INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
+VALUES (-11,N'LW Fixture A',0,N'',N'',0),
+       (-12,N'LW Fixture B',0,N'',N'',0);
 "@ | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
     Restart-Service $service -Force
     & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
+
+    # Предел выдачи кольцевого приёмника - не выдумка стенда, а свойство сервера (FINDINGS,
+    # раздел 62): упёршись в него, новые события в выдачу не попадают вовсе, при нулевом
+    # droppedCount и живой сессии. Перезавод очищает буфер, и это ПОДГОТОВКА опыта, а не
+    # послабление: проверки ниже по-прежнему требуют графа НАШЕГО круга. Состояние сессии
+    # спрашивается затем, чтобы команда не падала на уже остановленной или уже идущей.
+    if ($CycleRing) {
+        Invoke-Sql @"
+IF EXISTS (SELECT 1 FROM sys.dm_xe_sessions WHERE name = N'system_health')
+  ALTER EVENT SESSION [system_health] ON SERVER STATE = STOP;
+IF NOT EXISTS (SELECT 1 FROM sys.dm_xe_sessions WHERE name = N'system_health')
+  ALTER EVENT SESSION [system_health] ON SERVER STATE = START;
+"@ | Out-Null
+        Write-Host '  кольцевой приёмник system_health перезаведён'
+    }
 
     Write-Host 'Круг первый'
     $one = Invoke-Deadlock 'круг первый'
@@ -394,9 +421,9 @@ VALUES (-11,-11,N'STAND',N'$Company',0,N'DEAD-ONE',GETUTCDATE()),
     if ($rows -lt 1) { Fail 'в журнале пусто - дальше проверять нечего' }
 
     $row = Scalar @"
-SELECT TOP 1 CONVERT(varchar(11),[Class]) + '|' + CONVERT(varchar(11),[Outcome]) + '|' +
+SELECT TOP 1 CONVERT(varchar(11),[Outcome]) + '|' +
   CONVERT(varchar(11),[Victim SPID]) + '|' + CONVERT(varchar(11),[Blocker SPID]) + '|' +
-  CONVERT(varchar(11),[Chain Ring]) + '|' + CONVERT(varchar(11),[Open]) + '|' +
+  CONVERT(varchar(11),[Open]) + '|' +
   [NAV Table Name] + '|' + [Resource Kind] + '|' + [Deadlock Id] + '|' +
   CONVERT(varchar(11),CASE WHEN [Ended At] > [Started At] THEN 1 ELSE 0 END) + '|' +
   CONVERT(varchar(11),[Max Wait (ms)]) + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' +
@@ -404,7 +431,7 @@ SELECT TOP 1 CONVERT(varchar(11),[Class]) + '|' + CONVERT(varchar(11),[Outcome])
 FROM $episode ORDER BY [Entry No_] DESC;
 "@
     $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
-    if ($f.Count -lt 16) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
+    if ($f.Count -lt 14) { Fail "строка журнала пришла неполной: $($f.Count) колонок" }
 
     # Обоих участников граф называет сам - узлом процесса, из которого уже взяты машина,
     # процесс и программа. Дорога эта отдельная от очереди, и своих номеров колонок у неё
@@ -419,16 +446,16 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # Dead Victim] при ожидаемом [LW Probe Dead Winner]". На прежнем условии перестановка
     # прошла бы молча: обе колонки были непусты и обе содержали одно и то же имя.
     Check 'граф назвал виновника: логин и программа' `
-        (($f[13] -eq $winnerLogin) -and ($f[14] -match '(?i)sqlcmd')) `
-        "виновник [$($f[13])] при ожидаемом [$winnerLogin], программа [$($f[14])]"
+        (($f[11] -eq $winnerLogin) -and ($f[12] -match '(?i)sqlcmd')) `
+        "виновник [$($f[11])] при ожидаемом [$winnerLogin], программа [$($f[12])]"
 
     # Непустота колонки ещё не значит, что её не перепутали с чужой: логин и программа
     # у сторон опыта одинаковые, и перестановка прошла бы молча. Узел - это то, чем они
     # отличаются. Узел жертвы из журнала убран, поэтому сверяется узел виновника: граф
     # берёт его из того же узла процесса, что и логин.
     Check 'граф назвал узел виновника тот самый' `
-        ($f[15] -eq $winnerHost) `
-        "узел виновника [$($f[15])] при ожидаемом [$winnerHost]"
+        ($f[13] -eq $winnerHost) `
+        "узел виновника [$($f[13])] при ожидаемом [$winnerHost]"
 
     # Обе метки графа приходят от сервера, и шкалы у них РАЗНЫЕ: время события буфер
     # событий пишет по UTC, а @lasttranstarted сервер кладёт по местным часам. В журнале
@@ -447,19 +474,19 @@ FROM $episode ORDER BY [Entry No_] DESC;
         (([int]$gc[0]) -le (ClockSlackSeconds)) `
         "время события расходится с UTC на $($gc[0]) с при запасе $(ClockSlackSeconds), пояс сервера $($gc[1]) мин"
 
-    Check 'класс и исход названы, а не оставлены неизвестными' (($f[0] -eq '3') -and ($f[1] -eq '3')) `
-        "класс $($f[0]) при ожидаемом 3 (взаимоблокировка), исход $($f[1]) при ожидаемом 3 (откат сервером)"
-    Check 'жертва и победитель те самые' ((([int]$f[2]) -eq $one[0]) -and (([int]$f[3]) -eq $one[1])) `
-        "жертва $($f[2]) при ожидаемой $($one[0]), победитель $($f[3]) при ожидаемом $($one[1])"
-    # Кольцо - не догадка разбора цепочки, а факт из графа: ждали оба.
-    Check 'цепочка помечена замкнутой' ($f[4] -eq '1') "признак кольца $($f[4])"
-    Check 'эпизод приехал законченным' (($f[5] -eq '0') -and ($f[9] -eq '1') -and (([int]$f[10]) -gt 0)) `
-        "открыт $($f[5]), конец позже начала $($f[9]), ожидание $($f[10]) мс"
-    Check 'таблица и род блокировки сняты с графа' (($f[6] -eq 'LockWatch Context Mark') -and ($f[7] -eq 'KEYLOCK')) `
-        "таблица [$($f[6])], род [$($f[7])], ключ NAV $($f[11])"
-    Check 'отпечаток графа снят' ($f[8] -ne '') "отпечаток [$($f[8])]"
+    # Классификация эпизода в v2 одна на все случаи: поле "класс" убрано вместе с советом,
+    # и остался только исход. У взаимоблокировки он один - сервер откатил круг.
+    Check 'исход назван откатом сервером' ($f[0] -eq '3') `
+        "исход $($f[0]) при ожидаемом 3 (откат сервером)"
+    Check 'жертва и победитель те самые' ((([int]$f[1]) -eq $one[0]) -and (([int]$f[2]) -eq $one[1])) `
+        "жертва $($f[1]) при ожидаемой $($one[0]), победитель $($f[2]) при ожидаемом $($one[1])"
+    Check 'эпизод приехал законченным' (($f[3] -eq '0') -and ($f[7] -eq '1') -and (([int]$f[8]) -gt 0)) `
+        "открыт $($f[3]), конец позже начала $($f[7]), ожидание $($f[8]) мс"
+    Check 'таблица и род блокировки сняты с графа' (($f[4] -eq $contextName) -and ($f[5] -eq 'KEYLOCK')) `
+        "таблица [$($f[4])], род [$($f[5])], ключ NAV $($f[9])"
+    Check 'отпечаток графа снят' ($f[6] -ne '') "отпечаток [$($f[6])]"
     # Текст оператора едет со значениями. Галка выключена - колонка обязана быть пустой.
-    Check 'текст оператора без разрешения не собран' ($f[12] -eq '') "оператор [$($f[12])]"
+    Check 'текст оператора без разрешения не собран' ($f[10] -eq '') "оператор [$($f[10])]"
 
     $mark1 = Scalar "SELECT CONVERT(varchar(30),[Deadlocks Read Until],126) FROM $state;"
     Check 'отметка прочитанного сдвинулась' (($mark1 -ne '') -and ($mark1 -gt $mark0)) `
@@ -484,7 +511,7 @@ FROM $episode ORDER BY [Entry No_] DESC;
     # обязан одной строкой, а дублей не должно быть ни у кого.
     $rows2 = [int](Scalar "SELECT COUNT(*) FROM $episode;")
     $ids = [int](Scalar "SELECT COUNT(DISTINCT [Deadlock Id]) FROM $episode;")
-    $firstAgain = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Deadlock Id] = N'$($f[8])';")
+    $firstAgain = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Deadlock Id] = N'$($f[6])';")
     Check 'повторно прочитанный граф не удваивает строку' (($rows2 -eq $ids) -and ($firstAgain -eq 1)) `
         "строк в журнале $rows2 при $ids разных отпечатках, строк первого круга $firstAgain при ожидаемой 1"
     # ---------- кольцо, замолчавшее целиком ----------
@@ -524,19 +551,20 @@ finally {
     foreach ($p in @($pa, $pb)) {
         if ($p -and -not $p.HasExited) { try { $p.Kill(); $p.WaitForExit(5000) | Out-Null } catch { } }
     }
-    $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] IN (-11,-12);"
+    $cleanup = "DELETE FROM $context WHERE [Table No_] IN (-11,-12);"
     # Отметка оставляется на СЕЙЧАС, а не пустой. Пустая означает "буфер не читан вовсе",
     # и следующий же проход вычитал бы из кольца все графы разом - включая устроенные этим
     # опытом. Прогон убрал бы за собой в журнале и оставил мину в настройке.
     $cleanup += " UPDATE $state SET [Deadlocks Read Until] = GETUTCDATE(), [Deadlocks Read At] = $blankDate;"
-    # А два поля настройки возвращаются ТЕМИ, какими их застали: сторож гасился как условие
+    # А поля настройки возвращаются ТЕМИ, какими их застали: сторож гасился как условие
     # опыта, а не потому, что установке так лучше.
     $enabledBack = if ($enabledWas -match '^\d+$') { $enabledWas } else { 0 }
     $deadlocksBack = if ($deadlocksWas -match '^\d+$') { $deadlocksWas } else { 1 }
-    if (($enabledWas -notmatch '^\d+$') -or ($deadlocksWas -notmatch '^\d+$')) {
-        Write-Host 'ВНИМАНИЕ: прежние значения настройки прочитать не удалось - вернул 0 и 1' -ForegroundColor Red
+    $statementsBack = if ($statementsWas -match '^\d+$') { $statementsWas } else { 0 }
+    if (($enabledWas -notmatch '^\d+$') -or ($deadlocksWas -notmatch '^\d+$') -or ($statementsWas -notmatch '^\d+$')) {
+        Write-Host 'ВНИМАНИЕ: прежние значения настройки прочитать не удалось - вернул 0, 1 и 0' -ForegroundColor Red
     }
-    $cleanup += " UPDATE $setup SET [Enabled] = $enabledBack, [Deadlocks Enabled] = $deadlocksBack;"
+    $cleanup += " UPDATE $setup SET [Enabled] = $enabledBack, [Deadlocks Enabled] = $deadlocksBack, [Collect Statement Values] = $statementsBack;"
     if (-not $KeepJournal) { $cleanup += " DELETE FROM $episode;" }
     # Опытные логины сметаются по образцу имени и В ПОРЯДКЕ: сперва пользователь базы,
     # потом сам логин - иначе сервер не отдаст логин, у которого есть пользователь.

@@ -1,0 +1,2106 @@
+OBJECT Codeunit 110230 LockWatch Watch
+{
+  OBJECT-PROPERTIES
+  {
+    Date=20.10.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            RunPass;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Journal@1000000000 : Record 110231;
+      Sql@1000000001 : Codeunit 110231;
+      PassAt@1000000002 : DateTime;
+      NextEntryNo@1000000003 : Integer;
+      PassStarted@1000000004 : Boolean;
+      OpenedCount@1000000005 : Integer;
+      UpdatedCount@1000000006 : Integer;
+      ClosedCount@1000000007 : Integer;
+      RestartedCount@1000000008 : Integer;
+      MergedWaits@1000000009 : Integer;
+      PassMinWaitMs@1000000010 : Integer;
+      CutTxt@1000000011 : TextConst 'ENU=-- cut by LockWatch, the whole statement is %1 characters, kept %2;RUS=-- усечено сторожем блокировок, весь оператор %1 знаков, оставлено %2';
+      OverrunTxt@1000000012 : TextConst 'ENU=The pass took %1 ms against the declared ceiling of %2.;RUS=Проход занял %1 мс при объявленном потолке %2.';
+      RingSilentTxt@1000000013 : TextConst 'ENU=Deadlocks counted by the server: %1, and the system_health ring gave back none. Its output is capped - restart the session.;RUS=Сервер насчитал кругов %1, кольцо system_health не отдало ни одного. Выдача кольца переполнена - нужен перезавод сессии.';
+      WatchSilentTxt@1000000014 : TextConst 'ENU=The watch is on, and the last pass was %1 min ago. The chain of passes is not running - check EnableTaskScheduler in the service instance configuration.;RUS=Сторож включён, а последний проход был %1 мин назад. Цепочка проходов не идёт - проверьте EnableTaskScheduler в конфигурации экземпляра службы.';
+      WatchNeverTxt@1000000015 : TextConst 'ENU=The watch is on, and no pass has happened at all. The chain of passes has not started - check EnableTaskScheduler in the service instance configuration.;RUS=Сторож включён, а прохода не случилось ни одного. Цепочка проходов не пошла - проверьте EnableTaskScheduler в конфигурации экземпляра службы.';
+      NoPassErr@1000000016 : TextConst 'ENU=LockWatch: an episode was offered outside a pass. A pass is opened by BeginPass and closed by FinishPass.;RUS=Сторож блокировок: эпизод предложен вне прохода. Проход открывается процедурой BeginPass и закрывается FinishPass.';
+      NamesFailedTxt@1000000017 : TextConst 'ENU=Episodes are logged, but table and key names are missing: %1;RUS=Эпизоды записаны, но имена таблиц и ключей не получены: %1';
+      OtherDbTxt@1000000018 : TextConst 'ENU=Skipped %1 waits belonging to another database on the same server.;RUS=Пропущено %1 ожиданий, относящихся к другой базе на том же сервере.';
+      QuietTxt@1000000019 : TextConst 'ENU=Pass went through, the queue is empty.;RUS=Проход прошёл, очередь пуста.';
+      BusyTxt@1000000020 : TextConst 'ENU=Pass went through, waiters %1.;RUS=Проход прошёл, ждущих %1.';
+      TruncatedTxt@1000000021 : TextConst 'ENU=The pass hit the ceiling of %1 rows: the longest waits are kept, the rest of the queue is not in the journal.;RUS=Проход упёрся в потолок %1 строк: оставлены самые долгие ожидания, остаток очереди в журнал не попал.';
+      CountsTxt@1000000022 : TextConst 'ENU=Opened %1, updated %2, closed %3, restarted %4.;RUS=Открыто %1, обновлено %2, закрыто %3, начато заново %4.';
+      NoMarkTxt@1000000023 : TextConst 'ENU=The document was not found: the contended row is not in a context table, or the lock is not a key one.;RUS=Документ не найден: спорной строки нет в таблицах контекста (или блокировка не строчная).';
+      DocFailedTxt@1000000024 : TextConst 'ENU=Documents are not named: %1;RUS=Документы не названы: %1';
+      ReadFailedTxt@1000000025 : TextConst 'ENU=The queue could not be read: %1;RUS=Очередь прочитать не удалось: %1';
+      DeadlockFailedTxt@1000000026 : TextConst 'ENU=Deadlocks are not read: %1;RUS=Взаимоблокировки не прочитаны: %1';
+      DeadlocksTxt@1000000027 : TextConst 'ENU=Deadlocks added %1.;RUS=Взаимоблокировок добавлено %1.';
+      MovedTxt@1000000028 : TextConst 'ENU=Deleted by retention or ceiling: %1.;RUS=Удалено по сроку или потолку: %1.';
+      MergedTxt@1000000029 : TextConst 'ENU=Several tasks of one victim waited on the same resource: %1 of those waits went into the same journal row (the journal table tells them apart by nothing else).;RUS=Несколько задач одной жертвы ждали на том же ресурсе: %1 таких ожиданий ушло в ту же строку журнала (больше их в таблице журнала ничем не различить).';
+      DeadlockLostTxt@1000000030 : TextConst 'ENU=The ring buffer evicted events newer than the mark, some deadlocks are lost.;RUS=Буфер вытеснил события новее отметки, часть взаимоблокировок потеряна.';
+      NoBufferTxt@1000000031 : TextConst 'ENU=The system_health session is not running, deadlocks cannot be read.;RUS=Сессия system_health не работает, взаимоблокировки читать неоткуда.';
+      PassNamedTxt@1000000032 : TextConst 'ENU=Names from the platform: %1 of %2.;RUS=Имена от платформы: %1 из %2.';
+      PassFailedTxt@1000000033 : TextConst 'ENU=Names from the platform are not read: %1;RUS=Имена от платформы не прочитаны: %1';
+
+    [External]
+    PROCEDURE QueueRowLimit@1(MaxRows@1000000034 : Integer) : Integer;
+    BEGIN
+      // ФАКТИЧЕСКИЙ потолок съёма: настройка, но не выше собственного предела инструмента.
+      // Пределов два, и оба настоящие, потому что они про разное. Настройка отвечает на
+      // "сколько ждущих готов терпеть заказчик"; пятьсот - размер массивов цепочки, и выше
+      // него строки съёму просто некуда положить. Настройка, поднятая выше пятисот, ничего
+      // не поднимает: очередь обрезается на пятистах. Считать признак "усечено" против
+      // настройки значило бы в этом случае промолчать об обрезке - а проход, обрезанный
+      // молча, читается как "вся очередь в журнале".
+      IF (MaxRows > 0) AND (MaxRows < MaxWaitersPerPass) THEN
+        EXIT(MaxRows);
+      EXIT(MaxWaitersPerPass);
+    END;
+
+    [External]
+    PROCEDURE ParseWaitResource@2(ResourceText@1000000035 : Text;VAR Kind@1000000036 : Text;VAR HobtId@1000000037 : BigInteger;VAR ObjectId@1000000038 : Integer;VAR DatabaseId@1000000039 : Integer) : Boolean;
+    VAR
+      Trimmed@1000000040 : Text;
+      SpacePos@1000000041 : Integer;
+    BEGIN
+      // Описание ресурса в очереди ожиданий - это род и пары имя=значение:
+      //   keylock hobtid=72057594261667840 dbid=7 id=lock1870ff96880 mode=X associatedObjectId=...
+      //   objectlock lockPartition=0 objid=1115203073 subresource=FULL dbid=7 id=... mode=X
+      // Хэша ключа здесь НЕТ вовсе - он живёт только в dm_tran_locks. Значит дешёвый
+      // опрос очереди отвечает "какая таблица и какой ключ", но не "какая запись".
+      // Пара mode не разбирается: режим держимой блокировки в журнал не ложится.
+      Kind := '';
+      CLEAR(HobtId);
+      ObjectId := 0;
+      DatabaseId := 0;
+
+      Trimmed := DELCHR(ResourceText,'<>',SpaceChar);
+      IF Trimmed = '' THEN
+        EXIT(FALSE);
+
+      SpacePos := STRPOS(Trimmed,SpaceChar);
+      IF SpacePos = 0 THEN
+        Kind := LOWERCASE(Trimmed)
+      ELSE
+        Kind := LOWERCASE(COPYSTR(Trimmed,1,SpacePos - 1));
+
+      IF NOT EVALUATE(HobtId,PairValue(Trimmed,'hobtid')) THEN
+        CLEAR(HobtId);
+      IF NOT EVALUATE(ObjectId,PairValue(Trimmed,'objid')) THEN
+        ObjectId := 0;
+      IF NOT EVALUATE(DatabaseId,PairValue(Trimmed,'dbid')) THEN
+        DatabaseId := 0;
+
+      EXIT((Kind <> '') AND (DatabaseId > 0));
+    END;
+
+    [External]
+    PROCEDURE TrimLockHash@3(ResourceDescription@1000000042 : Text) : Text;
+    VAR
+      Value@1000000043 : Text;
+    BEGIN
+      // dm_tran_locks отдаёт хэш ключа добитым пробелами до ширины столбца DMV.
+      // Сравнение с параметром это переживает - SQL игнорирует хвостовые пробелы, -
+      // а склейка хэша в текст запроса не переживает и молча не находит ничего.
+      Value := DELCHR(ResourceDescription,'<>',SpaceChar);
+      IF STRLEN(Value) < MinLockHashLength THEN
+        EXIT('');
+      IF (COPYSTR(Value,1,1) <> '(') OR (COPYSTR(Value,STRLEN(Value),1) <> ')') THEN
+        EXIT('');
+      EXIT(Value);
+    END;
+
+    [External]
+    PROCEDURE SplitSqlObjectName@4(SqlName@1000000044 : Text;VAR CompanyName@1000000045 : Text;VAR TableName@1000000046 : Text;VAR SiftKeyNo@1000000047 : Integer) : Boolean;
+    VAR
+      Value@1000000048 : Text;
+      Marker@1000000049 : Text;
+      Pos@1000000050 : Integer;
+      Suffix@1000000051 : Text;
+    BEGIN
+      // Правил разбора два, а не одно, и одно правило теряет самый частый случай молча.
+      // У таблицы номер ключа NAV - суффикс имени ИНДЕКСА (см. KeyNoFromIndexName).
+      // У SIFT-представления индекс у всех один и тот же, VSIFTIDX, и номера не несёт:
+      // номер там - число после ПОСЛЕДНЕГО $VSIFT$ в имени самого объекта.
+      CompanyName := '';
+      TableName := '';
+      SiftKeyNo := UnknownKeyNo;
+
+      Value := DELCHR(SqlName,'<>',SpaceChar);
+      IF Value = '' THEN
+        EXIT(FALSE);
+
+      Marker := SiftMarker;
+      Pos := LastPos(UPPERCASE(Value),Marker);
+      IF Pos > 0 THEN BEGIN
+        Suffix := COPYSTR(Value,Pos + STRLEN(Marker));
+        IF NOT IsAllDigits(Suffix) THEN
+          EXIT(FALSE);
+        EVALUATE(SiftKeyNo,Suffix);
+        Value := COPYSTR(Value,1,Pos - 1);
+      END;
+
+      // Платформенные $ndo$* пользовательскими таблицами не являются: их около дюжины на
+      // базу (11 и 12 на двух стендах, счёт 09.09.2026), и разбирать в них нечего. Отдать
+      // их как таблицу компании "" было бы враньём - но и промолчать нельзя, см. UnnamedRow.
+      IF COPYSTR(LOWERCASE(Value),1,STRLEN(PlatformObjectPrefix)) = PlatformObjectPrefix THEN
+        EXIT(FALSE);
+
+      Pos := STRPOS(Value,'$');
+      IF Pos = 0 THEN
+        // У таблиц с DataPerCompany=No префикса компании нет вовсе - это не ошибка.
+        TableName := Value
+      ELSE BEGIN
+        CompanyName := COPYSTR(Value,1,Pos - 1);
+        TableName := COPYSTR(Value,Pos + 1);
+      END;
+
+      EXIT(TableName <> '');
+    END;
+
+    [External]
+    PROCEDURE KeyNoFromIndexName@5(IndexName@1000000052 : Text) : Integer;
+    VAR
+      Value@1000000053 : Text;
+      Pos@1000000054 : Integer;
+      Suffix@1000000055 : Text;
+      KeyNo@1000000056 : Integer;
+    BEGIN
+      // Кластерный индекс зовётся <Компания>$<Таблица>$0, вторичные - просто $1, $5, $13.
+      // Номера НЕ сплошные: у выключенного ключа индекса в SQL нет вовсе, и дыры в
+      // нумерации - норма, а не признак поломки. index_id и номер ключа NAV - разные вещи.
+      //
+      // НОЛЬ здесь - ОТВЕТ, а не пустота: у NAV кластерный ключ и есть ключ 0, и в SQL он
+      // зовётся "$0" ровно по тому же счёту (FINDINGS, раздел 5: живая блокировка дала
+      // таблицу и ключ 0). Это первый ключ таблицы, а не "нумерация с нуля" и не неудача
+      // разбора. Неудача - это UnknownKeyNo, минус единица, и в тех же колонках она
+      // значит совсем другое: молча свести их в одно число значило бы назвать разобранный
+      // ключ неразобранным.
+      Value := DELCHR(IndexName,'<>',SpaceChar);
+      Pos := LastPos(Value,'$');
+      IF Pos = 0 THEN
+        EXIT(UnknownKeyNo);
+      Suffix := COPYSTR(Value,Pos + 1);
+      IF NOT IsAllDigits(Suffix) THEN
+        EXIT(UnknownKeyNo);
+      EVALUATE(KeyNo,Suffix);
+      EXIT(KeyNo);
+    END;
+
+    [External]
+    PROCEDURE EpisodeStart@6(ObservedAt@1000000057 : DateTime;WaitDurationMs@1000000058 : Integer) : DateTime;
+    VAR
+      Waited@1000000059 : Duration;
+    BEGIN
+      // Длительность из DMV точна, а период опроса плавает: сам проход в шторм стоит
+      // миллисекунды. Считать начало по своим часам значит внести погрешность периода
+      // в цифру, которую потом покажут заказчику. Считаем назад от момента наблюдения,
+      // а сам момент берётся SYSDATETIME() тем же запросом - часами SQL, не NAV.
+      IF WaitDurationMs <= 0 THEN
+        EXIT(ObservedAt);
+      Waited := WaitDurationMs;
+      EXIT(ObservedAt - Waited);
+    END;
+
+    [External]
+    PROCEDURE IsNewEpisode@7(PrevDurationMs@1000000060 : Integer;NewDurationMs@1000000061 : Integer) : Boolean;
+    BEGIN
+      // Жертва может дождаться и тут же встать снова на тот же ресурс: сессия та же,
+      // транзакция та же, ресурс тот же - по ключу это один эпизод, а на деле второй.
+      // Единственный видимый признак - счётчик ожидания пошёл назад.
+      //
+      // Судится он ВНУТРИ ОДНОЙ ЛИЧНОСТИ ожидания, и это не оттенок. При параллельном
+      // плане у одной жертвы на одном и том же hobt стоят СРАЗУ несколько ожиданий - по
+      // одному на задачу (exec_context_id), - а в таблице журнала они друг от друга не
+      // отличаются ничем. Сравнивай счётчик сквозь них - и меньшее из двух ожиданий
+      // закрывало бы строку, которую большее только что обновило, каждым проходом: журнал
+      // пухнул бы мусором, а очередь читалась бы как череда закрытий. Личность (сессия,
+      // транзакция, ресурс) собирается в FindOpen журнала, а соседа по тому же проходу
+      // отсекает сам журнал: у него уже есть метка "эту строку в этом проходе трогали"
+      // (Observe), и признак ниже спрашивается только у строки без неё.
+      EXIT(NewDurationMs < PrevDurationMs);
+    END;
+
+    [External]
+    PROCEDURE Outcome@8(LastDurationMs@1000000062 : Integer;PeriodMs@1000000063 : Integer;SessionIsNav@1000000064 : Boolean) : Integer;
+    BEGIN
+      // Жертва исчезла из очереди - и дождавшаяся, и отвалившаяся исчезают одинаково.
+      // Твёрдо судить можно только в двух случаях из трёх:
+      //   наблюдали на пределе и дальше - отказ,
+      //   до предела не хватило целого периода - дождался,
+      //   зазор меньше периода - не определён, и врать про это нельзя.
+      // Чужой сессии исход не приписываем вовсе: предел 10 000 мс - предел NAV,
+      // внешнее подключение и задание обслуживания ждут сколько угодно.
+      IF NOT SessionIsNav THEN
+        EXIT(OutcomeUnknown);
+      IF (LastDurationMs <= 0) OR (PeriodMs < 0) THEN
+        EXIT(OutcomeUnknown);
+      IF LastDurationMs >= NavLockTimeoutMs THEN
+        EXIT(OutcomeTimedOut);
+      IF LastDurationMs + PeriodMs < NavLockTimeoutMs THEN
+        EXIT(OutcomeGranted);
+      EXIT(OutcomeUnknown);
+    END;
+
+    [External]
+    PROCEDURE ChainHead@9(VAR Waiter@1000000065 : ARRAY [500] OF Integer;VAR Blocker@1000000066 : ARRAY [500] OF Integer;Count@1000000067 : Integer;StartSession@1000000068 : Integer;VAR Depth@1000000069 : Integer;VAR Cycle@1000000070 : Boolean) : Integer;
+    VAR
+      Current@1000000071 : Integer;
+      Next@1000000072 : Integer;
+      Index@1000000073 : Integer;
+      Steps@1000000074 : Integer;
+      FirstBlocker@1000000075 : Integer;
+    BEGIN
+      // Очередь называет НЕПОСРЕДСТВЕННОГО блокирующего. В цепочке A -> B -> C у C
+      // непосредственный виновник - B, который сам стоит за A. Написать в журнал B
+      // значит назвать виновным пострадавшего, и назвать правдоподобно: он ведь и
+      // правда держит то, чего ждёт C. По такому журналу чинят не то.
+      // Голова - сессия, которой самой нет среди ждущих. Разматывается по уже
+      // прочитанным строкам прохода: ни одного лишнего запроса к серверу.
+      Depth := 0;
+      Cycle := FALSE;
+      Current := StartSession;
+      IF (Count <= 0) OR (Count > MaxWaitersPerPass) THEN
+        EXIT(Current);
+
+      Steps := 0;
+      FirstBlocker := 0;
+      REPEAT
+        Next := 0;
+        FOR Index := 1 TO Count DO
+          IF (Next = 0) AND (Waiter[Index] = Current) THEN
+            Next := Blocker[Index];
+        IF Next <> 0 THEN BEGIN
+          Current := Next;
+          Depth := Depth + 1;
+          Steps := Steps + 1;
+          // Непосредственный блокирующий запоминается на первом же шаге: в кольце он
+          // окажется единственным честным ответом, а искать его заново будет негде.
+          IF FirstBlocker = 0 THEN
+            FirstBlocker := Current;
+          // Кольцо (A ждёт B, B ждёт A) - это взаимоблокировка на подходе либо уже
+          // разобранная сервером. Обрываем: и по возврату в начало, и по потолку шагов,
+          // потому что начало может вести В кольцо, не входя в него само.
+          IF (Current = StartSession) OR (Steps > MaxChainSteps) THEN BEGIN
+            Cycle := TRUE;
+            Next := 0;
+          END;
+        END;
+      UNTIL Next = 0;
+      // В кольце головы нет ВОВСЕ, а обход возвращался в начало - то есть головой
+      // объявлялась сама жертва. Назвать по такой голове виновника значило бы назвать
+      // пострадавшего: обе колонки получали одного человека.
+      // Замер на стенде 09.09.2026, кольцо из двух сторон с разными учётными записями:
+      //   67 | жертва 70 | блокирует 73 | голова 70 | кольцо 1 | виноват и ждал RING-ALPHA
+      //   68 | жертва 73 | блокирует 70 | голова 73 | кольцо 1 | виноват и ждал RING-BETA
+      //
+      // Честный ответ в кольце ровно один - НЕПОСРЕДСТВЕННЫЙ блокирующий: он и вправду
+      // держит то, чего ждут, и большего про кольцо сказать нельзя. Так же отвечает и
+      // разбор графа (голова равна блокирующему, глубина единица), а расходиться двум
+      // дорогам в одном и том же ответе нельзя - это уже стоило нам потерянного имени.
+      IF Cycle THEN BEGIN
+        Current := FirstBlocker;
+        Depth := 1;
+      END;
+      EXIT(Current);
+    END;
+
+    [External]
+    PROCEDURE Chains@10(VAR Waiter@1000000076 : ARRAY [500] OF Integer;VAR Blocker@1000000077 : ARRAY [500] OF Integer;Count@1000000078 : Integer;VAR Head@1000000079 : ARRAY [500] OF Integer;VAR Depth@1000000080 : ARRAY [500] OF Integer;VAR Ring@1000000081 : ARRAY [500] OF Boolean;VAR Behind@1000000082 : ARRAY [500] OF Integer);
+    VAR
+      Index@1000000083 : Integer;
+      Other@1000000084 : Integer;
+      StepDepth@1000000085 : Integer;
+      Cycle@1000000086 : Boolean;
+    BEGIN
+      // Одна голова с сорока жертвами - это не сорок бед, а одна. Это число и есть честный
+      // ответ на "кто пострадал", и по нему решают, что чинить первым.
+      //
+      // Считается ОДИН раз на проход, а не на строку, и это не вкусовщина. Голова каждой
+      // строки стоит прохода по всем ждущим; посчитать "жертв за головой" отдельно для
+      // каждой строки значило бы получить КУБ от числа ждущих - на пятистах это сотни
+      // миллионов сравнений, то есть наблюдатель встал бы ровно тогда, когда он нужен.
+      CLEAR(Head);
+      CLEAR(Depth);
+      CLEAR(Ring);
+      CLEAR(Behind);
+      IF (Count <= 0) OR (Count > MaxWaitersPerPass) THEN
+        EXIT;
+      FOR Index := 1 TO Count DO BEGIN
+        Head[Index] := ChainHead(Waiter,Blocker,Count,Waiter[Index],StepDepth,Cycle);
+        Depth[Index] := StepDepth;
+        Ring[Index] := Cycle;
+      END;
+      FOR Index := 1 TO Count DO
+        FOR Other := 1 TO Count DO
+          IF Head[Other] = Head[Index] THEN
+            Behind[Index] := Behind[Index] + 1;
+    END;
+
+    LOCAL PROCEDURE CollapseChains@1000000901(VAR Observed@1000000087 : TEMPORARY Record 110231;
+                                              RowCount@1000000088 : Integer);
+    VAR
+      Waiter@1000000089 : ARRAY [500] OF Integer;
+      Blocker@1000000090 : ARRAY [500] OF Integer;
+      Head@1000000091 : ARRAY [500] OF Integer;
+      Depth@1000000092 : ARRAY [500] OF Integer;
+      Ring@1000000093 : ARRAY [500] OF Boolean;
+      Behind@1000000094 : ARRAY [500] OF Integer;
+      Index@1000000095 : Integer;
+    BEGIN
+      // Виновник - ГОЛОВА цепочки, а не непосредственный блокирующий: в цепочке
+      // A -> B -> C держит B, но сам он ждёт за A, и записать в журнал B значит назвать
+      // виновным пострадавшего (см. ChainHead). Полей головы в v2 не осталось, поэтому
+      // голова подменяет блокирующего в самой строке - до записи в журнал.
+      IF (RowCount <= 0) OR (RowCount > MaxWaitersPerPass) THEN
+        EXIT;
+      Observed.RESET;
+      IF Observed.FINDSET THEN
+        REPEAT
+          Waiter[Observed."Entry No."] := Observed."Victim SPID";
+          Blocker[Observed."Entry No."] := Observed."Blocker SPID";
+        UNTIL Observed.NEXT = 0;
+      Chains(Waiter,Blocker,RowCount,Head,Depth,Ring,Behind);
+      FOR Index := 1 TO RowCount DO
+        // Нулевой блокирующий - это "сервер не назвал", а не сеанс: головой там
+        // окажется сама жертва, и подменять ею блокирующего нельзя.
+        IF (Blocker[Index] <> 0) AND (Head[Index] <> Blocker[Index]) THEN
+          CollapseRow(Observed,Blocker,RowCount,Head[Index],Index);
+    END;
+
+    LOCAL PROCEDURE CollapseRow@1000000920(VAR Observed@1000000096 : TEMPORARY Record 110231;
+                                           VAR Blocker@1000000097 : ARRAY [500] OF Integer;
+                                           Count@1000000098 : Integer;
+                                           HeadSpid@1000000099 : Integer;
+                                           Index@1000000100 : Integer);
+    VAR
+      SourceRow@1000000101 : Integer;
+      Lookup@1000000102 : Integer;
+      BlockerSpid@1000000103 : Integer;
+      BlockerTran@1000000104 : BigInteger;
+      BlockerLogin@1000000105 : Text;
+      BlockerHost@1000000106 : Text;
+      BlockerProgram@1000000107 : Text;
+      BlockerStatement@1000000108 : Text;
+      VictimBody@1000000109 : Text;
+      BlockerBody@1000000110 : Text;
+    BEGIN
+      // Строка, в которой голова видна своими глазами: её держит сама голова, и все
+      // поля "виновника" в ней принадлежат голове.
+      SourceRow := 0;
+      FOR Lookup := 1 TO Count DO
+        IF (SourceRow = 0) AND (Blocker[Lookup] = HeadSpid) THEN
+          SourceRow := Lookup;
+      // Головы в очереди не нашлось - остаётся непосредственный блокирующий. Это
+      // честнее выдуманной головы, и глубина у такой цепочки равна единице.
+      IF SourceRow = 0 THEN
+        EXIT;
+
+      Observed.GET(Index);
+      VictimBody := RowBody(Observed,FALSE);
+
+      Observed.GET(SourceRow);
+      BlockerSpid := Observed."Blocker SPID";
+      BlockerTran := Observed."Blocker Transaction Id";
+      BlockerLogin := Observed."Blocker Login";
+      BlockerHost := Observed."Blocker Host";
+      BlockerProgram := Observed."Blocker Program";
+      BlockerStatement := Observed."Blocker Statement";
+      BlockerBody := RowBody(Observed,TRUE);
+
+      Observed.GET(Index);
+      Observed."Blocker SPID" := BlockerSpid;
+      Observed."Blocker Transaction Id" := BlockerTran;
+      Observed."Blocker Login" := BlockerLogin;
+      Observed."Blocker Host" := BlockerHost;
+      Observed."Blocker Program" := BlockerProgram;
+      Observed."Blocker Statement" := BlockerStatement;
+      // Строка переписывается целиком, а не правится MODIFY: текст виновника лежит в
+      // блобе, а блоб на временной записи после INSERT не обновляется. DELETE буфер не
+      // чистит - поля жертвы остаются на месте, и INSERT кладёт строку с прежним ключом.
+      Observed.DELETE;
+      SetRowBody(Observed,FALSE,VictimBody);
+      SetRowBody(Observed,TRUE,BlockerBody);
+      Observed.INSERT;
+    END;
+
+    LOCAL PROCEDURE RowBody@1000000940(VAR Row@1000000111 : TEMPORARY Record 110231;
+                                       Blocker@1000000112 : Boolean) : Text;
+    VAR
+      InStr@1000000113 : InStream;
+      Body@1000000114 : BigText;
+      Line@1000000115 : Text;
+    BEGIN
+      // CALCFIELDS нужен ДАЖЕ на временной записи: без него HASVALUE отвечает "нет"
+      // при полностью заполненном поле (измерено, см. CopyStatements).
+      Row.CALCFIELDS("Victim Statement","Blocker Statement Text");
+      Line := '';
+      IF Blocker THEN BEGIN
+        IF NOT Row."Blocker Statement Text".HASVALUE THEN
+          EXIT('');
+        Row."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END ELSE BEGIN
+        IF NOT Row."Victim Statement".HASVALUE THEN
+          EXIT('');
+        Row."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END;
+      Body.READ(InStr);
+      Body.GETSUBTEXT(Line,1,Body.LENGTH);
+      EXIT(Line);
+    END;
+
+    LOCAL PROCEDURE SetRowBody@1000000950(VAR Row@1000000116 : TEMPORARY Record 110231;
+                                          Blocker@1000000117 : Boolean;Value@1000000118 : Text);
+    VAR
+      OutStr@1000000119 : OutStream;
+    BEGIN
+      // Поток открывается ДО INSERT: блоб, записанный после вставки, до читателя не
+      // доезжает (измерено, см. TryReadQueue). Пустое значение тоже пишется - поток
+      // этим и создаётся, а поле остаётся пустым.
+      IF Blocker THEN
+        Row."Blocker Statement Text".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8)
+      ELSE
+        Row."Victim Statement".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+      IF Value <> '' THEN
+        OutStr.WRITETEXT(Value);
+    END;
+
+    [External]
+    PROCEDURE TextFingerprint@11(Value@1000000120 : Text) : Code[20];
+    VAR
+      Hash@1000000121 : BigInteger;
+      Index@1000000122 : Integer;
+      CharCode@1000000123 : Integer;
+      Length@1000000124 : Integer;
+    BEGIN
+      // Один и тот же граф взаимоблокировки виден при КАЖДОМ чтении кольцевого буфера,
+      // пока не вытеснится. Дедупликация идёт по времени события плюс этому отпечатку,
+      // а не по месту в буфере: место меняется при каждом чтении, граф - нет.
+      Length := STRLEN(Value);
+      IF Length = 0 THEN
+        EXIT('');
+      Hash := 0;
+      FOR Index := 1 TO Length DO BEGIN
+        CharCode := Value[Index];
+        Hash := (Hash * FingerprintFactor + CharCode) MOD FingerprintModulus;
+      END;
+      EXIT(FORMAT(Hash));
+    END;
+
+    [External]
+    PROCEDURE UseJournalLanguage@12(LanguageId@1000000125 : Integer) : Boolean;
+    BEGIN
+      // Подсказка, причина и сообщение сторожа - не данные, а СЛОВА, и складываются они в
+      // тот миг, когда идёт проход. Складывает их фоновая задача, у которой нет ни
+      // человека, ни его языка: она берёт язык службы, и на русской установке журнал
+      // оказывается английским. Переключение языка в клиенте не помогает вовсе - клиент
+      // показывает уже сохранённую строку, а не собирает её заново.
+      //
+      // Поэтому язык журнала - настройка СРЕДЫ, и применяется он только там, где человека
+      // нет. В сессии с окном GLOBALLANGUAGE не трогается: это переключило бы человеку
+      // язык интерфейса посреди работы, и сделал бы это наблюдатель, которого он не звал.
+      IF GUIALLOWED THEN
+        EXIT(FALSE);
+      IF LanguageId = 0 THEN
+        EXIT(FALSE);
+      IF LanguageId = GLOBALLANGUAGE THEN
+        EXIT(TRUE);
+      // Язык может быть не установлен на этом экземпляре, и тогда попытка отказывает.
+      // Отказ - не повод падать: журнал на чужом языке хуже, чем на своём, а журнала,
+      // которого нет, хуже обоих.
+      EXIT(TrySetLanguage(LanguageId));
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TrySetLanguage@13(LanguageId@1000000126 : Integer);
+    BEGIN
+      GLOBALLANGUAGE(LanguageId);
+    END;
+
+    [External]
+    PROCEDURE CounterDelta@14(Previous@1000000127 : BigInteger;Current@1000000128 : BigInteger;VAR WasReset@1000000129 : Boolean) : BigInteger;
+    BEGIN
+      // Накопительные счётчики сервера живут не вечно: они обнуляются, когда объект уходит
+      // из кэша метаданных - при перезапуске, при переводе базы в offline, под давлением
+      // памяти. Признак у обнуления ровно один: значение стало МЕНЬШЕ прежнего. Разность
+      // в этом случае вышла бы отрицательной, и итог поехал бы назад - молча и правдоподобно.
+      //
+      // После обнуления за прирост принимается ВСЁ текущее значение: это всё, что сервер
+      // насчитал с момента обнуления. Случившееся между прошлым чтением и самим обнулением
+      // потеряно безвозвратно, и потому обнуления считаются отдельно - чтобы потеря была
+      // видна, а не растворилась в сумме.
+      WasReset := Current < Previous;
+      IF WasReset THEN
+        EXIT(Current);
+      EXIT(Current - Previous);
+    END;
+
+    [External]
+    PROCEDURE StatementWithMark@15(Body@1000000130 : Text;FullLength@1000000131 : Integer) : Text;
+    BEGIN
+      // Усечение обязано быть видно ТОМУ, КТО ЧИТАЕТ, а не только тому, кто писал код.
+      // Обрезанный текст без отметки выглядит как целый запрос, и человек ищет ошибку в
+      // том, чего в нём просто нет. Отметка идёт комментарием SQL нарочно: текст из
+      // журнала копируют в studio и запускают, и отметка не должна ломать запуск.
+      IF Body = '' THEN
+        EXIT('');
+      IF FullLength <= STRLEN(Body) THEN
+        EXIT(Body);
+      EXIT(Body + CrLf + STRSUBSTNO(CutTxt,FullLength,STRLEN(Body)));
+    END;
+
+    [External]
+    PROCEDURE RingSilentNote@16(Circles@1000000132 : BigInteger;GraphsRead@1000000133 : Integer) : Text;
+    BEGIN
+      // Кольцо system_health умеет замолкать ЦЕЛИКОМ. Выдача его имеет предел по размеру, и
+      // по достижении предела новое в неё не попадает вовсе - при работающей сессии и
+      // нулевом droppedCount. Замерено 11.09.2026: выдача стояла четыре часа на 4 191 392
+      // знаках, а сервер за это время насчитал три круга (FINDINGS, раздел 62).
+      //
+      // Два соседних случая инструмент различал и до этого: выключенную сессию - по пустой
+      // выдаче вовсе, вытеснение событий - по самому старому событию новее отметки.
+      // Замершую выдачу не ловит ни один из них: сессия работает, старое событие старое, и
+      // оба условия молчат разом. Ловится она только счётом САМОГО СЕРВЕРА - он считает
+      // круги независимо от кольца и стоит одну строку.
+      //
+      // Счёт этот общий на весь экземпляр, и потому слова подобраны осторожно: сказано,
+      // сколько насчитал СЕРВЕР и что кольцо не отдало ничего. Говорить "ваши
+      // взаимоблокировки потеряны" нельзя - прирост мог прийти и из чужой базы.
+      IF (Circles <= 0) OR (GraphsRead > 0) THEN
+        EXIT('');
+      EXIT(STRSUBSTNO(RingSilentTxt,Circles));
+    END;
+
+    [External]
+    PROCEDURE WatchSilentNote@17(Enabled@1000000134 : Boolean;LastPassAt@1000000135 : DateTime;Asked@1000000136 : DateTime;PollPeriodMs@1000000137 : Integer) : Text;
+    VAR
+      SilentMs@1000000138 : Decimal;
+    BEGIN
+      // Молчащая цепочка не скажет о себе сама - в этом вся беда. Проходов нет, значит нет
+      // и того, кто пишет строку сторожа, и наблюдение выглядит живым ровно до тех пор,
+      // пока никто не посмотрит на дату последнего прохода.
+      //
+      // Замер 12.09.2026 (FINDINGS, раздел 63): при EnableTaskScheduler = false у
+      // экземпляра завод отрабатывает МОЛЧА, галка стоит, задача в очереди стоит - и не
+      // исполняется ни разу. Ключа этого из C/AL не видно: TASKSCHEDULER.CANCREATETASK
+      // отвечает не про него. Остаётся мерить не причину, а СЛЕДСТВИЕ - тишину.
+      //
+      // Выключенный сторож молчит по праву: галку сняли нарочно, и ругать его за это
+      // значило бы кричать при каждой остановке.
+      IF NOT Enabled THEN
+        EXIT('');
+      IF LastPassAt = 0DT THEN
+        EXIT(WatchNeverTxt);
+      // Отметку прохода ставит SQL - моментом по UTC, с поправкой на пояс сессии (Codeunit 110231,
+      // SessionShift), - а спрашиваем мы CURRENTDATETIME той сессии, из которой смотрят.
+      // Оба - моменты, а не местное время, и разница между ними от пояса не зависит;
+      // расходятся они только на сдвиг часов SQL и NAV, секунды, а порог не бывает меньше
+      // минуты. Собирай проход момент через CREATEDATETIME - и проход с московского
+      // клиента лёг бы на три часа назад: ровно "180 мин назад" (FINDINGS, раздел 102).
+      SilentMs := Asked - LastPassAt;
+      IF SilentMs <= SilenceCeilingMs(PollPeriodMs) THEN
+        EXIT('');
+      EXIT(STRSUBSTNO(WatchSilentTxt,ROUND(SilentMs / MsPerMinute,1)));
+    END;
+
+    PROCEDURE SilenceCeilingMs@18(PollPeriodMs@1000000139 : Integer) : Decimal;
+    VAR
+      Ceiling@1000000140 : Decimal;
+    BEGIN
+      // Сколько молчания значит "цепочка не идёт". Цепочка перевзводит себя каждым проходом,
+      // и опоздать двадцать периодов подряд она может только если её нет вовсе.
+      Ceiling := PollPeriodMs;
+      Ceiling := Ceiling * SilentPeriods;
+      IF Ceiling < MinSilenceMs THEN
+        Ceiling := MinSilenceMs;
+      EXIT(Ceiling);
+    END;
+
+    [External]
+    PROCEDURE PassOverrunNote@19(Milliseconds@1000000141 : Integer;Ceiling@1000000142 : Integer) : Text;
+    BEGIN
+      // Потолок прохода объявлен настройкой с первого дня, а сравнивал его с настоящей
+      // ценой только мерный прогон на стенде разработчика. На установке заказчика
+      // прогонов нет: проход мерил себя сам, число ложилось в строку состояния, и
+      // наблюдение, съедающее период целиком, выглядело там ровно как дешёвое.
+      //
+      // Ноль потолка - это "не спрашивать", а не "всё превышено": пустая настройка не
+      // должна ругаться на каждом проходе.
+      IF (Ceiling <= 0) OR (Milliseconds <= Ceiling) THEN
+        EXIT('');
+      EXIT(STRSUBSTNO(OverrunTxt,Milliseconds,Ceiling));
+    END;
+
+    [External]
+    PROCEDURE Flatten@20(Body@1000000143 : Text) : Text;
+    VAR
+      Cr@1000000144 : Char;
+      Lf@1000000145 : Char;
+      Tab@1000000146 : Char;
+    BEGIN
+      // Для колонки в списке текст обязан быть ОДНОЙ строкой. Многострочный запрос в
+      // Text250 обрезается на первом же переводе строки визуально: колонка показывает
+      // "SELECT" и ничего больше, и выглядит это как будто запрос такой и есть.
+      Cr := CarriageReturn;
+      Lf := LineFeed;
+      Tab := TabChar;
+      EXIT(CONVERTSTR(Body,FORMAT(Cr) + FORMAT(Lf) + FORMAT(Tab),OneLinePad));
+    END;
+
+    LOCAL PROCEDURE CrLf@21() : Text[2];
+    VAR
+      Cr@1000000147 : Char;
+      Lf@1000000148 : Char;
+    BEGIN
+      Cr := CarriageReturn;
+      Lf := LineFeed;
+      EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
+    [External]
+    PROCEDURE SqlNamePattern@22(Name@1000000149 : Text) : Text;
+    VAR
+      Pattern@1000000150 : Text;
+      Index@1000000151 : Integer;
+      Ch@1000000152 : Char;
+    BEGIN
+      // Имя поля NAV в имя столбца SQL переводит не наше правило, а платформа, и правило
+      // это нигде не объявлено: измерением видно, что точка и косая черта становятся
+      // подчёркиванием, а скобки, запятая, двоеточие, минус и амперсанд остаются как есть.
+      // Повторять чужое правило по памяти - значит однажды промахнуться молча.
+      //
+      // Поэтому имя переводится не в имя, а в ОБРАЗЕЦ для LIKE: всё, что не буква, не
+      // цифра и не пробел, заменяется подчёркиванием, а подчёркивание в LIKE подходит к
+      // любому одному знаку. Образец подходит и к замене, и к её отсутствию, и правило
+      // платформы знать не требуется вовсе.
+      //
+      // Буква определяется тем, что у неё есть разный верхний и нижний регистр. Это
+      // работает для кириллицы так же, как для латиницы, а список диапазонов - нет:
+      // в именах столбцов заказчика кириллица встречается.
+      FOR Index := 1 TO STRLEN(Name) DO BEGIN
+        Ch := Name[Index];
+        IF IsNameChar(Ch) THEN
+          Pattern := Pattern + FORMAT(Ch)
+        ELSE
+          Pattern := Pattern + '_';
+      END;
+      EXIT(Pattern);
+    END;
+
+    [External]
+    PROCEDURE SameSqlName@23(SqlName@1000000153 : Text;NavName@1000000154 : Text) : Boolean;
+    VAR
+      Index@1000000155 : Integer;
+    BEGIN
+      // Сравнение имени, снятого с SQL, с именем объекта NAV - по тому же правилу, что и
+      // образец: расходиться они вправе только там, где в имени NAV стоит знак, который
+      // платформа могла заменить. Длина при замене не меняется, поэтому разная длина -
+      // сразу нет.
+      IF STRLEN(SqlName) <> STRLEN(NavName) THEN
+        EXIT(FALSE);
+      IF SqlName = '' THEN
+        EXIT(FALSE);
+      FOR Index := 1 TO STRLEN(NavName) DO
+        IF UPPERCASE(FORMAT(SqlName[Index])) <> UPPERCASE(FORMAT(NavName[Index])) THEN
+          IF IsNameChar(NavName[Index]) THEN
+            EXIT(FALSE);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE IsNameChar@24(Ch@1000000156 : Char) : Boolean;
+    VAR
+      Text@1000000157 : Text[1];
+    BEGIN
+      // Знак сравнивается строкой: константы знаков - строки в один знак, а Char со
+      // строкой C/AL не сравнивает.
+      Text := FORMAT(Ch);
+      IF Text = SpaceChar THEN
+        EXIT(TRUE);
+      IF (Text >= DigitLow) AND (Text <= DigitHigh) THEN
+        EXIT(TRUE);
+      // Буква - это знак, у которого верхний и нижний регистр различаются. Проверка по
+      // диапазонам латиницы потеряла бы кириллицу, а она в именах столбцов есть.
+      EXIT(UPPERCASE(Text) <> LOWERCASE(Text));
+    END;
+
+    LOCAL PROCEDURE PairValue@25(Source@1000000158 : Text;Name@1000000159 : Text) : Text;
+    VAR
+      Padded@1000000160 : Text;
+      Needle@1000000161 : Text;
+      Pos@1000000162 : Integer;
+      Tail@1000000163 : Text;
+      SpacePos@1000000164 : Integer;
+    BEGIN
+      // Имя ищется только на ГРАНИЦЕ слова. В описании очереди рядом живут id=lock...
+      // и associatedObjectId=..., и поиск простой подстрокой возьмёт не то: "id=" нашлось
+      // бы внутри "hobtid=". Отсюда ведущий пробел в игле и в стоге.
+      Padded := SpaceChar + LOWERCASE(Source);
+      Needle := SpaceChar + LOWERCASE(Name) + EqualsSign;
+      Pos := STRPOS(Padded,Needle);
+      IF Pos = 0 THEN
+        EXIT('');
+      Tail := COPYSTR(Source,Pos + STRLEN(Needle) - 1);
+      SpacePos := STRPOS(Tail,SpaceChar);
+      IF SpacePos > 0 THEN
+        Tail := COPYSTR(Tail,1,SpacePos - 1);
+      EXIT(Tail);
+    END;
+
+    LOCAL PROCEDURE LastPos@26(Source@1000000165 : Text;Sub@1000000166 : Text) : Integer;
+    VAR
+      Found@1000000167 : Integer;
+      Cursor@1000000168 : Integer;
+      Step@1000000169 : Integer;
+    BEGIN
+      // В C/AL нет поиска с конца: идём вперёд и запоминаем последнее совпадение.
+      // Именно последнее: имя SIFT-представления может нести $VSIFT$ не один раз.
+      IF (Source = '') OR (Sub = '') THEN
+        EXIT(0);
+      Found := 0;
+      Cursor := 1;
+      REPEAT
+        Step := STRPOS(COPYSTR(Source,Cursor),Sub);
+        IF Step > 0 THEN BEGIN
+          Found := Cursor + Step - 1;
+          Cursor := Found + 1;
+        END;
+      UNTIL (Step = 0) OR (Cursor > STRLEN(Source));
+      EXIT(Found);
+    END;
+
+    LOCAL PROCEDURE IsAllDigits@27(Value@1000000170 : Text) : Boolean;
+    BEGIN
+      IF Value = '' THEN
+        EXIT(FALSE);
+      EXIT(DELCHR(Value,'=',Digits) = '');
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@98;
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Число в коде читается как случайное, а величины, зависящие от среды, живут
+      // в настройке LockWatch Setup. Разбор настройку не читает вовсе: он остаётся
+      // чистыми функциями над данными, и потому проверяется без стенда.
+    END;
+
+    [External]
+    PROCEDURE NavLockTimeoutMs@29() : Integer;
+    BEGIN
+      // Предел ожидания блокировки у NAV. Замерено дважды: жертва умирала на 10 099 и
+      // 10 120 мс со штатным текстом "запись заблокирована другим пользователем".
+      // Это предел ПЛАТФОРМЫ, а не сервера: сессия SQL без него ждёт сколько угодно -
+      // в опыте на стенде спокойно прождала 10 527 мс и продолжала ждать.
+      EXIT(10000);
+    END;
+
+    [External]
+    PROCEDURE MaxWaitersPerPass@30() : Integer;
+    BEGIN
+      // Потолок строк очереди за проход. Совпадает с размерностью массивов цепочки:
+      // больше пятисот ждущих - это уже не разбор, а шторм, и его метят "усечено".
+      EXIT(500);
+    END;
+
+    [External]
+    PROCEDURE MaxChainSteps@31() : Integer;
+    BEGIN
+      // Обрыв разматывания цепочки. Настоящая цепочка блокировок в NAV - единицы звеньев;
+      // сотня означает кольцо, а не длинную очередь, и крутиться в нём нельзя.
+      EXIT(100);
+    END;
+
+    [External]
+    PROCEDURE MaxDocumentsPerPass@32() : Integer;
+    BEGIN
+      // Сколько эпизодов за проход разбираются до номера документа. Разбор стоит чтения
+      // dm_tran_locks - 45,6 мс при шестидесяти тысячах блокировок, и отбор в WHERE не
+      // помогает вовсе. Десяток за проход - это один такой скан на проход и только тогда,
+      // когда есть что разбирать: на тихом сервере чтения не происходит вовсе.
+      EXIT(10);
+    END;
+
+    [External]
+    PROCEDURE MaxNameAttempts@33() : Integer;
+    BEGIN
+      // Сколько раз у ИДУЩЕГО эпизода переспрашивается имя и документ. Одного раза мало:
+      // ответ появляется в тот миг, когда виновник трогает таблицу документа, и миг этот
+      // приходит позже начала ожидания чаще, чем раньше. Спросить один раз - значит
+      // оставить пустую колонку там, где ответ появился секундой позже.
+      //
+      // Двадцать попыток - это первая минута эпизода при периоде опроса по умолчанию.
+      // Дальше спрашивать дороже, чем оставить пусто: каждая попытка стоит чтения
+      // dm_tran_locks (45,6 мс при шестидесяти тысячах блокировок), а виновник, за целую
+      // минуту не тронувший ни одной таблицы документов, скорее всего и не тронет: он
+      // спит в открытой транзакции, и это самый частый вид блокировки NAV.
+      EXIT(20);
+    END;
+
+    [External]
+    PROCEDURE DocSourceNone@34() : Integer;
+    BEGIN
+      EXIT(0);
+    END;
+
+    [External]
+    PROCEDURE DocSourceFromHash@35() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE UnknownKeyNo@36() : Integer;
+    BEGIN
+      // "Номер ключа не опознан". Строку с ним НЕ выбрасывать: показывать сырым именем
+      // и считать счётчиком. Молчаливый пропуск - это и есть ложь.
+      EXIT(-1);
+    END;
+
+    [External]
+    PROCEDURE OutcomeUnknown@37() : Integer;
+    BEGIN
+      EXIT(0);
+    END;
+
+    [External]
+    PROCEDURE OutcomeGranted@38() : Integer;
+    BEGIN
+      EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE OutcomeTimedOut@39() : Integer;
+    BEGIN
+      EXIT(2);
+    END;
+
+    [External]
+    PROCEDURE OutcomeDeadlocked@40() : Integer;
+    BEGIN
+      // Исход жертвы взаимоблокировки известен точно: сервер выбрал её сам и откатил.
+      // Оставить здесь "не определён" значило бы сказать "не знаю" про то, что знаем.
+      EXIT(3);
+    END;
+
+    [External]
+    PROCEDURE MaxDeadlocksPerPass@41() : Integer;
+    BEGIN
+      // Потолок на одно чтение буфера. Двадцать графов - это уже сломанная система, а
+      // остаток никуда не денется: отметка "прочитано до" двигается на последний взятый,
+      // и следующее чтение продолжит с него.
+      EXIT(20);
+    END;
+
+    [External]
+    PROCEDURE DeadlockReadPeriodMs@42() : Integer;
+    BEGIN
+      // Минута. Буфер растёт не от наших блокировок, а от чужих взаимоблокировок, и на
+      // тихом сервере не меняется вовсе - читать его каждым проходом значит платить за
+      // разбор многомегабайтного XML двадцать раз в минуту впустую. Верхнюю границу
+      // ставит оборот буфера: события старше вытесняются, и слишком редкое чтение теряет
+      // их молча. Потеря при этом ЗАМЕТНА - проход сверяет старейшее событие с отметкой.
+      EXIT(60000);
+    END;
+
+    LOCAL PROCEDURE SilentPeriods@43() : Integer;
+    BEGIN
+      // Двадцать. Одно опоздание бывает от дорогого прохода, три - от занятого планировщика,
+      // а двадцать подряд - уже не невезение. Уведомление, созданное зря, стоит дороже молчания:
+      // сторож, кричащий на ровном месте, перестаёт читаться до того, как окажется прав.
+      EXIT(20);
+    END;
+
+    LOCAL PROCEDURE MinSilenceMs@44() : Integer;
+    BEGIN
+      // Нижняя граница - минута, и не ради круглого числа: период опроса бывает мелким, а
+      // перезапуск службы съедает десятки секунд сам по себе, и цепочка после него
+      // поднимается не мгновенно.
+      EXIT(MsPerMinute);
+    END;
+
+    [External]
+    PROCEDURE MaxStatementChars@45() : Integer;
+    BEGIN
+      // Шестнадцать тысяч знаков - это около двухсот строк, и узнать по ним запрос можно с
+      // большим запасом: опознаётся он началом, а не хвостом. Всё, что длиннее, у NAV
+      // обычно список значений в IN, и он повторяет сам себя.
+      //
+      // Потолок нужен не ради экрана, а ради базы: текст пишется на КАЖДЫЙ открытый
+      // эпизод, а в шторм их сотня за проход. Без потолка один запрос с длинным списком
+      // раздул бы журнал сильнее, чем весь остальной журнал.
+      EXIT(16000);
+    END;
+
+    [External]
+    PROCEDURE MsPerDay@46() : Decimal;
+    BEGIN
+      // Суток в миллисекундах. Тип здесь важнее числа: он ОБЯЗАН быть дробным. Тридцать
+      // суток - это 2 592 000 000, что больше предельного Integer, и та же величина,
+      // объявленная целой, дала бы переполнение на самом обычном значении настройки.
+      EXIT(86400000);
+    END;
+
+    PROCEDURE MsPerMinute@47() : Integer;
+    BEGIN
+      // Минута в миллисекундах. Целого тут хватает, в отличие от суток: в Integer
+      // укладывается тридцать пять тысяч минут, то есть три недели с лишним, а умножаем мы
+      // её на единицы и десятки.
+      EXIT(60000);
+    END;
+
+    LOCAL PROCEDURE FingerprintFactor@48() : Integer;
+    BEGIN
+      // Нечётный множитель полиномиального свёртывания. 131 - простое, взаимно простое
+      // с модулем; конкретное значение неважно, важно, что оно НЕ МЕНЯЕТСЯ никогда:
+      // отпечатки лежат в базе, и смена множителя развалит дедупликацию задним числом.
+      EXIT(131);
+    END;
+
+    LOCAL PROCEDURE FingerprintModulus@49() : Integer;
+    BEGIN
+      // Простое число Мерсенна 2^31-1: наибольшее, что помещается в Integer C/AL,
+      // поэтому промежуточное произведение считается в BigInteger, а результат - нет.
+      EXIT(2147483647);
+    END;
+
+    LOCAL PROCEDURE SiftMarker@50() : Text;
+    BEGIN
+      // Метка ключа SIFT-представления в имени объекта SQL. Номер ключа стоит после
+      // ПОСЛЕДНЕГО вхождения: имя может нести метку не один раз. Ошибка в одной букве
+      // молча теряет самый частый случай блокировок NAV.
+      EXIT('$VSIFT$');
+    END;
+
+    LOCAL PROCEDURE PlatformObjectPrefix@51() : Text;
+    BEGIN
+      // Платформенные служебные таблицы носят этот префикс и таблицами компании не
+      // являются: разбирать в них нечего. Отдать их как таблицу компании "" было бы
+      // враньём, но и промолчать нельзя - потому разбор честно отвечает "не таблица".
+      EXIT('$ndo$');
+    END;
+
+    LOCAL PROCEDURE MinLockHashLength@52() : Integer;
+    BEGIN
+      // Короче этого описание ресурса - не хэш ключа, а мусор: настоящий хэш приходит
+      // в скобках и заметно длиннее. Три знака - граница "вообще не то".
+      EXIT(3);
+    END;
+
+    LOCAL PROCEDURE SpaceChar@53() : Text[1];
+    BEGIN
+      // Пробел как знак: им проверяется граница слова в описании ресурса, и он же
+      // ведущий в игле поиска. Строкой управляющий знак не записать, а пробелом - можно.
+      EXIT(' ');
+    END;
+
+    LOCAL PROCEDURE EqualsSign@54() : Text[1];
+    BEGIN
+      // Знак равенства отделяет имя пары от значения в описании ресурса ("hobtid=...").
+      EXIT('=');
+    END;
+
+    LOCAL PROCEDURE DigitLow@55() : Text[1];
+    BEGIN
+      // Нижняя граница десятичных цифр. Диапазон проверяется сравнением знаков, потому
+      // что список диапазонов теряет кириллицу, а сравнение - нет.
+      EXIT('0');
+    END;
+
+    LOCAL PROCEDURE DigitHigh@56() : Text[1];
+    BEGIN
+      // Верхняя граница десятичных цифр, довод тот же, что у нижней.
+      EXIT('9');
+    END;
+
+    LOCAL PROCEDURE Digits@57() : Text;
+    BEGIN
+      // Все десятичные цифры подряд - набор для DELCHR при проверке "только цифры".
+      EXIT('0123456789');
+    END;
+
+    LOCAL PROCEDURE OneLinePad@58() : Text;
+    BEGIN
+      // Три пробела - замена возврата каретки, перевода строки и табуляции при сборке
+      // однострочного текста. Ровно три: по одному на каждый заменяемый знак, чтобы
+      // CONVERTSTR не растягивал строку.
+      EXIT('   ');
+    END;
+
+    LOCAL PROCEDURE CarriageReturn@59() : Char;
+    BEGIN
+      // Код возврата каретки. Числом, а не литералом: управляющий знак в строке C/AL
+      // не записать, и FORMAT - единственный способ его назвать.
+      EXIT(13);
+    END;
+
+    LOCAL PROCEDURE LineFeed@60() : Char;
+    BEGIN
+      // Код перевода строки. Довод тот же, что у возврата каретки.
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE TabChar@61() : Char;
+    BEGIN
+      // Код табуляции: он заменяется вместе с переводами строк, потому что в колонке
+      // списка текст обязан быть одной строкой.
+      EXIT(9);
+    END;
+
+
+    [External]
+    PROCEDURE BeginPass@62(ObservedAt@1000000171 : DateTime;MinWaitMs@1000000172 : Integer);
+    BEGIN
+      // Момент прохода берётся ОДИН на весь проход и приходит снаружи - часами SQL,
+      // тем же запросом, что отдал очередь. Свои часы здесь не годятся: между съёмом
+      // и записью проходят миллисекунды, и они легли бы в начало каждого эпизода.
+      PassAt := ObservedAt;
+      // Порог записи приходит тем же путём и тоже один раз на проход. Читать настройку
+      // здесь незачем: журнал не знает, откуда берётся проход, и мерный прогон подаёт
+      // своё значение, не заводя строку настройки.
+      PassMinWaitMs := MinWaitMs;
+      OpenedCount := 0;
+      UpdatedCount := 0;
+      ClosedCount := 0;
+      RestartedCount := 0;
+      // Счёт сведённых ожиданий - счёт ПРОХОДА, а не строки: спрашивают его один раз, в
+      // конце, и держать его в строке журнала незачем (там ему и места нет).
+      MergedWaits := 0;
+      PassStarted := TRUE;
+    END;
+
+    [External]
+    PROCEDURE Observe@63(VAR Observed@1000000173 : Record 110231);
+    BEGIN
+      // Одна строка очереди. Эпизод ведётся ОДНОЙ строкой журнала, которая обновляется:
+      // снимки на каждый проход дали бы в шторм по полтысячи вставок каждые три секунды,
+      // и наблюдатель стал бы дороже наблюдаемого.
+      IF NOT PassStarted THEN
+        ERROR(NoPassErr);
+      IF FindOpen(Observed) THEN BEGIN
+        // Строка, которую ЭТОТ проход уже трогал, - не та же жертва, вставшая снова, а
+        // ДРУГОЕ ожидание той же личности. При параллельном плане у одной жертвы на одном
+        // hobt стоят сразу несколько задач (exec_context_id), и в таблице журнала они друг
+        // от друга не отличаются ничем: сессия, транзакция, ресурс и ключ у них общие.
+        // Судить по такому соседу "счётчик ожидания пошёл назад" значило бы объявлять новый
+        // эпизод КАЖДЫМ проходом: меньшее ожидание закрывало бы строку, которую большее
+        // только что обновило. Журнал пухнул бы мусором, а очередь читалась бы как череда
+        // закрытий - вместо наблюдения.
+        //
+        // Ведётся поэтому наибольшее ожидание прохода, а остальные считаются (MergedWaits):
+        // очередь приходит упорядоченной по длительности НА УБЫВАНИЕ, и первое из них -
+        // оно и есть наибольшее. Признак "пошёл назад" спрашивается только у строки,
+        // которую проход ещё не трогал, - и это ровно тот случай, ради которого он
+        // заведён: жертва дождалась и встала снова на тот же ресурс.
+        //
+        // Метка "трогали в этом проходе" - момент прохода, он же лёг в Last Seen At.
+        // Второе условие при ней - страховка от совпадения моментов двух проходов:
+        // наблюдение БОЛЬШЕ записанного не может быть соседом по проходу (внутри прохода
+        // очередь идёт по убыванию), значит перед нами строка от прошлого прохода, и
+        // дорога у неё обычная.
+        IF (Journal."Last Seen At" = PassAt) AND
+           (Journal."Max Wait (ms)" >= Observed."Last Wait (ms)") THEN
+          MergedWaits := MergedWaits + 1
+        ELSE IF IsNewEpisode(Journal."Last Wait (ms)",Observed."Last Wait (ms)") THEN BEGIN
+          // Жертва дождалась и тут же встала снова на тот же ресурс: сессия та же,
+          // транзакция та же, ресурс тот же. По ключу это одна строка, а на деле два
+          // эпизода, и единственная улика - счётчик ожидания пошёл назад.
+          //
+          // Прошлый эпизод закрывается ВСЕГДА, и порог ему не указ: он уже был открыт и
+          // велся, а закрытие - это его конец, а не новая запись. Новый открывается только
+          // по порогу - иначе короткий перезапуск заводил бы строку, которую порог как раз
+          // и не пускает.
+          CloseRow;
+          IF Opens(Observed) THEN BEGIN
+            RestartedCount := RestartedCount + 1;
+            OpenRow(Observed);
+          END;
+        END ELSE
+          UpdateRow(Observed);
+      END ELSE IF Opens(Observed) THEN
+        // Порог записи стоит на ОТКРЫТИИ и только на нём. Отбор короткого ожидания выше
+        // значил бы "уже открытый эпизод закрылся на проходе, где жертва ждала мало", -
+        // то есть потерю того самого длинного ожидания, ради которого журнал и держат.
+        OpenRow(Observed);
+    END;
+
+    [External]
+    PROCEDURE FinishPass@64() : Integer;
+    BEGIN
+      IF NOT PassStarted THEN
+        ERROR(NoPassErr);
+      // Кто был открыт и в этом проходе не встретился - тот из очереди ушёл. Сюда же
+      // попадают эпизоды, оставшиеся открытыми от прошлой жизни задачи: она могла быть
+      // снята посреди прохода, и вечно открытая строка - это утечка, а не наблюдение.
+      //
+      // Идём по СКВОЗНОМУ ключу, хотя отбор - по признаку "открыт". Причина в том, что
+      // закрытие меняет сам признак, а он первое поле того ключа, по которому читать было
+      // бы удобнее: строка ушла бы из-под курсора, и остаток набора либо пропустился бы,
+      // либо прочёлся дважды. Открытых эпизодов единицы, сортировка здесь ничего не стоит.
+      Journal.RESET;
+      Journal.SETCURRENTKEY("Entry No.");
+      Journal.SETRANGE(Open,TRUE);
+      Journal.SETFILTER("Last Seen At",'<%1',PassAt);
+      IF Journal.FINDSET(TRUE) THEN
+        REPEAT
+          CloseRow;
+        UNTIL Journal.NEXT = 0;
+      PassStarted := FALSE;
+      EXIT(ClosedCount);
+    END;
+
+    [External]
+    PROCEDURE PassCounts@65(VAR Opened@1000000174 : Integer;VAR Updated@1000000175 : Integer;VAR Closed@1000000176 : Integer;VAR Restarted@1000000177 : Integer);
+    BEGIN
+      Opened := OpenedCount;
+      Updated := UpdatedCount;
+      Closed := ClosedCount;
+      Restarted := RestartedCount;
+    END;
+
+    [External]
+    PROCEDURE MergedWaitCount@66() : Integer;
+    BEGIN
+      // Сколько ожиданий прохода сведено в чужие строки. Спрошено это ОТДЕЛЬНО от
+      // PassCounts нарочно: там счёт ведения эпизодов, а тут счёт того, чего в журнале не
+      // видно вовсе, - и сложить их в одно число значило бы соврать про оба. Наружу идёт
+      // словом прохода (PassNote): картина, где у одной жертвы четыре задачи ждут одного и
+      // того же, читается иначе, чем четыре разные жертвы.
+      EXIT(MergedWaits);
+    END;
+
+    [External]
+    PROCEDURE PickUnresolved@67(VAR Buffer@1000000178 : TEMPORARY Record 110231;MaxRows@1000000179 : Integer) : Integer;
+    VAR
+      Picked@1000000180 : Integer;
+    BEGIN
+      // Кого разбирать до номера документа и до имён. Отбор строгий нарочно: только ИДУЩИЕ
+      // эпизоды, потому что мост к ответу - это блокировка, которую держат ПРЯМО СЕЙЧАС.
+      // На закрытом эпизоде разбирать уже нечего: ожидание кончилось ровно потому, что
+      // блокировку отпустили, и в dm_tran_locks её больше нет.
+      //
+      // Спрашивается это НЕ один раз, и в этом вся разница: ответ появляется не тогда,
+      // когда жертва встала, а когда виновник тронул таблицу документа, - и это чаще
+      // позже начала ожидания, чем раньше. Один вопрос на эпизод оставлял в журнале
+      // пустую колонку там, где ответ появлялся секундой позже, - и второго случая
+      // спросить уже не было.
+      //
+      // Порядок двух заходов не случаен: сперва те, кого не спрашивали ВОВСЕ. Иначе в
+      // шторм десяток мест разбора занимали бы старые эпизоды, переспрашиваемые по
+      // третьему разу, а только что открывшиеся не получили бы и первого вопроса.
+      Buffer.RESET;
+      Buffer.DELETEALL;
+      Picked := PickWithin(Buffer,0,0,MaxRows);
+      Picked := Picked + PickWithin(Buffer,1,MaxNameAttempts - 1,MaxRows - Picked);
+      EXIT(Picked);
+    END;
+
+    LOCAL PROCEDURE PickWithin@68(VAR Buffer@1000000181 : TEMPORARY Record 110231;FromAttempts@1000000182 : Integer;ToAttempts@1000000183 : Integer;MaxRows@1000000184 : Integer) : Integer;
+    VAR
+      Picked@1000000185 : Integer;
+    BEGIN
+      IF MaxRows <= 0 THEN
+        EXIT(0);
+      Journal.RESET;
+      Journal.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Journal.SETRANGE(Open,TRUE);
+      Journal.SETFILTER("Blocker Transaction Id",'<>%1',0);
+      Journal.SETRANGE("Name Attempts",FromAttempts,ToAttempts);
+      IF Journal.FINDSET THEN
+        REPEAT
+          IF Unanswered(Journal) THEN BEGIN
+            Buffer := Journal;
+            Buffer.INSERT;
+            Picked := Picked + 1;
+          END;
+        UNTIL (Picked >= MaxRows) OR (Journal.NEXT = 0);
+      Journal.RESET;
+      EXIT(Picked);
+    END;
+
+    LOCAL PROCEDURE Unanswered@69(VAR Row@1000000186 : Record 110231) : Boolean;
+    BEGIN
+      // Три повода спросить ещё раз, и каждый из них - это "ответа пока нет":
+      // разбора не было вовсе, либо виновник не назван, либо не названа жертва, а она
+      // сессия NAV.
+      //
+      // Не-NAV жертвы в этом списке нет нарочно: за ней нашего человека нет вовсе, и
+      // переспрашивать про неё значит платить чтением dm_tran_locks за заведомо пустой
+      // ответ.
+      IF (Row."Document Source" = Row."Document Source"::None) AND (Row."No Document Reason" = '') THEN
+        EXIT(TRUE);
+      IF Row."User Name" = '' THEN
+        EXIT(TRUE);
+      IF (Row."Victim User Name" = '') AND (Row."Victim Is NAV" = Row."Victim Is NAV"::Yes) THEN
+        EXIT(TRUE);
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE SetDocument@70(EntryNo@1000000187 : Integer;DocumentNo@1000000188 : Code[20];Source@1000000189 : Integer;Reason@1000000190 : Text);
+    BEGIN
+      Journal.RESET;
+      IF NOT Journal.GET(EntryNo) THEN
+        EXIT;
+      // Ответ ПРИКЛАДЫВАЕТСЯ к строке, а не перекрывает её. Разбор идёт не один раз, и
+      // второй его заход вполне может промолчать там, где первый ответил: блокировку
+      // отпустили, спорная строка теперь другая. Записать пустоту поверх известного
+      // значило бы терять ответ ровно так же, как его теряли раньше.
+      Journal."Name Attempts" := Journal."Name Attempts" + 1;
+      IF DocumentNo <> '' THEN BEGIN
+        Journal."Document No." := DocumentNo;
+        Journal."Document Source" := Source;
+        Journal."No Document Reason" := '';
+      END ELSE
+        // Причина пишется, только пока документа нет: у названного эпизода она была бы
+        // не объяснением, а противоречием соседней колонке.
+        IF Journal."Document Source" = Journal."Document Source"::None THEN
+          Journal."No Document Reason" := COPYSTR(Reason,1,MAXSTRLEN(Journal."No Document Reason"));
+      Journal.MODIFY;
+    END;
+
+    [External]
+    PROCEDURE AddDeadlock@71(VAR Row@1000000191 : Record 110231) : Boolean;
+    VAR
+      Existing@1000000192 : Record 110231;
+    BEGIN
+      // Один и тот же граф виден при КАЖДОМ чтении буфера, пока не вытеснится, поэтому
+      // отметка "прочитано до" - только половина защиты. Вторая половина здесь: отпечаток
+      // графа. Отметка от повторов не спасает нарочно - события, попавшие в одну
+      // миллисекунду, читаются заново, чтобы не потерять второе из них.
+      IF Row."Deadlock Id" = '' THEN
+        EXIT(FALSE);
+      Existing.RESET;
+      Existing.SETCURRENTKEY("Deadlock Id");
+      Existing.SETRANGE("Deadlock Id",Row."Deadlock Id");
+      IF NOT Existing.ISEMPTY THEN
+        EXIT(FALSE);
+      // Строка приезжает ЗАКОНЧЕННОЙ: у взаимоблокировки нет "идёт сейчас", сервер уже
+      // разорвал круг. Поэтому она не открывается и ведению эпизода не подлежит вовсе.
+      Journal := Row;
+      Journal."Entry No." := NextNo;
+      Journal.Open := FALSE;
+      Journal.INSERT;
+      CopyStatements(Row,Journal);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CopyStatements@72(VAR From@1000000193 : Record 110231;VAR Into@1000000194 : Record 110231);
+    VAR
+      InStr@1000000195 : InStream;
+      OutStr@1000000196 : OutStream;
+      Body@1000000197 : BigText;
+      Line@1000000198 : Text;
+      Touched@1000000199 : Boolean;
+    BEGIN
+      // Текст запроса переносится ОДИН раз, при открытии эпизода, и дальше не трогается.
+      // Довод не в экономии: строка эпизода обновляется каждым проходом, и переписывать
+      // текст заново значило бы менять его под читателем. Виновник за три секунды успевает
+      // послать другой оператор, и в журнале оказался бы не тот, который взял блокировку.
+      //
+      // CALCFIELDS у источника не зовётся нарочно: источник - ВРЕМЕННАЯ запись, значение
+      // у неё уже в памяти, и считать там нечего.
+      // CALCFIELDS обязателен ДАЖЕ на временной записи, и это ровно наоборот тому, чего
+      // ждёшь: у временной таблицы значения и так в памяти. Без него HASVALUE отвечает
+      // "нет" при полностью заполненном источнике, текст молча не переносится, а на экране
+      // это выглядит как "запрос не сняли". Измерено на себе 08.09.2026.
+      From.CALCFIELDS("Victim Statement","Blocker Statement Text");
+      IF From."Victim Statement".HASVALUE THEN BEGIN
+        From."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+        Body.READ(InStr);
+        Body.GETSUBTEXT(Line,1,Body.LENGTH);
+        IF Line <> '' THEN BEGIN
+          Into."Victim Statement".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+          OutStr.WRITETEXT(Line);
+          Touched := TRUE;
+        END;
+      END;
+      IF From."Blocker Statement Text".HASVALUE THEN BEGIN
+        CLEAR(Body);
+        Line := '';
+        From."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+        Body.READ(InStr);
+        Body.GETSUBTEXT(Line,1,Body.LENGTH);
+        IF Line <> '' THEN BEGIN
+          Into."Blocker Statement Text".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+          OutStr.WRITETEXT(Line);
+          Touched := TRUE;
+        END;
+      END;
+      // Лишний MODIFY там, где текста нет вовсе, - это цена ВЫКЛЮЧЕННОГО выключателя, а
+      // выключенное платить не должно.
+      IF Touched THEN
+        Into.MODIFY;
+    END;
+
+    PROCEDURE StatementText@73(EntryNo@1000000200 : Integer;Blocker@1000000201 : Boolean) : Text;
+    VAR
+      Row@1000000202 : Record 110231;
+      InStr@1000000203 : InStream;
+      Body@1000000204 : BigText;
+      Result@1000000205 : Text;
+    BEGIN
+      IF NOT Row.GET(EntryNo) THEN
+        EXIT('');
+      IF Blocker THEN BEGIN
+        Row.CALCFIELDS("Blocker Statement Text");
+        IF NOT Row."Blocker Statement Text".HASVALUE THEN
+          EXIT('');
+        Row."Blocker Statement Text".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END ELSE BEGIN
+        Row.CALCFIELDS("Victim Statement");
+        IF NOT Row."Victim Statement".HASVALUE THEN
+          EXIT('');
+        Row."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      END;
+      Body.READ(InStr);
+      Body.GETSUBTEXT(Result,1,Body.LENGTH);
+      EXIT(Result);
+    END;
+
+    [External]
+    PROCEDURE MoveOldEntries@74(RetentionDays@1000000206 : Integer;RowCeiling@1000000207 : Integer;MaxRows@1000000208 : Integer) : Integer;
+    VAR
+      Deleted@1000000209 : Integer;
+    BEGIN
+      // Срок и потолок удаляют эпизод НАВСЕГДА: отдельной таблицы истории нет.
+      //
+      // Пределов ДВА, и оба нужны. Срок отвечает на "давно ли", потолок - на "сколько их",
+      // и подменить один другим нельзя: девяносто дней на тихой базе это сотня строк, а в
+      // шторм - сотни тысяч, и все они моложе срока.
+      //
+      // Порядок не случайный: сперва по сроку, потом по потолку. Срок - это объявленное
+      // правило установки, а потолок - защита от переполнения, и защита обязана срабатывать
+      // на том, что осталось ПОСЛЕ правила, а не вместо него.
+      //
+      // Уборка порционная: месяц накопленного одним COMMIT - это блокировка собственной
+      // таблицы посреди прохода, то есть ровно то, что мы ловим. Потолок за проход делится
+      // между обоими пределами - иначе проход стоил бы вдвое дороже объявленного ровно в
+      // тот день, когда сработали оба.
+      IF MaxRows <= 0 THEN
+        EXIT(0);
+      Deleted := MoveOlderThan(RetentionDays,MaxRows);
+      Deleted := Deleted + MoveOverCeiling(RowCeiling,MaxRows - Deleted);
+      EXIT(Deleted);
+    END;
+
+    LOCAL PROCEDURE MoveOlderThan@75(RetentionDays@1000000210 : Integer;MaxRows@1000000211 : Integer) : Integer;
+    VAR
+      Threshold@1000000212 : DateTime;
+      Age@1000000213 : Duration;
+      Deleted@1000000214 : Integer;
+      Done@1000000215 : Integer;
+    BEGIN
+      IF (RetentionDays <= 0) OR (MaxRows <= 0) THEN
+        EXIT(0);
+      Age := RetentionDays * MsPerDay;
+      Threshold := CURRENTDATETIME - Age;
+
+      Journal.RESET;
+      Journal.SETCURRENTKEY("Started At");
+      Journal.SETRANGE(Open,FALSE);
+      Journal.SETFILTER("Started At",'<%1',Threshold);
+      IF Journal.FINDSET(TRUE) THEN
+        REPEAT
+          MoveCurrent;
+          Deleted := Deleted + 1;
+          Done := Done + 1;
+        UNTIL (Done >= MaxRows) OR (Journal.NEXT = 0);
+      EXIT(Deleted);
+    END;
+
+    LOCAL PROCEDURE MoveOverCeiling@76(RowCeiling@1000000216 : Integer;MaxRows@1000000217 : Integer) : Integer;
+    VAR
+      Surplus@1000000218 : Integer;
+      Deleted@1000000219 : Integer;
+      Done@1000000220 : Integer;
+    BEGIN
+      // Потолок считается по ВСЕМУ журналу, а удаляются только закрытые. Открытый эпизод
+      // ведёт текущий проход: удалить его значило бы разорвать строку, а следующий проход,
+      // не найдя её в журнале, открыл бы эпизод заново.
+      //
+      // Отсюда следует, что журнал, переполненный ИДУЩИМИ эпизодами, потолку не подчинится.
+      // Это честно: они ещё происходят, и молча стереть наблюдение хуже, чем на время
+      // превысить потолок.
+      //
+      // COUNT здесь один на проход и по кластерному индексу. Дешевле было бы вести счётчик
+      // строкой состояния, но счётчик, разошедшийся с таблицей, врёт молча и навсегда, а
+      // COUNT ошибиться не может.
+      IF (RowCeiling <= 0) OR (MaxRows <= 0) THEN
+        EXIT(0);
+      Journal.RESET;
+      Surplus := Journal.COUNT - RowCeiling;
+      IF Surplus <= 0 THEN
+        EXIT(0);
+      IF Surplus > MaxRows THEN
+        Surplus := MaxRows;
+
+      Journal.SETCURRENTKEY("Started At");
+      Journal.SETRANGE(Open,FALSE);
+      IF Journal.FINDSET(TRUE) THEN
+        REPEAT
+          MoveCurrent;
+          Deleted := Deleted + 1;
+          Done := Done + 1;
+        UNTIL (Done >= Surplus) OR (Journal.NEXT = 0);
+      EXIT(Deleted);
+    END;
+
+    LOCAL PROCEDURE MoveCurrent@77();
+    BEGIN
+      // Строка уходит из журнала навсегда - она старше срока или лишняя по потолку, и
+      // второго места, куда её положить, в v2 нет. Тексты операторов уходят вместе с ней.
+      Journal.DELETE;
+    END;
+
+    LOCAL PROCEDURE Opens@78(VAR Observed@1000000221 : Record 110231) : Boolean;
+    BEGIN
+      // Порог записи: короткое ожидание НОВОГО эпизода не открывает. Спрашивается это
+      // только на открытии - FindOpen, UpdateRow и CloseRow порога не знают и знать не
+      // должны: уже открытый эпизод живёт своей жизнью, и порог, закрывающий его на
+      // коротком проходе, терял бы длинное ожидание молча.
+      //
+      // Растущее ожидание перевалит порог на следующем проходе и будет открыто тогда:
+      // начало эпизода считается от длительности ожидания (EpisodeStart), а не от момента
+      // прохода, - поэтому позднее открытие не сдвигает начало.
+      //
+      // Ноль означает "порога нет": открывается всё, как было до появления поля.
+      IF (PassMinWaitMs <= 0) OR (Observed."Last Wait (ms)" >= PassMinWaitMs) THEN
+        EXIT(TRUE);
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindOpen@79(VAR Observed@1000000222 : Record 110231) : Boolean;
+    BEGIN
+      Journal.RESET;
+      Journal.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Journal.SETRANGE(Open,TRUE);
+      Journal.SETRANGE("Victim SPID",Observed."Victim SPID");
+      Journal.SETRANGE("Victim Transaction Id",Observed."Victim Transaction Id");
+      Journal.SETRANGE("Hobt Id",Observed."Hobt Id");
+      // Ожидание объекта целиком hobt не несёт ВОВСЕ: у всех таких строк он ноль. По одному
+      // ключу два разных ожидания одной сессии слились бы в один эпизод - правдоподобно и
+      // молча. Ресурс дофильтровывается мимо индекса: после ключа тут считанные строки.
+      //
+      // Ресурс, который разбор не понял, кладётся в SQL Object Name СЫРЫМ (Codeunit 110231), и
+      // здесь он работает РАЗЛИЧИТЕЛЕМ: у двух таких ожиданий одной жертвы (pagelock на
+      // разных страницах, ridlock в разных файлах) другого различителя нет вовсе.
+      Journal.SETRANGE("Resource Kind",Observed."Resource Kind");
+      Journal.SETRANGE("SQL Object Name",Observed."SQL Object Name");
+      EXIT(Journal.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE OpenRow@80(VAR Observed@1000000223 : Record 110231);
+    BEGIN
+      Journal := Observed;
+      Journal."Entry No." := NextNo;
+      Journal."Started At" := EpisodeStart(PassAt,Observed."Last Wait (ms)");
+      Journal."Last Seen At" := PassAt;
+      Journal."Max Wait (ms)" := Observed."Last Wait (ms)";
+      Journal."Ended At" := 0DT;
+      Journal.Outcome := Journal.Outcome::Undetermined;
+      Journal.Open := TRUE;
+      Journal.INSERT;
+      CopyStatements(Observed,Journal);
+      OpenedCount := OpenedCount + 1;
+    END;
+
+    LOCAL PROCEDURE UpdateRow@81(VAR Observed@1000000224 : Record 110231);
+    VAR
+      Keep@1000000225 : Record 110231;
+    BEGIN
+      // Наблюдаемое перекрывает строку ЦЕЛИКОМ, кроме того, что устанавливается один раз.
+      // Так новое поле съёма начинает обновляться само, а не забывается молча; список
+      // "устанавливается один раз" короткий и лежит здесь, на виду.
+      //
+      // Обновлять есть что: ожидание растёт, а имя и документ могли появиться позже
+      // открытия. Строка обязана показывать то, что есть СЕЙЧАС, а не то, что было в
+      // первом наблюдении.
+      Keep := Journal;
+      // Блобы текста - тоже "устанавливается один раз", и стоит это дороже прочих строк
+      // списка. Наблюдаемая строка приезжает со СВЕЖИМ оператором: он читается тем же
+      // запросом очереди, каждым проходом, - и перелив менял бы текст под читателем.
+      // Виновник за три секунды успевает послать другой оператор, и в журнале оказался бы
+      // не тот, который взял блокировку, - ровно то, ради чего текст и собирается.
+      //
+      // CALCFIELDS перед переливом обязателен: FINDSET блоб не читает, и перенос из
+      // невычитанной строки стёр бы текст пустотой - тем же способом, каким он терялся бы
+      // при удалении. Читается он тут на каждое обновление, и платит за это только та
+      // установка, где сбор операторов включён.
+      Keep.CALCFIELDS("Victim Statement","Blocker Statement Text");
+      Journal := Observed;
+      Journal."Entry No." := Keep."Entry No.";
+      Journal."Started At" := Keep."Started At";
+      Journal."Ended At" := Keep."Ended At";
+      Journal.Outcome := Keep.Outcome;
+      Journal."Document No." := Keep."Document No.";
+      Journal."Document Source" := Keep."Document Source";
+      Journal."No Document Reason" := Keep."No Document Reason";
+      Journal."User Name" := Keep."User Name";
+      Journal."User Source" := Keep."User Source";
+      // Имя жертвы - из того же списка, и забыть его тут стоило дороже всего: оно
+      // писалось исправно и затиралось следующим же проходом через три секунды, а
+      // выглядело это как "дорога к имени жертвы не работает вовсе".
+      Journal."Victim User Name" := Keep."Victim User Name";
+      // Счётчик попыток - оттуда же, и по той же причине. Съём о нём не знает и приносит
+      // ноль, а ноль здесь значит "не спрашивали ни разу": переспрашивание стало бы вечным.
+      Journal."Name Attempts" := Keep."Name Attempts";
+      // Тексты операторов приходят с каждым съёмом заново и переливу не подлежат: в
+      // наблюдаемой строке лежит оператор ТЕКУЩИЙ, а в журнале обязан лежать тот, который
+      // взял блокировку, - см. довод и CALCFIELDS выше.
+      Journal."Victim Statement" := Keep."Victim Statement";
+      Journal."Blocker Statement Text" := Keep."Blocker Statement Text";
+      Journal.Open := TRUE;
+      Journal."Last Seen At" := PassAt;
+      Journal."Max Wait (ms)" := Keep."Max Wait (ms)";
+      IF Observed."Last Wait (ms)" > Journal."Max Wait (ms)" THEN
+        Journal."Max Wait (ms)" := Observed."Last Wait (ms)";
+      Journal.MODIFY;
+      UpdatedCount := UpdatedCount + 1;
+    END;
+
+    LOCAL PROCEDURE CloseRow@82();
+    VAR
+      Waited@1000000226 : Duration;
+      Gap@1000000227 : Duration;
+      GapMs@1000000228 : Integer;
+      VictimIsNav@1000000229 : Boolean;
+    BEGIN
+      // Мига конца мы не знаем: жертва исчезла где-то между прошлым наблюдением и этим,
+      // и назвать его точнее нельзя. Зато длительность из DMV точна, поэтому концом
+      // объявляется последний миг, когда ожидание ТОЧНО ещё шло. Насколько твёрд вывод,
+      // говорит исход - у него три значения, и "не определён" честнее правдоподобной цифры.
+      VictimIsNav := Journal."Victim Is NAV" = Journal."Victim Is NAV"::Yes;
+      Waited := Journal."Max Wait (ms)";
+      Journal."Ended At" := Journal."Started At" + Waited;
+      // Исход считается по настоящему промежутку между последним наблюдением
+      // и этим проходом, а не по периоду опроса из настройки: медленная или
+      // остановленная цепочка не должна превращать долгое ожидание в "предоставлено".
+      // Промежуток ограничивается порогом NAV до перевода в Integer, иначе месяц
+      // и больше переполнит разрядность; отрицательный промежуток передаётся
+      // как -1, чтобы исход не стал "предоставлено".
+      Gap := PassAt - Journal."Last Seen At";
+      IF Gap < 0 THEN
+        GapMs := -1
+      ELSE IF Gap > NavLockTimeoutMs THEN
+        GapMs := NavLockTimeoutMs
+      ELSE
+        GapMs := Gap;
+      // Значения исхода в разборе - те же числа, что и в списке опций поля, и это не
+      // совпадение: разбор о таблице ничего не знает и знать не должен, а порядок опций
+      // держится проверкой в обкатке.
+      Journal.Outcome := Outcome(Journal."Last Wait (ms)",GapMs,VictimIsNav);
+      Journal.Open := FALSE;
+      Journal.MODIFY;
+      ClosedCount := ClosedCount + 1;
+    END;
+
+    LOCAL PROCEDURE NextNo@83() : Integer;
+    VAR
+      Last@1000000230 : Record 110231;
+    BEGIN
+      // Номер снимается с конца ОДИН раз за жизнь экземпляра кодюнита, а не на каждую
+      // строку: в шторм это полтысячи лишних чтений последней страницы за проход.
+      //
+      // Замок здесь взят нарочно, потому что прежний довод - "пишет сюда одна фоновая
+      // задача, и спорить за номер не с кем" - неверен. Кнопку ручного прохода жмёт
+      // человек, проход заводит СВОЙ экземпляр этого кодюнита, и два писателя снимают
+      // один и тот же "последний" номер: оба получают одно число, и в журнале появляется
+      // дубль номера записи - то, чего у сквозного ключа быть не может. Временем их не
+      // развести: и съём номера, и вставка идут внутри одной транзакции прохода.
+      //
+      // LOCKTABLE - единственный замок на диапазон, какой в C/AL есть. Берётся он ОДИН
+      // раз за проход (дальше номер растёт в памяти) и держится до конца прохода - до
+      // того единственного COMMIT, который проход и без него делает (RunPass). Цена его
+      // в том, что читатели журнала подождут эти миллисекунды. Дешевле дубля номера:
+      // строка с занятым номером не вставляется вовсе, и эпизод пропадает молча.
+      IF NextEntryNo = 0 THEN BEGIN
+        Last.LOCKTABLE;
+        Last.RESET;
+        IF Last.FINDLAST THEN
+          NextEntryNo := Last."Entry No.";
+      END;
+      NextEntryNo := NextEntryNo + 1;
+      EXIT(NextEntryNo);
+    END;
+
+
+    [External]
+    PROCEDURE RunPass@84() : Boolean;
+    VAR
+      Setup@1000000231 : Record 110230;
+      Observed@1000000232 : TEMPORARY Record 110231;
+      RowCount@1000000233 : Integer;
+      OtherDatabase@1000000234 : Integer;
+      ObservedAt@1000000235 : DateTime;
+      StartedAt@1000000236 : DateTime;
+      Elapsed@1000000237 : Duration;
+      Opened@1000000238 : Integer;
+      Updated@1000000239 : Integer;
+      Closed@1000000240 : Integer;
+      Restarted@1000000241 : Integer;
+      Note@1000000242 : Text;
+      QueueErr@1000000243 : Text;
+      Truncated@1000000244 : Boolean;
+      State@1000000245 : Record 110233;
+      PassMs@1000000246 : Integer;
+      Overrun@1000000247 : Text;
+      Deleted@1000000248 : Integer;
+      RowLimit@1000000249 : Integer;
+    BEGIN
+      // Проход целиком: съём, ведение эпизодов, разбор документа, имена от платформы и
+      // ОДИН COMMIT в конце. Порядок именно такой, потому что каждый шаг дешевле
+      // предыдущего, а самый дорогой - запись - должен получить всё, что о нём известно,
+      // с первого раза: обновлять строку журнала дважды за проход дороже вдвое.
+      Setup.FetchOnce;
+      // Состояние сторожа лежит отдельно от настройки нарочно: строку, которую фон
+      // переписывает каждый проход, человек не может править вовсе (FINDINGS, раздел 33).
+      State.FetchOnce;
+      // Язык, на котором проход пишет слова: подсказку, причину и сообщение сторожа.
+      // В сессии с окном язык не трогается вовсе - разбирается это внутри.
+      UseJournalLanguage(Setup."Journal Language ID");
+      // Часы клиента, и это НАЗВАНО нарочно: длительность прохода мерится ими от начала до
+      // конца, а значит разницы поясов в ней нет - обе половины взяты одними часами.
+      // Всё, что кладётся в колонку DateTime, идёт другим путём - моментом прохода от SQL
+      // (ObservedAt), и смешивать эти две шкалы нельзя (FINDINGS, раздел 56).
+      StartedAt := CURRENTDATETIME;
+
+      // Потолок строк за проход - ФАКТИЧЕСКИЙ, тот же, по которому съём и обрезает
+      // (см. QueueRowLimit). Настройка, поднятая выше пятисот, ничего не поднимает,
+      // и признак "усечено", сверенный с настройкой, промолчал бы об обрезке - а проход,
+      // обрезанный молча, читается как "вся очередь в журнале".
+      RowLimit := QueueRowLimit(Setup."Max Rows per Pass");
+      IF NOT Sql.ReadQueue(Setup."Max Rows per Pass",Setup."Collect Statement Values",
+                           Observed,RowCount,ObservedAt,OtherDatabase)
+      THEN BEGIN
+        // Причина отказа сохраняется ПЕРВОЙ: следующий SQL-запрос перепишет
+        // LastErrorText, и очередь осталась бы названной чужой ошибкой.
+        QueueErr := Sql.LastErrorText;
+        Note := STRSUBSTNO(ReadFailedTxt,QueueErr);
+        // Отказ съёма журнал НЕ трогает. Закрыть эпизоды моментом, которого мы не знаем,
+        // значило бы объявить их законченными, ничего об этом не выяснив.
+        //
+        // Если очередь успела принести SQL-момент до отказа, он и остаётся отметкой;
+        // пропавший момент подменяется часами сессии - другого не осталось. Длительность
+        // считается от начала прохода, поэтому отказ, потративший время, не выглядит
+        // нулевым (FINDINGS, раздел 56).
+        Elapsed := CURRENTDATETIME - StartedAt;
+        IF ObservedAt = 0DT THEN
+          ObservedAt := StartedAt;
+        SaveWatchdog(State,Note,ObservedAt,Elapsed,0,FALSE);
+        EXIT(FALSE);
+      END;
+
+      IF RowCount > 0 THEN
+        IF NOT Sql.ResolveNames(Observed) THEN
+          // Имена - не эпизоды. Без них строка беднее, но она есть и она правдива;
+          // выбросить проход из-за имён значило бы потерять сам факт блокировки.
+          Note := ' ' + STRSUBSTNO(NamesFailedTxt,Sql.LastErrorText);
+
+      // Цепочка разматывается ДО журнала: виновник - её голова, а не
+      // непосредственный блокирующий (см. CollapseChains).
+      CollapseChains(Observed,RowCount);
+
+      // Порог записи идёт тем же путём, что и прочие настройки прохода: проход читает
+      // настройку один раз и отдаёт журналу, а журнал не знает, откуда он вызван.
+      BeginPass(ObservedAt,Setup."Journal Min Wait (ms)");
+      Observed.RESET;
+      IF Observed.FINDSET THEN
+        REPEAT
+          Observe(Observed);
+        UNTIL Observed.NEXT = 0;
+      FinishPass;
+      PassCounts(Opened,Updated,Closed,Restarted);
+      Note := Note + MergedNote(MergedWaitCount);
+
+      // Документ разбирается ПОСЛЕ записи и только для идущих эпизодов: мост к нему -
+      // блокировка, которую держат прямо сейчас. На закрытом эпизоде разбирать нечего
+      // вовсе - ожидание кончилось ровно потому, что блокировку отпустили. Пока же эпизод
+      // идёт, вопрос повторяется каждым проходом: ответ на него может появиться позже
+      // начала ожидания.
+      Note := Note + NameDocuments(Setup.DocumentsPerPass);
+
+      // Имена от платформы - последней дорогой и только туда, где прежние имени не дали:
+      // штатная таблица дорога.
+      Note := Note + NameInPass;
+
+      // Взаимоблокировки собираются ПОСЛЕ очереди и не каждым проходом. Они приходят
+      // готовыми эпизодами и ведению не подлежат: сервер уже разорвал круг.
+      Note := Note + CollectDeadlocks(Setup,State,ObservedAt);
+
+      // Удаление по сроку и потолку идёт тем же проходом: отдельное задание уборки - это
+      // ещё один объект, который забудут включить, и горячая таблица будет расти молча.
+      Deleted := MoveOldEntries(Setup."Retention (Days)",Setup."Journal Rows Ceiling",
+                                TrimRowsPerPass(Setup."Max Rows per Pass"));
+      Note := Note + MovedNote(Deleted);
+
+      Truncated := (RowLimit > 0) AND (RowCount >= RowLimit);
+      Elapsed := CURRENTDATETIME - StartedAt;
+      Note := STRSUBSTNO(CountsTxt,Opened,Updated,Closed,Restarted) + Note;
+      // Превышение потолка идёт ПЕРВЫМ словом, а не последним: строка сторожа - Text250,
+      // и на занятом проходе хвост её обрезается. Обрезанное предупреждение - это его
+      // отсутствие, а сказать о превышении важнее, чем досчитать открытые эпизоды.
+      PassMs := Elapsed;
+      Overrun := PassOverrunNote(PassMs,Setup."Max Pass (ms)");
+      IF Overrun <> '' THEN
+        Overrun := Overrun + ' ';
+      SaveWatchdog(State,Overrun + PassNote(RowCount,OtherDatabase,Truncated,RowLimit,Note),
+             ObservedAt,Elapsed,RowCount,Truncated);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE NameDocuments@85(DocumentsPerPass@1000000250 : Integer) : Text;
+    VAR
+      Pending@1000000251 : TEMPORARY Record 110231;
+      Context@1000000252 : TEMPORARY Record 110232;
+      Picked@1000000253 : Integer;
+    BEGIN
+      // Разбирать нечего - и запроса не будет вовсе. Это и есть ответ на "dm_tran_locks
+      // в цикле не трогать никогда": на тихом сервере цикл её не трогает, а на шумном
+      // читает один раз на проход, а не один раз на эпизод.
+      Picked := PickUnresolved(Pending,DocumentsPerPass);
+      IF Picked = 0 THEN
+        EXIT('');
+      LoadContext(Context);
+      IF NOT Sql.ResolveDocuments(Pending,Context) THEN
+        EXIT(' ' + STRSUBSTNO(DocFailedTxt,Sql.LastErrorText));
+
+      Pending.RESET;
+      IF Pending.FINDSET THEN
+        REPEAT
+          IF Pending."Document No." <> '' THEN
+            SetDocument(Pending."Entry No.",Pending."Document No.",Pending."Document Source",'')
+          ELSE
+            // Пустая колонка с ПРИЧИНОЙ честнее пустой колонки без неё: без причины она
+            // читается как "блокировок по документам не было".
+            SetDocument(Pending."Entry No.",'',DocSourceNone,NoMarkTxt);
+        UNTIL Pending.NEXT = 0;
+      // Обрезка списка интересных блокировок называется вслух тем же словом прохода.
+      // У эпизодов, чьи блокировки в список не влезли, документ остался пустым, и пустая
+      // колонка без этого слова читается как "ответа не было", хотя ответ просто не искали.
+      EXIT(Sql.LocksTruncatedNote);
+    END;
+
+    LOCAL PROCEDURE CollectDeadlocks@86(VAR Setup@1000000254 : Record 110230;
+                                       VAR State@1000000255 : Record 110233;
+                                       PassAt@1000000256 : DateTime) : Text;
+    VAR
+      Found@1000000257 : TEMPORARY Record 110231;
+      WasReadUntil@1000000258 : DateTime;
+      OldestAt@1000000259 : DateTime;
+      NewestAt@1000000260 : DateTime;
+      Elapsed@1000000261 : Duration;
+      Period@1000000262 : Duration;
+      Rows@1000000263 : Integer;
+      Added@1000000264 : Integer;
+      BufferPresent@1000000265 : Boolean;
+      Note@1000000266 : Text;
+      Counted@1000000267 : BigInteger;
+      WasCounted@1000000268 : BigInteger;
+      Circles@1000000269 : BigInteger;
+      CountReset@1000000270 : Boolean;
+      Ring@1000000271 : Text;
+    BEGIN
+      IF NOT Setup."Deadlocks Enabled" THEN
+        EXIT('');
+      // Буфер читается НЕ каждым проходом. Он растёт не от наших блокировок, а от чужих
+      // взаимоблокировок, и на тихом сервере не меняется вовсе; разбор всего буфера в XML
+      // дороже опроса очереди, ради которого проход и заведён.
+      // Обе отметки берутся МОМЕНТОМ ПРОХОДА, а не часами сессии: он приехал от SQL тем же
+      // запросом, что и очередь, и лежит в той же шкале, что отметки журнала - UTC
+      // (FINDINGS, раздел 56). Часы сессии хороши ровно в серверной сессии: у клиента в
+      // другом поясе ручной проход положил бы сюда свой пояс, и отметка "читали в" уехала
+      // бы на часы - вместе с решением, читать кольцо или пропустить его.
+      Period := DeadlockReadPeriodMs;
+      IF State."Deadlocks Read At" <> 0DT THEN BEGIN
+        Elapsed := PassAt - State."Deadlocks Read At";
+        IF Elapsed < Period THEN
+          EXIT('');
+      END;
+      // Отметка "читали в" ставится ДО чтения и остаётся стоять при отказе: сервер,
+      // который не отвечает, нельзя спрашивать каждые три секунды.
+      State."Deadlocks Read At" := PassAt;
+      WasReadUntil := State."Deadlocks Read Until";
+
+      WasCounted := State."Deadlocks Counted";
+      IF NOT Sql.ReadDeadlocks(WasReadUntil,MaxDeadlocksPerPass,
+                               Setup."Collect Statement Values",Found,BufferPresent,OldestAt,Rows,Counted)
+      THEN
+        EXIT(' ' + STRSUBSTNO(DeadlockFailedTxt,Sql.LastErrorText));
+      // Счёт запоминается СРАЗУ после удачного чтения, до всякого разбора: иначе первое же
+      // расхождение обвинило бы кольцо в кругах, случившихся когда угодно раньше.
+      State."Deadlocks Counted" := Counted;
+
+      IF NOT BufferPresent THEN
+        // Выключенная сессия и отсутствие взаимоблокировок дают одну и ту же пустую
+        // колонку. Различает их только эта строка.
+        EXIT(' ' + NoBufferTxt);
+
+      Found.RESET;
+      IF Found.FINDSET THEN
+        REPEAT
+          IF Found."Ended At" > NewestAt THEN
+            NewestAt := Found."Ended At";
+          IF AddDeadlock(Found) THEN
+            Added := Added + 1;
+        UNTIL Found.NEXT = 0;
+      IF NewestAt <> 0DT THEN
+        State."Deadlocks Read Until" := NewestAt;
+
+      // Буфер кольцевой. Если самое старое событие в нём уже новее прежней отметки, между
+      // ними что-то вытеснено, и молчать об этом нельзя: пустая колонка читается как
+      // "взаимоблокировок не было", а это ровно противоположный вывод.
+      IF (WasReadUntil <> 0DT) AND (OldestAt <> 0DT) AND (OldestAt > WasReadUntil) THEN
+        Note := ' ' + DeadlockLostTxt;
+      // Третий случай молчания кольца, и два соседних его не ловят: сессия работает, самое
+      // старое событие в выдаче старое - и проверка выше, и NoBufferTxt молчат обе.
+      // Спрашивается поэтому счёт САМОГО СЕРВЕРА, приехавший вместе с границей буфера.
+      //
+      // Нулевой прежний счёт - это "мерить не с чем", а не "кругов не было": первый проход
+      // после выкладки только заводит отметку. Обнуление счётчика перезапуском сервера
+      // разбирается CounterDelta: прирост после него мерить не от чего, и выдумывать его
+      // нельзя.
+      Circles := CounterDelta(WasCounted,Counted,CountReset);
+      Ring := RingSilentNote(Circles,Rows);
+      IF (WasCounted > 0) AND (NOT CountReset) AND (Ring <> '') THEN
+        Note := Note + ' ' + Ring;
+      IF Added > 0 THEN
+        Note := Note + ' ' + STRSUBSTNO(DeadlocksTxt,Added);
+      EXIT(Note);
+    END;
+
+    LOCAL PROCEDURE LoadContext@87(VAR Context@1000000272 : TEMPORARY Record 110232);
+    VAR
+      ContextTable@1000000273 : Record 110232;
+    BEGIN
+      // Список таблиц контекста читается ОДИН раз на проход и уезжает съёму копией. Он
+      // короткий - десятки строк, - а обращаться к нему пришлось бы на каждый разбираемый
+      // эпизод, то есть внутри цикла, который и без того самый дорогой.
+      Context.RESET;
+      Context.DELETEALL;
+      ContextTable.SETRANGE(Enabled,TRUE);
+      IF ContextTable.FINDSET THEN
+        REPEAT
+          Context := ContextTable;
+          Context.INSERT;
+        UNTIL ContextTable.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SaveWatchdog@88(VAR State@1000000274 : Record 110233;Msg@1000000275 : Text;At@1000000276 : DateTime;Elapsed@1000000277 : Duration;Rows@1000000278 : Integer;Truncated@1000000279 : Boolean);
+    VAR
+      Fresh@1000000280 : Record 110233;
+      Milliseconds@1000000281 : Integer;
+    BEGIN
+      // Сторож пишет ВСЕГДА, и на удачном проходе тоже. Пустое сообщение читается как
+      // "всё хорошо", а на деле означает "не знаю": последний проход мог не случиться
+      // вовсе, и отличить одно от другого можно только по отметке времени рядом.
+      //
+      // Запись у прохода ОДНА и в самом конце. Строка перечитывается под замком прямо
+      // перед ней: между началом прохода и его концом человек мог нажать "стоп" или
+      // "запустить", а NAV сверяет версию строки при записи. Отметки, добытые проходом,
+      // переносятся в свежую строку поимённо - их три, и список этот стоит держать на виду.
+      Milliseconds := Elapsed;
+      Fresh.FetchToWrite;
+      Fresh."Deadlocks Read At" := State."Deadlocks Read At";
+      Fresh."Deadlocks Read Until" := State."Deadlocks Read Until";
+      Fresh."Deadlocks Counted" := State."Deadlocks Counted";
+      Fresh."Last Pass At" := At;
+      Fresh."Last Pass (ms)" := Milliseconds;
+      Fresh."Last Pass Rows" := Rows;
+      Fresh."Last Pass Truncated" := Truncated;
+      Fresh."Watchdog Message" := COPYSTR(Msg,1,MAXSTRLEN(Fresh."Watchdog Message"));
+      Fresh.MODIFY;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE PassNote@89(RowCount@1000000282 : Integer;OtherDatabase@1000000283 : Integer;Truncated@1000000284 : Boolean;Ceiling@1000000285 : Integer;Note@1000000286 : Text) : Text;
+    VAR
+      Msg@1000000287 : Text;
+    BEGIN
+      IF RowCount = 0 THEN
+        Msg := QuietTxt
+      ELSE
+        Msg := STRSUBSTNO(BusyTxt,RowCount);
+      IF Truncated THEN
+        Msg := Msg + ' ' + STRSUBSTNO(TruncatedTxt,Ceiling);
+      IF OtherDatabase > 0 THEN
+        Msg := Msg + ' ' + STRSUBSTNO(OtherDbTxt,OtherDatabase);
+      IF Note <> '' THEN
+        Msg := Msg + ' ' + Note;
+      EXIT(Msg);
+    END;
+
+    LOCAL PROCEDURE TrimRowsPerPass@90(RowsPerPass@1000000288 : Integer) : Integer;
+    BEGIN
+      // Потолок уборки за проход. Месяц журнала за один COMMIT - это блокировка
+      // собственной таблицы посреди наблюдения, то есть ровно то, что мы ловим.
+      //
+      // Но и меньше потолка НАБЛЮДЕНИЯ уборка быть не может. Если за проход приезжает
+      // строк больше, чем уезжает, потолок журнала не выполняется никогда: журнал растёт
+      // по построению, и второй предел оказывается написанным зря. Потолок наблюдения
+      // живёт в настройке и его поднимают - значит и уборка меряется им, а не своим числом.
+      IF RowsPerPass > TrimRowsFloor THEN
+        EXIT(RowsPerPass);
+      EXIT(TrimRowsFloor);
+    END;
+
+
+    LOCAL PROCEDURE MovedNote@91(Deleted@1000000289 : Integer) : Text;
+    BEGIN
+      // Ноль не пишется. Строку сторожа читают каждым проходом, и постоянное "удалено 0"
+      // заслонило бы в ней то, ради чего её читают.
+      IF Deleted = 0 THEN
+        EXIT('');
+      EXIT(' ' + STRSUBSTNO(MovedTxt,Deleted));
+    END;
+
+    LOCAL PROCEDURE MergedNote@92(Merged@1000000290 : Integer) : Text;
+    BEGIN
+      // Сведённые ожидания называются вслух. Строка журнала у них одна на всех, и без
+      // этого слова картина читается как одна жертва, тогда как задач у неё было
+      // несколько: у работника, разбирающего журнал, это разные ответы на "кого чинить".
+      // Ноль не пишется по той же причине, что и у соседей: строку читают каждым проходом.
+      IF Merged = 0 THEN
+        EXIT('');
+      EXIT(' ' + STRSUBSTNO(MergedTxt,Merged));
+    END;
+
+    LOCAL PROCEDURE TrimRowsFloor@94() : Integer;
+    BEGIN
+      // Пол уборки: двести строк за проход разбирают суточный завал за минуты и никому не
+      // мешают. Ниже него уборка не опускается, даже если потолок наблюдения занижен до
+      // единиц: тогда завал не разобрался бы вовсе.
+      EXIT(200);
+    END;
+
+    [External]
+    PROCEDURE NameInPass@95() : Text;
+    VAR
+      Episode@1000000291 : Record 110231;
+      Setup@1000000292 : Record 110230;
+      EntryNos@1000000293 : ARRAY [20] OF Integer;
+      Episodes@1000000294 : Integer;
+      Named@1000000295 : Integer;
+      Index@1000000296 : Integer;
+      Trans@1000000297 : ARRAY [40] OF BigInteger;
+      Users@1000000298 : ARRAY [40] OF Code[50];
+      Changed@1000000299 : Boolean;
+    BEGIN
+      // Последняя дорога прохода и только для тех идущих эпизодов, у которых нет имени
+      // виновника или ждущего. Штатная таблица читается ОДИН раз на проход и
+      // только тогда, когда спрашивать есть о ком: чтение её материализует все блокировки
+      // экземпляра (FINDSET с отбором не дешевле), и на тихом сервере проход за неё не
+      // платит ничего. Номера транзакций идут в отбор одним списком - отбор платформа
+      // накладывает уже на материализованный набор, но строки до C/AL доходят только нужные.
+      //
+      // Мост к человеку - номер транзакции, снятый со стороны SQL: у виновника - того, кто
+      // держит, у ждущего - того, кто стоит в очереди. Его ожидающая просьба лежит в той
+      // же таблице строкой со статусом WAIT и несёт его имя.
+      //
+      // Уже найденное имя не переписывается никогда: эта дорога называет транзакцию, а не
+      // сеанс, и её ответ беднее любого прежнего. Выключатель спрашивается здесь, а не в
+      // проходе: дорога сама решает, звали её или нет.
+      Setup.FetchOnce;
+      IF NOT Setup."Platform Names Enabled" THEN
+        EXIT('');
+      Episode.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      Episode.SETRANGE(Open,TRUE);
+      Episode.SETFILTER("Blocker Transaction Id",'<>%1',0);
+      IF Episode.FINDSET THEN
+        REPEAT
+          IF (Episode."User Name" = '') OR
+             ((Episode."Victim User Name" = '') AND (Episode."Victim Transaction Id" <> 0))
+          THEN
+            IF Episodes < PassEpisodeLimit THEN BEGIN
+              Episodes := Episodes + 1;
+              EntryNos[Episodes] := Episode."Entry No.";
+              Trans[2 * Episodes - 1] := Episode."Blocker Transaction Id";
+              Trans[2 * Episodes] := Episode."Victim Transaction Id";
+            END;
+        UNTIL Episode.NEXT = 0;
+      IF Episodes = 0 THEN
+        EXIT('');
+
+      IF NOT TryReadUsers(Trans,Users,2 * Episodes) THEN
+        EXIT(' ' + STRSUBSTNO(PassFailedTxt,GETLASTERRORTEXT));
+
+      FOR Index := 1 TO Episodes DO
+        IF Episode.GET(EntryNos[Index]) THEN BEGIN
+          Changed := FALSE;
+          IF (Episode."User Name" = '') AND (Users[2 * Index - 1] <> '') THEN BEGIN
+            Episode."User Name" := Users[2 * Index - 1];
+            Episode."User Source" := Episode."User Source"::FromPlatform;
+            Changed := TRUE;
+          END;
+          IF (Episode."Victim User Name" = '') AND (Users[2 * Index] <> '') THEN BEGIN
+            Episode."Victim User Name" := Users[2 * Index];
+            Changed := TRUE;
+          END;
+          IF Changed THEN BEGIN
+            Episode.MODIFY;
+            Named := Named + 1;
+          END;
+        END;
+      EXIT(' ' + STRSUBSTNO(PassNamedTxt,Named,Episodes));
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryReadUsers@96(Trans@1000000300 : ARRAY [40] OF BigInteger;VAR Users@1000000301 : ARRAY [40] OF Code[50];Slots@1000000302 : Integer);
+    VAR
+      Locks@1000000303 : Record 2000000154;
+      TranFilter@1000000304 : Text;
+      Index@1000000305 : Integer;
+    BEGIN
+      // Только чтение: внутри TryFunction запись в базу запрещена платформой, поэтому
+      // имена возвращаются массивом, а журнал правит вызывающий.
+      FOR Index := 1 TO Slots DO
+        IF Trans[Index] <> 0 THEN BEGIN
+          IF TranFilter <> '' THEN
+            TranFilter := TranFilter + '|';
+          TranFilter := TranFilter + FORMAT(Trans[Index],0,9);
+        END;
+      IF TranFilter = '' THEN
+        EXIT;
+      Locks.SETFILTER("Transaction ID",TranFilter);
+      IF Locks.FINDSET THEN
+        REPEAT
+          IF Locks."User Name" <> '' THEN
+            FOR Index := 1 TO Slots DO
+              IF (Trans[Index] = Locks."Transaction ID") AND (Users[Index] = '') THEN
+                Users[Index] := COPYSTR(Locks."User Name",1,MAXSTRLEN(Users[Index]));
+        UNTIL Locks.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE PassEpisodeLimit@97() : Integer;
+    BEGIN
+      // Двадцать эпизодов за проход - по два номера транзакции на каждый, сорок в отборе.
+      // Идущих эпизодов без имени в спокойной базе единицы; в шторм остальные дождутся
+      // следующего прохода, а отбор длиной в сотни номеров платформа разбирала бы дольше,
+      // чем читает саму таблицу.
+      EXIT(20);
+    END;
+
+    BEGIN
+    {
+      Наблюдение, разбор и журнал в одном объекте.
+
+      Разбор отделён от журнала не папкой, а мерой: всё, что считается без базы -
+      имя таблицы и номер ключа из имени SQL, начало и исход эпизода, разматывание
+      цепочки, - проверяется отдельным кодюнитом без единого запроса. Сам проход
+      живёт здесь же: он и есть единственный потребитель разбора, а лишний объект
+      между ними стоил бы только перехода через границу.
+
+      OnRun - это один проход. Сторож заводит задачу, задача зовёт проход через
+      CODEUNIT.RUN: откат упавшего прохода не должен уносить чужие строки.
+    }
+    END.
+  }
+}

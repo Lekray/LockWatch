@@ -1,0 +1,1122 @@
+OBJECT Codeunit 110234 LockWatch Journal Bench
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04.11.26;
+    Time=12:00:00;
+    Modified=Yes;
+    Version List=LockWatch;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Bench;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Episode@1000000000 : Record 110231;
+      Watch@1000000001 : Codeunit 110230;
+      PassedTxt@1000000002 : TextConst 'ENU=PASS;RUS=пройдено';
+      // Два пробела после "ПРОВАЛ" - как и в обкатке разбора: слово занимает те же восемь
+      // знаков, что "пройдено", и имена проверок стоят в отчёте одной колонкой.
+      FailedTxt@1000000003 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ  ';
+      VerdictTxt@1000000004 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
+      DirtyErr@1000000005 : TextConst 'ENU=The journal is not empty (%1 rows from real observation). The bench opens and closes episodes of its own and deletes by retention, so it runs on a stand with an empty journal - never beside a live watch.;RUS=Журнал не пуст (%1 строк настоящего наблюдения). Мерный прогон открывает и закрывает СВОИ эпизоды и удаляет по сроку, поэтому идёт на стенде с пустым журналом, а не рядом с работающим сторожем.';
+      EnabledErr@1000000006 : TextConst 'ENU=The watch is switched on in the setup. A pass of the bench would close the episodes of the real one.;RUS=Сторож включён в настройке. Проход мерного прогона закрыл бы эпизоды настоящего.';
+      ChkOpenTxt@1000000007 : TextConst 'ENU=the first pass opens exactly one episode per waiter;RUS=первый проход открывает ровно по эпизоду на ждущего';
+      OpenTxt@1000000008 : TextConst 'ENU=opened %1 of %2 waiters, updated %3, closed %4, rows in the journal %5;RUS=открыто %1 из %2 ждущих, обновлено %3, закрыто %4, строк в журнале %5';
+      ChkUpdateTxt@1000000009 : TextConst 'ENU=the second pass updates the same rows instead of breeding new ones;RUS=второй проход обновляет те же строки, а не плодит новые';
+      UpdateTxt@1000000010 : TextConst 'ENU=updated %1, opened %2, rows in the journal %3, of them with the new wait %4;RUS=обновлено %1, открыто %2, строк в журнале %3, из них с новым ожиданием %4';
+      ChkCloseTxt@1000000011 : TextConst 'ENU=a waiter gone from the queue closes the episode, and the outcome is judged;RUS=ушедший из очереди закрывает эпизод, и исход при этом судится';
+      CloseTxt@1000000012 : TextConst 'ENU=closed %1 of %2, of them granted %3, still open %4;RUS=закрыто %1 из %2, из них дождалось %3, осталось открытых %4';
+      ChkTrimTxt@1000000013 : TextConst 'ENU=what is older than the term is deleted from the journal, and the rest stays;RUS=что старше срока, удаляется из журнала, а остальное остаётся';
+      TrimTxt@1000000014 : TextConst 'ENU=deleted %1 of the %2 backdated, left %3 of %4;RUS=удалено %1 из %2 состаренных, осталось %3 из %4';
+      ChkCostTxt@1000000015 : TextConst 'ENU=the NAV half of a pass fits between the floor and the declared ceiling;RUS=NAV-половина прохода укладывается между полом и объявленным потолком';
+      CostTxt@1000000016 : TextConst 'ENU=worst pass %1 ms against the ceiling %2 and the floor %3;RUS=худший проход %1 мс против потолка %2 и пола %3';
+      TimingTxt@1000000017 : TextConst 'ENU=%1: %2 ms for %3 rows, %4 us per row;RUS=%1: %2 мс на %3 строк, %4 мкс на строку';
+      OpenPhaseTxt@1000000018 : TextConst 'ENU=opening;RUS=открытие';
+      UpdatePhaseTxt@1000000019 : TextConst 'ENU=updating;RUS=обновление';
+      ClosePhaseTxt@1000000020 : TextConst 'ENU=closing;RUS=закрытие';
+      SweepPhaseTxt@1000000021 : TextConst 'ENU=cleanup;RUS=уборка';
+      ChkCloseGapLongTxt@1000000022 : TextConst 'ENU=the outcome uses the real gap between passes, so a long gap with a short wait is not granted;RUS=исход считается по настоящему промежутку между проходами: долгий промежуток при коротком ожидании не даёт "предоставлено"';
+      CloseGapLongTxt@1000000023 : TextConst 'ENU=outcome %1, real gap about %2 ms;RUS=исход %1, настоящий промежуток около %2 мс';
+      ChkCloseGapShortTxt@1000000024 : TextConst 'ENU=a short real gap is still judged as granted;RUS=короткий настоящий промежуток по-прежнему даёт "предоставлено"';
+      CloseGapShortTxt@1000000025 : TextConst 'ENU=outcome %1, real gap about %2 ms;RUS=исход %1, настоящий промежуток около %2 мс';
+      ChkCloseGapHugeTxt@1000000026 : TextConst 'ENU=a gap of a month or more does not overflow and is not granted;RUS=промежуток в месяц и больше не переполняет разрядность и не даёт "предоставлено"';
+      CloseGapHugeTxt@1000000027 : TextConst 'ENU=outcome %1, gap %2 days;RUS=исход %1, промежуток %2 дн.';
+      ChkCeilingTxt@1000000028 : TextConst 'ENU=the journal comes down to its row ceiling, the oldest go first, and an open episode stays;RUS=журнал опускается до своего потолка строк, старшие уходят первыми, а идущий эпизод остаётся';
+      CeilingTxt@1000000029 : TextConst 'ENU=deleted %1 of the %2 over the ceiling, journal %3 against the ceiling %4, the open %5 stayed;RUS=удалено %1 из %2 сверх потолка, в журнале %3 при потолке %4, идущий %5 остался';
+      ChkNameAgainTxt@1000000030 : TextConst 'ENU=an episode left without a name is asked again while it is still running;RUS=эпизод, оставшийся без имени, переспрашивается, пока идёт';
+      NameAgainTxt@1000000031 : TextConst 'ENU=picked the first time %1, picked again after an empty answer %2, in the buffer %3 and %4, expected 2 each;RUS=выбрано в первый раз %1, после пустого ответа %2, в буфере %3 и %4, ожидалось по 2';
+      ChkNameLateTxt@1000000032 : TextConst 'ENU=the attempt count survives the next observation, and a late document reaches the row;RUS=счёт попыток переживает следующий съём, а поздний документ доезжает до строки';
+      NameLateTxt@1000000033 : TextConst 'ENU=attempts after the observation %1 of the expected 1, document "%2", source %3, reason empty;RUS=попыток после съёма %1 при ожидаемой 1, документ "%2", источник %3, причина пуста';
+      ChkNameHeldTxt@1000000034 : TextConst 'ENU=a late empty answer erases nothing, and a named episode is not asked again;RUS=поздний пустой ответ ничего не стирает, а названный эпизод больше не спрашивают';
+      NameHeldTxt@1000000035 : TextConst 'ENU=document "%1", source %2, attempts %3, picked after the late answer %4 of the expected 1, the anonymous one in the buffer %5;RUS=документ "%1", источник %2, попыток %3, выбрано после позднего ответа %4 при ожидаемой 1, безымянный в буфере %5';
+      ChkNameCeilingTxt@1000000036 : TextConst 'ENU=the questions stop at the declared ceiling instead of going on for as long as the episode does;RUS=вопросы прекращаются на объявленном потолке, а не идут столько же, сколько эпизод';
+      NameCeilingTxt@1000000037 : TextConst 'ENU=attempts %1 of the ceiling %2, picked after the ceiling %3 of the expected 0;RUS=попыток %1 при потолке %2, выбран после потолка %3 при ожидаемом 0';
+      ChkMinWaitNewTxt@1000000038 : TextConst 'ENU=a wait shorter than the journal threshold opens no episode;RUS=ожидание короче порога записи не открывает эпизода';
+      MinWaitNewTxt@1000000039 : TextConst 'ENU=threshold %1 ms, wait %2 ms, opened %3, rows in the journal %4;RUS=порог %1 мс, ожидание %2 мс, открыто %3, строк в журнале %4';
+      ChkMinWaitBoundTxt@1000000040 : TextConst 'ENU=a wait equal to the threshold opens the episode;RUS=ожидание, равное порогу, открывает эпизод';
+      MinWaitBoundTxt@1000000041 : TextConst 'ENU=threshold %1 ms, wait %2 ms, opened %3, rows in the journal %4;RUS=порог %1 мс, ожидание %2 мс, открыто %3, строк в журнале %4';
+      ChkMinWaitUpdateTxt@1000000042 : TextConst 'ENU=an open episode is updated below the threshold and is not opened again;RUS=открытый эпизод обновляется и ниже порога, и заново не открывается';
+      MinWaitUpdateTxt@1000000043 : TextConst 'ENU=threshold %1 ms, new wait %2 ms, updated %3, opened %4, stored wait %5;RUS=порог %1 мс, новое ожидание %2 мс, обновлено %3, открыто %4, записанное ожидание %5';
+      ChkMinWaitOffTxt@1000000044 : TextConst 'ENU=a zero threshold writes the shortest wait too;RUS=нулевой порог пишет и самое короткое ожидание';
+      MinWaitOffTxt@1000000045 : TextConst 'ENU=threshold 0, wait %1 ms, opened %2, rows in the journal %3;RUS=порог 0, ожидание %1 мс, открыто %2, строк в журнале %3';
+      NoAnswerTxt@1000000046 : TextConst 'ENU=bench run: the lock hash named no document;RUS=мерный прогон: хэш блокировки не назвал документа';
+      FailedRunErr@1000000047 : TextConst 'ENU=%1;RUS=%1';
+
+    [External]
+    PROCEDURE Bench@1();
+    VAR
+      Passed@1000000048 : Integer;
+      Total@1000000049 : Integer;
+      Report@1000000050 : Text;
+    BEGIN
+      // Мерный прогон судит сам, как и обкатка: цена, которую никто не сравнил с
+      // объявленным потолком, - это не замер, а число в отчёте.
+      RunBench(Passed,Total,Report);
+      Report := STRSUBSTNO(VerdictTxt,Passed,Total) + CrLf + CrLf + Report;
+      IF Passed < Total THEN
+        ERROR(FailedRunErr,Report);
+      MESSAGE(Report);
+    END;
+
+    LOCAL PROCEDURE RunBench@2(VAR Passed@1000000051 : Integer;VAR Total@1000000052 : Integer;VAR Report@1000000053 : Text);
+    VAR
+      Setup@1000000054 : Record 110230;
+      NamePending@1000000055 : TEMPORARY Record 110231;
+      Waiters@1000000056 : Integer;
+      Opened@1000000057 : Integer;
+      Updated@1000000058 : Integer;
+      Closed@1000000059 : Integer;
+      Restarted@1000000060 : Integer;
+      OpenMs@1000000061 : Integer;
+      UpdateMs@1000000062 : Integer;
+      CloseMs@1000000063 : Integer;
+      SweepMs@1000000064 : Integer;
+      Granted@1000000065 : Integer;
+      StillOpen@1000000066 : Integer;
+      Backdated@1000000067 : Integer;
+      Removed@1000000068 : Integer;
+      DeletedByCeiling@1000000069 : Integer;
+      HeldNo@1000000070 : Integer;
+      OldestClosed@1000000071 : Integer;
+      RowsBefore@1000000072 : Integer;
+      NameA@1000000073 : Integer;
+      NameB@1000000074 : Integer;
+      NamePickedFirst@1000000075 : Integer;
+      NamePickedAgain@1000000076 : Integer;
+      NameBufferFirst@1000000077 : Integer;
+      NameBufferAgain@1000000078 : Integer;
+      NameAttemptsA@1000000079 : Integer;
+      NameAttemptsB@1000000080 : Integer;
+      NamePickedAfter@1000000081 : Integer;
+      NamePickedCeiling@1000000082 : Integer;
+      PickedAfter@1000000083 : Integer;
+      Rounds@1000000084 : Integer;
+      RegLongOutcome@1000000085 : Integer;
+      RegShortOutcome@1000000086 : Integer;
+      RegHugeOutcome@1000000087 : Integer;
+      ThrStoredWait@1000000088 : Integer;
+      Worst@1000000089 : Integer;
+      SweepRows@1000000090 : Integer;
+      NameAInBuffer@1000000091 : Boolean;
+      NameBInBuffer@1000000092 : Boolean;
+      ThrFound@1000000093 : Boolean;
+      RegLongGap@1000000094 : Duration;
+      RegHugeGap@1000000095 : Duration;
+      ThrGap@1000000096 : Duration;
+      ThrStarted@1000000097 : DateTime;
+    BEGIN
+      Setup.FetchOnce;
+      IF Setup.Enabled THEN
+        ERROR(EnabledErr);
+      RefuseIfJournalUsed;
+
+      Waiters := Watch.MaxWaitersPerPass;
+
+      // Первым утверждением - что результат ВООБЩЕ не пуст. Число ждущих - константа, а не
+      // результат, и пустой журнал сошёлся бы сам с собой: ноль открытых равен нулю
+      // ожидаемых, ноль строк равно нулю. "Открыто ноль" от "открыто пятьсот" отличается
+      // только этой проверкой.
+      //
+      // Счётчик прохода и число строк в журнале - РАЗНЫЕ величины, и спрашиваются обе.
+      // Счётчик наращивает тот же код, что и вставляет: уйди вставка - он всё равно
+      // скажет "открыто пятьсот", и проверка с одним счётчиком осталась бы зелёной над
+      // пустым журналом. "Ровно по эпизоду на ждущего" - утверждение про строки.
+      OpenMs := PassOfWaiters(Waiters,FirstWaitMs,Opened,Updated,Closed,Restarted);
+      Check(Passed,Total,Report,ChkOpenTxt,
+            (Opened > 0) AND (BenchRowCount > 0) AND (Opened = Waiters) AND (Updated = 0) AND
+            (Closed = 0) AND (BenchRowCount = Waiters),
+            STRSUBSTNO(OpenTxt,Opened,Waiters,Updated,Closed,BenchRowCount));
+
+      // Половина "не плодит новые" держится на числе строк, и она здесь была. Половина
+      // "обновляет" держалась на счётчике - а он растёт и при MODIFY, которого не было:
+      // проход, потерявший запись, отчитался бы о пятистах обновлениях над нетронутыми
+      // строками. Спрашивается поэтому само значение: второе ожидание больше первого, и
+      // доехать оно обязано до КАЖДОЙ строки.
+      UpdateMs := PassOfWaiters(Waiters,SecondWaitMs,Opened,Updated,Closed,Restarted);
+      Check(Passed,Total,Report,ChkUpdateTxt,
+            (Updated = Waiters) AND (Opened = 0) AND (Restarted = 0) AND
+            (BenchRowCount = Waiters) AND (BenchRowsWithWait(SecondWaitMs) = Waiters),
+            STRSUBSTNO(UpdateTxt,Updated,Opened,BenchRowCount,BenchRowsWithWait(SecondWaitMs)));
+
+      CloseMs := PassOfWaiters(0,0,Opened,Updated,Closed,Restarted);
+      CountOutcomes(Granted,StillOpen);
+      Check(Passed,Total,Report,ChkCloseTxt,
+            (Closed = Waiters) AND (Granted = Waiters) AND (StillOpen = 0),
+            STRSUBSTNO(CloseTxt,Closed,Waiters,Granted,StillOpen));
+
+      // Исход считается по настоящему промежутку между последним наблюдением и
+      // закрывающим проходом, а не по периоду из настройки. Долгий промежуток при
+      // коротком ожидании не должен читаться как "предоставлено", короткий промежуток
+      // должен, а месяц и больше не должен переполнять разрядность.
+      RegLongGap := Watch.NavLockTimeoutMs + RegGapSurplusMs;
+      RegLongOutcome := RegEpisode(RegLongVictimSpid,SecondWaitMs,RegLongGap);
+      Check(Passed,Total,Report,ChkCloseGapLongTxt,
+            RegLongOutcome = Watch.OutcomeUnknown,
+            STRSUBSTNO(CloseGapLongTxt,RegLongOutcome,RegLongGap));
+      RegShortOutcome := RegEpisode(RegShortVictimSpid,SecondWaitMs,RegShortAgeMs);
+      Check(Passed,Total,Report,ChkCloseGapShortTxt,
+            RegShortOutcome = Watch.OutcomeGranted,
+            STRSUBSTNO(CloseGapShortTxt,RegShortOutcome,RegShortAgeMs));
+      RegHugeGap := RegHugeGapDays * Watch.MsPerDay;
+      RegHugeOutcome := RegEpisode(RegHugeVictimSpid,SecondWaitMs,RegHugeGap);
+      Check(Passed,Total,Report,ChkCloseGapHugeTxt,
+            RegHugeOutcome = Watch.OutcomeUnknown,
+            STRSUBSTNO(CloseGapHugeTxt,RegHugeOutcome,RegHugeGapDays));
+
+      // Срок хранения удаляет эпизод НАВСЕГДА: журнал - единственное хранилище, и
+      // состаривание идёт правкой поля, а не ожиданием месяца.
+      Backdated := Backdate(BackdateRows,BackdateDays);
+      Removed := Watch.MoveOldEntries(RetentionUnderTest,0,Waiters);
+      Check(Passed,Total,Report,ChkTrimTxt,
+            (Removed = Backdated) AND (Backdated = BackdateRows) AND
+            (BenchRowCount = Waiters - BackdateRows),
+            STRSUBSTNO(TrimTxt,Removed,Backdated,BenchRowCount,Waiters));
+
+      // Второй предел - потолок СТРОК, и нужен он ровно там, где срок бессилен: в шторм
+      // всё, что лежит в журнале, моложе срока, и одним сроком горячую таблицу не удержать.
+      //
+      // Срок здесь передаётся нулём нарочно: проверка обязана мерить потолок, а не то, что
+      // за неё доделал возраст. Потолок ставится НИЖЕ текущего числа строк на известную
+      // величину, и уйти обязано ровно это число - не больше и не меньше.
+      //
+      // Самая старая строка перед этим метится идущей. Она первый кандидат на удаление по
+      // возрасту - и обязана остаться: стереть открытый эпизод значило бы разорвать
+      // наблюдение, а следующий проход, не найдя строки, завёл бы эпизод заново.
+      // Проверка без неё прошла бы и на удалении, которое этого не различает.
+      HeldNo := HoldOldest;
+      RowsBefore := JournalRowCount;
+      OldestClosed := OldestClosedNo;
+      DeletedByCeiling := Watch.MoveOldEntries(0,RowsBefore - CeilingSurplus,Waiters);
+      Check(Passed,Total,Report,ChkCeilingTxt,
+            (DeletedByCeiling = CeilingSurplus) AND
+            (JournalRowCount = RowsBefore - CeilingSurplus) AND
+            (NOT InJournal(OldestClosed)) AND InJournal(HeldNo),
+            STRSUBSTNO(CeilingTxt,DeletedByCeiling,CeilingSurplus,JournalRowCount,
+                       RowsBefore - CeilingSurplus,HeldNo));
+
+      // Строк в уборке - столько, сколько их в журнале ПЕРЕД ней, и число это берётся
+      // счётом, а не вычитанием сцен: сцены меняются, и вычитание тихо устаревает.
+      SweepRows := BenchRowCount;
+      SweepMs := Sweep;
+
+      // Имена. Проверяется на СВОИХ двух эпизодах и на пустом журнале - тот самый миг
+      // после уборки, когда в журнале нет ничего чужого и счёт выбранных строк можно
+      // сравнивать с числом, а не с "примерно столько".
+      //
+      // Смысл всех четырёх: разбор идёт не один раз. Отметку виновник кладёт тогда, когда
+      // трогает таблицу документа, а это бывает и позже начала ожидания; жертва
+      // отмечается, только когда сама что-то пишет. Один вопрос на эпизод оставлял в
+      // журнале пустую колонку там, где ответ появлялся секундой позже.
+      NamePass(NameIndexA,NameIndexB);
+      NameA := EntryOfIndex(NameIndexA);
+      NameB := EntryOfIndex(NameIndexB);
+      // Спрашивается не только ЧИСЛО выбранных, но и сам буфер. Счёт растёт отдельно от
+      // вставки в него: уйди вставка - разбор всё равно ответит "двое", а разбирать
+      // проходу будет нечего, и имена перестанут доезжать до журнала молча.
+      NamePickedFirst := Watch.PickUnresolved(NamePending,Watch.MaxDocumentsPerPass);
+      NameBufferFirst := NamePending.COUNT;
+      Watch.SetDocument(NameA,'',Watch.DocSourceNone,NoAnswerReason);
+      Watch.SetDocument(NameB,'',Watch.DocSourceNone,NoAnswerReason);
+      NamePickedAgain := Watch.PickUnresolved(NamePending,Watch.MaxDocumentsPerPass);
+      NameBufferAgain := NamePending.COUNT;
+      Check(Passed,Total,Report,ChkNameAgainTxt,
+            (NamePickedFirst = NamePickedExpected) AND
+            (NamePickedAgain = NamePickedExpected) AND
+            (NameBufferFirst = NamePickedExpected) AND
+            (NameBufferAgain = NamePickedExpected) AND
+            NamePending.GET(NameA) AND NamePending.GET(NameB),
+            STRSUBSTNO(NameAgainTxt,NamePickedFirst,NamePickedAgain,
+                       NameBufferFirst,NameBufferAgain));
+
+      // Счёт попыток обязан пережить следующий съём: наблюдаемая строка приезжает без
+      // него, и ноль здесь значил бы "не спрашивали ни разу" - то есть вечное
+      // переспрашивание. Поздний документ обязан доехать до строки, а причина, с которой
+      // эпизод жил до него, - очиститься: она была объяснением пустой клетки.
+      NamePass(NameIndexA,NameIndexB);
+      Episode.GET(NameA);
+      NameAttemptsA := Episode."Name Attempts";
+      Watch.SetDocument(NameA,NameDocument,Watch.DocSourceFromHash,'');
+      Episode.GET(NameA);
+      Check(Passed,Total,Report,ChkNameLateTxt,
+            (NameAttemptsA = 1) AND (Episode."Document No." = NameDocument) AND
+            (Episode."Document Source" = Episode."Document Source"::FromHash) AND
+            (Episode."No Document Reason" = ''),
+            STRSUBSTNO(NameLateTxt,NameAttemptsA,Episode."Document No.",
+                       FORMAT(Episode."Document Source",0,0)));
+
+      // Поздний пустой ответ ничего не стирает: документ назван, источник остаётся, а
+      // причина не пишется - у названного эпизода она была бы не объяснением, а
+      // противоречием соседней колонке.
+      Watch.SetDocument(NameA,'',Watch.DocSourceNone,NoAnswerReason);
+      Episode.GET(NameA);
+      NameAttemptsA := Episode."Name Attempts";
+      // Названный эпизод больше не спрашивают: имя виновника и имя жертвы у него уже есть.
+      // Имена ставит проход, а не разбор документа, поэтому здесь они кладутся прямо.
+      Episode."User Name" := NameCulprit;
+      Episode."Victim User Name" := NameVictim;
+      Episode.MODIFY;
+      NamePickedAfter := Watch.PickUnresolved(NamePending,Watch.MaxDocumentsPerPass);
+      NameBInBuffer := NamePending.GET(NameB);
+      NameAInBuffer := NamePending.GET(NameA);
+      Check(Passed,Total,Report,ChkNameHeldTxt,
+            (Episode."Document No." = NameDocument) AND
+            (Episode."Document Source" = Episode."Document Source"::FromHash) AND
+            (Episode."No Document Reason" = '') AND (NameAttemptsA = 3) AND
+            (NamePickedAfter = 1) AND NameBInBuffer AND (NOT NameAInBuffer),
+            STRSUBSTNO(NameHeldTxt,Episode."Document No.",
+                       FORMAT(Episode."Document Source",0,0),NameAttemptsA,
+                       NamePickedAfter,NameBInBuffer));
+
+      // Второй эпизод так и остался без ответа: на нём и проверяется потолок. Без него
+      // вопрос повторялся бы столько же, сколько живёт эпизод, а живёт он и по часу.
+      //
+      // Кругов ровно столько, сколько нужно, чтобы упереться в потолок, и число их - СВОЁ.
+      // Цикл по счётчику проверяемого кода не кончился бы никогда ровно в том случае, ради
+      // которого он написан: сломай SetDocument счёт попыток - и прогон ушёл бы в вечный
+      // цикл вместо красного отчёта. Кончается он и тогда, когда проход перестаёт видеть
+      // эпизод, - а это и есть проверяемое место.
+      Rounds := 0;
+      REPEAT
+        Rounds := Rounds + 1;
+        Watch.SetDocument(NameB,'',Watch.DocSourceNone,NoAnswerReason);
+        PickedAfter := PickNameNow(NameB);
+      UNTIL (PickedAfter = 0) OR (Rounds >= NameAttemptRoundCeiling);
+      Episode.GET(NameB);
+      NameAttemptsB := Episode."Name Attempts";
+      NamePickedCeiling := PickedAfter;
+      Check(Passed,Total,Report,ChkNameCeilingTxt,
+            (NameAttemptsB = Watch.MaxNameAttempts) AND (NamePickedCeiling = 0) AND
+            (Rounds < NameAttemptRoundCeiling),
+            STRSUBSTNO(NameCeilingTxt,NameAttemptsB,Watch.MaxNameAttempts,NamePickedCeiling));
+
+      Sweep;
+
+      // ---------- порог записи в журнал ----------
+      // Четыре сцены, и каждая непустая по-своему: порог, пропускающий короткое; порог,
+      // отвергающий равное себе; порог, мешающий обновлять уже открытое; и ноль, который
+      // обязан открывать всё. Идут они ПОСЛЕ последней уборки: журнал пуст, и число строк
+      // после сцены - это ровно то, что сцена записала.
+      //
+      // Строка, уже открытая, порогом не задета: обновление и закрытие идут своей дорогой.
+      // Проверяется это растущим ожиданием (1200 -> 1500) - счётчик, пошедший назад, был бы
+      // новым эпизодом, и сцена мерила бы не порог, а признак перезапуска.
+      ThrStarted := CURRENTDATETIME;
+      ThrGap := PeriodMs;
+
+      OneWaitPass(ThresholdIndex,FirstWaitMs,MinWaitUnderTest,ThrStarted,Opened,Updated);
+      Check(Passed,Total,Report,ChkMinWaitNewTxt,
+            (Opened = 0) AND (BenchRowCount = 0),
+            STRSUBSTNO(MinWaitNewTxt,MinWaitUnderTest,FirstWaitMs,Opened,BenchRowCount));
+      Sweep;
+
+      OneWaitPass(ThresholdIndex,MinWaitUnderTest,MinWaitUnderTest,ThrStarted,Opened,Updated);
+      Check(Passed,Total,Report,ChkMinWaitBoundTxt,
+            (Opened = 1) AND (BenchRowCount = 1) AND
+            (BenchRowsWithWait(MinWaitUnderTest) = 1),
+            STRSUBSTNO(MinWaitBoundTxt,MinWaitUnderTest,MinWaitUnderTest,Opened,BenchRowCount));
+      Sweep;
+
+      // Первый проход открывает строку без порога, второй приходит с порогом выше нового
+      // ожидания. Обновление обязано случиться: иначе длинный эпизод, пойманный однажды,
+      // пропадал бы на первом же коротком проходе.
+      OneWaitPass(ThresholdIndex,FirstWaitMs,NoMinWait,ThrStarted,Opened,Updated);
+      OneWaitPass(ThresholdIndex,UpdateWaitUnderTest,MinWaitUnderTest,
+                  ThrStarted + ThrGap,Opened,Updated);
+      Episode.RESET;
+      Episode.SETRANGE("Victim SPID",-ThresholdIndex);
+      ThrFound := Episode.FINDFIRST;
+      ThrStoredWait := -1;
+      IF ThrFound THEN
+        ThrStoredWait := Episode."Max Wait (ms)";
+      Check(Passed,Total,Report,ChkMinWaitUpdateTxt,
+            (Updated = 1) AND (Opened = 0) AND ThrFound AND
+            (ThrStoredWait = UpdateWaitUnderTest) AND (BenchRowCount = 1),
+            STRSUBSTNO(MinWaitUpdateTxt,MinWaitUnderTest,UpdateWaitUnderTest,Updated,Opened,ThrStoredWait));
+      Sweep;
+
+      OneWaitPass(ThresholdIndex,TinyWaitUnderTest,NoMinWait,ThrStarted,Opened,Updated);
+      Check(Passed,Total,Report,ChkMinWaitOffTxt,
+            (Opened = 1) AND (BenchRowCount = 1) AND
+            (BenchRowsWithWait(TinyWaitUnderTest) = 1),
+            STRSUBSTNO(MinWaitOffTxt,TinyWaitUnderTest,Opened,BenchRowCount));
+      Sweep;
+
+      Worst := OpenMs;
+      IF UpdateMs > Worst THEN
+        Worst := UpdateMs;
+      IF CloseMs > Worst THEN
+        Worst := CloseMs;
+      // Спрашиваются ОБЕ границы: потолок и пол. Нижняя тут не украшение - замер,
+      // показавший ноль, означает не мгновенный проход, а непрочитанные часы, и проверка
+      // с одним потолком на ноль смотрела бы зелёным.
+      Check(Passed,Total,Report,ChkCostTxt,
+            (Worst <= CeilingMs) AND (Worst >= CostFloorMs),
+            STRSUBSTNO(CostTxt,Worst,CeilingMs,CostFloorMs));
+
+      Report := Report + CrLf +
+        Timing(OpenPhaseTxt,OpenMs,Waiters) +
+        Timing(UpdatePhaseTxt,UpdateMs,Waiters) +
+        Timing(ClosePhaseTxt,CloseMs,Waiters) +
+        Timing(SweepPhaseTxt,SweepMs,SweepRows);
+    END;
+
+    LOCAL PROCEDURE PassOfWaiters@3(Waiters@1000000098 : Integer;
+                                    WaitMs@1000000099 : Integer;
+                                    VAR Opened@1000000100 : Integer;
+                                    VAR Updated@1000000101 : Integer;
+                                    VAR Closed@1000000102 : Integer;
+                                    VAR Restarted@1000000103 : Integer) : Integer;
+    VAR
+      Observed@1000000104 : Record 110231;
+      Started@1000000105 : DateTime;
+      Elapsed@1000000106 : Duration;
+      Index@1000000107 : Integer;
+      Milliseconds@1000000108 : Integer;
+    BEGIN
+      // Меряется ровно то, что делает фоновая задача после съёма: проход целиком, вместе
+      // с COMMIT. Без COMMIT замер был бы вдвое красивее и вдвое бесполезнее - запись в
+      // журнал транзакций и есть то, чем проход платит.
+      Started := CURRENTDATETIME;
+      // Порог записи здесь ноль: замер и его проверки держатся на том, что каждый ждущий
+      // даёт строку. Сам порог проверяется отдельными сценами ниже.
+      Watch.BeginPass(Started,NoMinWait);
+      FOR Index := 1 TO Waiters DO BEGIN
+        MakeObserved(Observed,Index,WaitMs);
+        Watch.Observe(Observed);
+      END;
+      Watch.FinishPass;
+      COMMIT;
+      Elapsed := CURRENTDATETIME - Started;
+      Milliseconds := Elapsed;
+      Watch.PassCounts(Opened,Updated,Closed,Restarted);
+      EXIT(Milliseconds);
+    END;
+
+    LOCAL PROCEDURE OneWaitPass@4(Index@1000000109 : Integer;
+                                  WaitMs@1000000110 : Integer;
+                                  MinWaitMs@1000000111 : Integer;
+                                  ObservedAt@1000000112 : DateTime;
+                                  VAR Opened@1000000113 : Integer;
+                                  VAR Updated@1000000114 : Integer);
+    VAR
+      Observed@1000000115 : Record 110231;
+      Closed@1000000116 : Integer;
+      Restarted@1000000117 : Integer;
+    BEGIN
+      // Один ждущий, один проход: наименьшее, из чего виден порог записи. Счётчики
+      // возвращаются наружу целиком, чтобы проверка спрашивала и открытие, и обновление,
+      // а не одно из двух.
+      Watch.BeginPass(ObservedAt,MinWaitMs);
+      MakeObserved(Observed,Index,WaitMs);
+      Watch.Observe(Observed);
+      Watch.FinishPass;
+      Watch.PassCounts(Opened,Updated,Closed,Restarted);
+    END;
+
+    LOCAL PROCEDURE RegEpisode@5(VictimSpid@1000000118 : Integer;
+                                 WaitMs@1000000119 : Integer;
+                                 AgeMs@1000000120 : Duration) : Integer;
+    VAR
+      Observed@1000000121 : Record 110231;
+      Found@1000000122 : Record 110231;
+      FoundOutcome@1000000123 : Integer;
+    BEGIN
+      // Регрессионный эпизод: открыть, отодвинуть последнее наблюдение на настоящий
+      // промежуток, закрыть проходом и вернуть исход. Строка удаляется, чтобы остальные
+      // проверки видели только своих ожидающих.
+      FoundOutcome := -1;
+      Watch.BeginPass(CURRENTDATETIME,NoMinWait);
+      MakeObserved(Observed,VictimSpid,WaitMs);
+      Watch.Observe(Observed);
+      Watch.FinishPass;
+      COMMIT;
+      Found.RESET;
+      Found.SETRANGE("Victim SPID",-VictimSpid);
+      IF Found.FINDFIRST THEN BEGIN
+        Found."Last Seen At" := CURRENTDATETIME - AgeMs;
+        Found.MODIFY;
+      END;
+      COMMIT;
+      Watch.BeginPass(CURRENTDATETIME,NoMinWait);
+      Watch.FinishPass;
+      COMMIT;
+      Found.RESET;
+      Found.SETRANGE("Victim SPID",-VictimSpid);
+      IF Found.FINDFIRST THEN BEGIN
+        IF Found.Outcome = Found.Outcome::Granted THEN
+          FoundOutcome := Watch.OutcomeGranted
+        ELSE IF Found.Outcome = Found.Outcome::TimedOut THEN
+          FoundOutcome := Watch.OutcomeTimedOut
+        ELSE IF Found.Outcome = Found.Outcome::Deadlocked THEN
+          FoundOutcome := Watch.OutcomeDeadlocked
+        ELSE
+          FoundOutcome := Watch.OutcomeUnknown;
+        Found.DELETE;
+      END;
+      COMMIT;
+      EXIT(FoundOutcome);
+    END;
+
+    LOCAL PROCEDURE MakeObserved@6(VAR Observed@1000000124 : Record 110231;
+                                   Index@1000000125 : Integer;
+                                   WaitMs@1000000126 : Integer);
+    BEGIN
+      // Строка сделана похожей на настоящую не для красоты: цена записи зависит от того,
+      // сколько байт уезжает в SQL, а строковые поля здесь - самые широкие в таблице.
+      // Замер на пустой строке был бы вдвое бодрее того, что случится на бою.
+      Observed.INIT;
+      Observed."Victim SPID" := -Index;
+      Observed."Victim Transaction Id" := ObservedTransactionBase + Index;
+      Observed."Victim Is NAV" := Observed."Victim Is NAV"::Yes;
+      Observed."Blocker SPID" := -Index - 1;
+      Observed."Blocker Transaction Id" := ObservedBlockerTransactionBase + Index;
+      Observed."Resource Kind" := ObservedResourceKind;
+      Observed."Hobt Id" := SampleHobt + Index;
+      Observed."Database Id" := ObservedDatabaseId;
+      Observed."SQL Object Name" := ObservedSqlObjectName;
+      Observed."NAV Table Name" := ObservedTableName;
+      Observed."NAV Key No." := ObservedKeyNo;
+      Observed."Last Wait (ms)" := WaitMs;
+      Observed."Blocker Statement" := ObservedUpdateStatement;
+    END;
+
+    LOCAL PROCEDURE Backdate@7(Rows@1000000127 : Integer;Days@1000000128 : Integer) : Integer;
+    VAR
+      Back@1000000129 : Duration;
+      Done@1000000130 : Integer;
+    BEGIN
+      // Состаривание идёт правкой поля, а не ожиданием месяца.
+      Back := Days * Watch.MsPerDay;
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      IF Episode.FINDSET(TRUE) THEN
+        REPEAT
+          Episode."Started At" := CURRENTDATETIME - Back;
+          Episode.MODIFY;
+          Done := Done + 1;
+        UNTIL (Done >= Rows) OR (Episode.NEXT = 0);
+      COMMIT;
+      EXIT(Done);
+    END;
+
+    LOCAL PROCEDURE Sweep@8() : Integer;
+    VAR
+      Started@1000000131 : DateTime;
+      Elapsed@1000000132 : Duration;
+      Milliseconds@1000000133 : Integer;
+    BEGIN
+      // Уборка за собой обязательна и делается по СВОЕЙ метке: у строк мерного прогона
+      // номер сессии отрицательный, а настоящий spid отрицательным не бывает. Строка,
+      // оставшаяся в журнале после замера, - это ложь в отчёте заказчику.
+      Started := CURRENTDATETIME;
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      Episode.DELETEALL;
+      COMMIT;
+      Elapsed := CURRENTDATETIME - Started;
+      Milliseconds := Elapsed;
+      EXIT(Milliseconds);
+    END;
+
+    LOCAL PROCEDURE RefuseIfJournalUsed@9();
+    VAR
+      Foreign@1000000134 : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'>=%1',0);
+      Foreign := Episode.COUNT;
+      IF Foreign > 0 THEN
+        ERROR(DirtyErr,Foreign);
+      // Свои строки от прошлого прогона, не дожившего до уборки, - не отказ, а мусор.
+      Sweep;
+    END;
+
+    LOCAL PROCEDURE BenchRowCount@10() : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE BenchRowsWithWait@11(WaitMs@1000000135 : Integer) : Integer;
+    BEGIN
+      // Сколько своих строк ДОНЕСЛИ до колонки названное ожидание. Мерка нужна там, где
+      // счётчик прохода отвечает сам за себя: он считает, сколько раз код собирался
+      // обновить строку, а эта - на скольких строках обновление осталось лежать.
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      Episode.SETRANGE("Max Wait (ms)",WaitMs);
+      EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE JournalRowCount@12() : Integer;
+    BEGIN
+      // По ВСЕМУ журналу, а не по своим строкам: потолок меряет размер горячей таблицы, и
+      // мерка обязана считать ту же величину, что и он. Чужих строк здесь и нет - без этого
+      // мерный прогон отказывается идти вовсе (RefuseIfJournalUsed).
+      Episode.RESET;
+      EXIT(Episode.COUNT);
+    END;
+
+    LOCAL PROCEDURE HoldOldest@13() : Integer;
+    VAR
+      Held@1000000136 : Record 110231;
+    BEGIN
+      // Самая старая строка метится ИДУЩЕЙ. Открытый эпизод ведёт текущий проход, и стереть
+      // его значило бы разорвать наблюдение, а следующий проход, не найдя её в журнале,
+      // открыл бы эпизод заново.
+      Held.RESET;
+      Held.SETCURRENTKEY("Started At");
+      Held.FINDFIRST;
+      Held.Open := TRUE;
+      Held.MODIFY;
+      COMMIT;
+      EXIT(Held."Entry No.");
+    END;
+
+    LOCAL PROCEDURE OldestClosedNo@14() : Integer;
+    VAR
+      Row@1000000137 : Record 110231;
+    BEGIN
+      // Та самая строка, которую чистка обязана взять первой: ключ у мерки и у чистки
+      // один, поэтому "первый по ключу" здесь не примерно, а ровно тот же самый. Даты у
+      // строк одного прохода совпадают, и без общего ключа сравнивать было бы нечего.
+      Row.RESET;
+      Row.SETCURRENTKEY("Started At");
+      Row.SETRANGE(Open,FALSE);
+      Row.FINDFIRST;
+      EXIT(Row."Entry No.");
+    END;
+
+    LOCAL PROCEDURE InJournal@15(EntryNo@1000000138 : Integer) : Boolean;
+    VAR
+      Row@1000000139 : Record 110231;
+    BEGIN
+      EXIT(Row.GET(EntryNo));
+    END;
+
+    LOCAL PROCEDURE CountOutcomes@16(VAR Granted@1000000140 : Integer;VAR StillOpen@1000000141 : Integer);
+    BEGIN
+      Episode.RESET;
+      Episode.SETFILTER("Victim SPID",'<%1',0);
+      Episode.SETRANGE(Outcome,Episode.Outcome::Granted);
+      Granted := Episode.COUNT;
+      Episode.SETRANGE(Outcome);
+      Episode.SETRANGE(Open,TRUE);
+      StillOpen := Episode.COUNT;
+    END;
+
+    LOCAL PROCEDURE Check@17(VAR Passed@1000000142 : Integer;
+                             VAR Total@1000000143 : Integer;
+                             VAR Report@1000000144 : Text;
+                             What@1000000145 : Text;
+                             Ok@1000000146 : Boolean;
+                             Detail@1000000147 : Text);
+    VAR
+      Mark@1000000148 : Text;
+    BEGIN
+      Total := Total + 1;
+      IF Ok THEN BEGIN
+        Passed := Passed + 1;
+        Mark := PassedTxt;
+      END ELSE
+        Mark := FailedTxt;
+      Report := Report + Mark + ' ' + What + CrLf + '       ' + Detail + CrLf;
+    END;
+
+    LOCAL PROCEDURE Timing@18(Phase@1000000149 : Text;Milliseconds@1000000150 : Integer;Rows@1000000151 : Integer) : Text;
+    VAR
+      PerRow@1000000152 : Integer;
+      Exact@1000000153 : Decimal;
+    BEGIN
+      // Деление ДРОБНОЕ, а печатается ЦЕЛОЕ - и то, и другое нарочно. Целочисленное деление
+      // отбрасывало бы доли ДО округления, и ROUND рядом стоял бы украшением: отчёт обещал
+      // бы десятые доли, которых в нём не считалось. А показывать десятые доли
+      // микросекунды незачем: таких различий не видно ни на одной машине.
+      IF Rows > 0 THEN BEGIN
+        Exact := Milliseconds * MicrosPerMs;
+        Exact := Exact / Rows;
+        PerRow := ROUND(Exact,PerRowPrecision);
+      END;
+      EXIT(STRSUBSTNO(TimingTxt,Phase,Milliseconds,Rows,PerRow) + CrLf);
+    END;
+
+    LOCAL PROCEDURE NamePass@19(FirstIndex@1000000154 : Integer;SecondIndex@1000000155 : Integer);
+    VAR
+      Observed@1000000156 : Record 110231;
+    BEGIN
+      // Оба ждущих обязаны приходить КАЖДЫМ проходом: FinishPass закрывает эпизод,
+      // которого в проходе не было, а закрытый эпизод не разбирается вовсе.
+      Watch.BeginPass(CURRENTDATETIME,NoMinWait);
+      MakeObserved(Observed,FirstIndex,FirstWaitMs);
+      Watch.Observe(Observed);
+      MakeObserved(Observed,SecondIndex,FirstWaitMs);
+      Watch.Observe(Observed);
+      Watch.FinishPass;
+    END;
+
+    LOCAL PROCEDURE EntryOfIndex@20(Index@1000000157 : Integer) : Integer;
+    BEGIN
+      Episode.RESET;
+      Episode.SETRANGE("Victim SPID",-Index);
+      Episode.FINDFIRST;
+      EXIT(Episode."Entry No.");
+    END;
+
+    LOCAL PROCEDURE PickNameNow@21(EntryNo@1000000158 : Integer) : Integer;
+    VAR
+      Buffer@1000000159 : TEMPORARY Record 110231;
+    BEGIN
+      // Спрашивается не только счёт выбранных, но и сам эпизод: проход мог ответить "взял"
+      // и не положить в буфер ничего. Выбор идёт тем же вызовом, что и в проходе.
+      Watch.PickUnresolved(Buffer,Watch.MaxDocumentsPerPass);
+      IF Buffer.GET(EntryNo) THEN
+        EXIT(1);
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE SqlNamePart@22(Name@1000000160 : Text) : Text;
+    VAR
+      Part@1000000161 : Text;
+      Index@1000000162 : Integer;
+      Ch@1000000163 : Text[1];
+    BEGIN
+      // Имя объекта NAV платформа переводит в имя SQL заменой точки, косой черты,
+      // обратной косой черты и кавычки подчёркиванием (FINDINGS, раздел 5). Вход опыта
+      // обязан собираться тем же переводом, каким его собрала бы платформа.
+      FOR Index := 1 TO STRLEN(Name) DO BEGIN
+        Ch := COPYSTR(Name,Index,1);
+        IF (Ch = '.') OR (Ch = '/') OR (Ch = '\') OR (Ch = '"') THEN
+          Part := Part + '_'
+        ELSE
+          Part := Part + Ch;
+      END;
+      EXIT(Part);
+    END;
+
+    LOCAL PROCEDURE ObservedTableName@23() : Text;
+    VAR
+      RecRef@1000000164 : RecordRef;
+    BEGIN
+      // Настоящее имя таблицы, а не догадка: имя для входа опыта и имя для разбора -
+      // одно и то же, и переименование таблицы не оставит опыт врать о ней.
+      RecRef.OPEN(DATABASE::"Sales Line");
+      EXIT(RecRef.NAME);
+    END;
+
+    LOCAL PROCEDURE ObservedSqlObjectName@24() : Text;
+    BEGIN
+      // Имя таблицы в SQL: <Компания>$<Таблица>. Компания берётся у сессии, а не из
+      // литерала: мерный прогон обязан идти в любой компании стенда.
+      EXIT(SqlNamePart(COMPANYNAME) + SqlObjectSeparator + SqlNamePart(ObservedTableName));
+    END;
+
+    LOCAL PROCEDURE ObservedUpdateStatement@25() : Text;
+    BEGIN
+      // Оператор виновника собирается из того же имени объекта, каким он лежит в SQL.
+      // Имена полей приходят из самого SQL, где точка на конце стала подчёркиванием.
+      EXIT('UPDATE "' + ObservedSqlObjectName + '" SET "' + ObservedFieldQuantity + '" ' +
+           'WHERE "' + ObservedFieldDocumentType + '" AND "' + ObservedFieldDocumentNo + '" ' +
+           'AND "' + ObservedFieldLineNo + '"');
+    END;
+
+    LOCAL PROCEDURE "------- Legal Hardcodes -------"@26();
+    BEGIN
+      // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
+      // Мерный прогон не настраивается - его числа и тексты описывают поставленные
+      // сцены, а не среду установки, - поэтому им место здесь, а не в настройке.
+    END;
+
+    LOCAL PROCEDURE SampleHobt@27() : BigInteger;
+    VAR
+      Value@1000000165 : BigInteger;
+    BEGIN
+      // Числовой литерал в C/AL - это Decimal, а Decimal не переваривает больше
+      // 999 999 999 999 999,99. Настоящий hobt длиннее, и написанный литералом он не
+      // компилируется вовсе. Единственный способ внести его в код - через EVALUATE.
+      EVALUATE(Value,'72057594261667840');
+      EXIT(Value);
+    END;
+
+    LOCAL PROCEDURE CrLf@28() : Text[2];
+    VAR
+      Cr@1000000166 : Char;
+      Lf@1000000167 : Char;
+    BEGIN
+      Cr := 13;
+      Lf := 10;
+      EXIT(FORMAT(Cr) + FORMAT(Lf));
+    END;
+
+    LOCAL PROCEDURE NoMinWait@29() : Integer;
+    BEGIN
+      // Ноль: порога записи нет, открывается всё. Им зовут журнал замер и прежние сцены -
+      // они держатся на том, что каждый ждущий даёт строку. Сам порог проверяется
+      // отдельными сценами ниже.
+      EXIT(0);
+    END;
+
+    LOCAL PROCEDURE CeilingSurplus@30() : Integer;
+    BEGIN
+      // Семь строк сверх потолка. Не десять: состаренных ровно десять, и совпади числа -
+      // подмена одного предела другим прошла бы проверку незамеченной.
+      EXIT(7);
+    END;
+
+    LOCAL PROCEDURE PeriodMs@31() : Integer;
+    BEGIN
+      // Промежуток между двумя проходами сцены порога. Время прохода теперь задаётся
+      // снаружи, и этой сцене важно лишь, что второй миг ОТЛИЧЕН от первого: иначе проход
+      // сочтёт строку своей же - сведёт её с первой и не обновит вовсе.
+      EXIT(3000);
+    END;
+
+    LOCAL PROCEDURE FirstWaitMs@32() : Integer;
+    BEGIN
+      EXIT(1200);
+    END;
+
+    LOCAL PROCEDURE SecondWaitMs@33() : Integer;
+    BEGIN
+      // Больше первого - иначе счётчик ожидания пойдёт назад, и проход честно решит, что
+      // это второй эпизод. Меньше предела NAV на целый период - чтобы исход был "дождался"
+      // и его можно было проверить, а не принять на веру.
+      EXIT(4200);
+    END;
+
+    LOCAL PROCEDURE BackdateRows@34() : Integer;
+    BEGIN
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE BackdateDays@35() : Integer;
+    BEGIN
+      EXIT(45);
+    END;
+
+    LOCAL PROCEDURE RetentionUnderTest@36() : Integer;
+    BEGIN
+      // Меньше состаривания, но больше суток: чистка обязана убрать состаренные и не
+      // тронуть остальные. Проверка на месячном сроке заодно ловит переполнение Integer.
+      EXIT(30);
+    END;
+
+    LOCAL PROCEDURE MinWaitUnderTest@37() : Integer;
+    BEGIN
+      // Две тысячи - умолчание настройки, и сцена берёт его же: проверяется то, что
+      // получит новая установка. Порог заведомо выше первого ожидания замера (1200),
+      // поэтому "короткое не открывает" не проходит на пороге, которого никто не читает.
+      EXIT(2000);
+    END;
+
+    LOCAL PROCEDURE UpdateWaitUnderTest@38() : Integer;
+    BEGIN
+      // Между первым ожиданием замера (1200) и порогом (2000). Ожидание РАСТЁТ, значит
+      // это продолжение эпизода, а не перезапуск, - и всё же остаётся короче порога.
+      // Одно это число и различает "порог не пускает новое" и "порог мешает обновлять".
+      EXIT(1500);
+    END;
+
+    LOCAL PROCEDURE TinyWaitUnderTest@39() : Integer;
+    BEGIN
+      // Одна миллисекунда - самое короткое ожидание, которое вообще бывает: нулевое в
+      // очередь не попадает, и проверка на нём ничего бы не сказала.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE ThresholdIndex@40() : Integer;
+    BEGIN
+      // Далеко за числом ждущих основного замера и за индексами проверки имён: строки
+      // порога не должны попасть ни под чей счёт. Свои строки сцена убирает после каждой
+      // проверки, поэтому одного индекса на все четыре хватает.
+      EXIT(911);
+    END;
+
+    LOCAL PROCEDURE NameIndexA@41() : Integer;
+    BEGIN
+      // Далеко за числом ждущих основного замера: строки проверки имён не должны попасть
+      // ни под один его счёт, а метка "своей" строки - отрицательный номер сессии - у них
+      // та же, и уборка заберёт их вместе со всеми.
+      EXIT(901);
+    END;
+
+    LOCAL PROCEDURE NameIndexB@42() : Integer;
+    BEGIN
+      EXIT(902);
+    END;
+
+    LOCAL PROCEDURE NameCulprit@43() : Code[50];
+    BEGIN
+      EXIT('BENCH-CULPRIT');
+    END;
+
+    LOCAL PROCEDURE NameVictim@44() : Code[50];
+    BEGIN
+      EXIT('BENCH-VICTIM');
+    END;
+
+    LOCAL PROCEDURE NameDocument@45() : Code[20];
+    BEGIN
+      EXIT('BENCH-DOC');
+    END;
+
+    LOCAL PROCEDURE NoAnswerReason@46() : Text;
+    BEGIN
+      // Причина обязана быть НЕПУСТОЙ: пустая означает "ещё не спрашивали", и проверка
+      // мерила бы тогда не то, что собиралась. И двуязычной, как прочие слова: прогон идёт
+      // на службе, язык которой не наш, и русская строка из кода легла бы в колонку
+      // журнала рядом с английской подписью.
+      EXIT(NoAnswerTxt);
+    END;
+
+    LOCAL PROCEDURE NamePickedExpected@47() : Integer;
+    BEGIN
+      // В проверке имён заводятся ровно два своих эпизода, и оба обязаны быть выбраны.
+      EXIT(2);
+    END;
+
+    LOCAL PROCEDURE CeilingMs@48() : Integer;
+    BEGIN
+      // Потолок прохода из умолчаний настройки. Съём с DMV стоит 12 мс при двухстах
+      // ждущих, значит потолок принадлежит NAV-половине почти целиком. Число берётся
+      // здесь, а не из настройки: поднятая на стенде настройка обесценила бы проверку.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE CostFloorMs@49() : Integer;
+    BEGIN
+      // Десять миллисекунд - и это не украшение рядом с потолком. ЧАСЫ C/AL считают
+      // миллисекундами, и замер, показавший ноль, означает не мгновенный проход, а
+      // непрочитанное время: проверка с одним потолком смотрела бы на такое зелёным.
+      //
+      // Пол взят с запасом в восемь раз против самого дешёвого из трёх проходов на стенде
+      // (закрытие стоило 88 мс): об медленную машину он краснеть не должен, а на ноль и на
+      // единицу - обязан.
+      EXIT(10);
+    END;
+
+    LOCAL PROCEDURE NameAttemptRoundCeiling@50() : Integer;
+    BEGIN
+      // Потолок КРУГОВ самого прогона, и он не меньше потолка попыток. Кругов на деле
+      // нужно на один меньше: последний SetDocument доводит счёт до потолка, и проход
+      // перестаёт видеть эпизод. Запас в один круг нужен затем, чтобы сорвавшийся счёт
+      // попыток остановился по СВОЕМУ счёту, а не по проверяемому.
+      EXIT(Watch.MaxNameAttempts);
+    END;
+
+    LOCAL PROCEDURE SqlObjectSeparator@51() : Text[1];
+    BEGIN
+      // Разделитель частей имени объекта SQL. Он один и тот же у платформы на всякой
+      // установке, и другой такой величины быть не может.
+      EXIT('$');
+    END;
+
+    LOCAL PROCEDURE ObservedTransactionBase@52() : Decimal;
+    BEGIN
+      // База номера транзакции в мерной строке. Настоящий номер на два порядка меньше,
+      // и столкнуться с живой транзакцией такая строка не может.
+      EXIT(4000000000);
+    END;
+
+    LOCAL PROCEDURE ObservedBlockerTransactionBase@53() : Decimal;
+    BEGIN
+      // База номера транзакции блокирующего: на тысячу выше базы жертвы, чтобы стороны
+      // спора различались даже при одном и том же индексе строки.
+      EXIT(5000000000);
+    END;
+
+    LOCAL PROCEDURE ObservedKeyNo@54() : Integer;
+    BEGIN
+      // Ключ штатной таблицы строк заказа. Он же кладётся в эпизод, и проверки сверяют
+      // его как имя ключа, а не как число.
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE ObservedDatabaseId@55() : Integer;
+    BEGIN
+      // Номер базы из живой строки ожидания: в описании ресурса он стоит в dbid.
+      EXIT(7);
+    END;
+
+    LOCAL PROCEDURE ObservedResourceKind@56() : Text;
+    BEGIN
+      // Род ресурса в поле эпизода. Слово платформы; в журнале оно хранится так, как
+      // пришло из снятой строки, и разбор на него не опирается.
+      EXIT('KEYLOCK');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldQuantity@57() : Text;
+    BEGIN
+      // Имя поля в SQL. Поле "Quantity" точки в имени не несёт, поэтому совпадает
+      // с именем NAV.
+      EXIT('Quantity');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldDocumentType@58() : Text;
+    BEGIN
+      // Поле NAV "Document Type" в SQL: пробел сохраняется, точка не появляется.
+      EXIT('Document Type');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldDocumentNo@59() : Text;
+    BEGIN
+      // Поле NAV "Document No." в SQL кончается подчёркиванием: точка на конце имени
+      // платформой заменяется, и имя поля без неё не нашлось бы.
+      EXIT('Document No_');
+    END;
+
+    LOCAL PROCEDURE ObservedFieldLineNo@60() : Text;
+    BEGIN
+      // Поле NAV "Line No." в SQL - по тому же правилу, что и номер документа.
+      EXIT('Line No_');
+    END;
+
+    LOCAL PROCEDURE RegGapSurplusMs@61() : Integer;
+    BEGIN
+      // Запас сверх предела ожидания NAV: промежуток заведомо перекрывает предел, и
+      // исход обязан быть "неизвестно", а не "предоставлено".
+      EXIT(2000);
+    END;
+
+    LOCAL PROCEDURE RegShortAgeMs@62() : Integer;
+    BEGIN
+      // Короткое состаривание предыдущего наблюдения: промежуток короче периода, и
+      // исход обязан остаться "предоставлено".
+      EXIT(100);
+    END;
+
+    LOCAL PROCEDURE RegHugeGapDays@63() : Integer;
+    BEGIN
+      // Месяц с лишним. В миллисекундах это больше предела Integer, и в целых числах
+      // промежуток обернулся бы отрицательным - проверка ловит именно это.
+      EXIT(31);
+    END;
+
+    LOCAL PROCEDURE RegLongVictimSpid@64() : Integer;
+    BEGIN
+      // Номер жертвы регрессионного эпизода. Настоящий spid положителен, и с чужой
+      // строкой такой не столкнётся: метка своя у каждой сцены.
+      EXIT(901);
+    END;
+
+    LOCAL PROCEDURE RegShortVictimSpid@65() : Integer;
+    BEGIN
+      // Второй spid регрессионной сцены: сцена своя, и отметка у неё своя.
+      EXIT(902);
+    END;
+
+    LOCAL PROCEDURE RegHugeVictimSpid@66() : Integer;
+    BEGIN
+      // Третий spid регрессионной сцены: сцена своя, и отметка у неё своя.
+      EXIT(903);
+    END;
+
+    LOCAL PROCEDURE MicrosPerMs@67() : Decimal;
+    BEGIN
+      // Миллисекунда - это тысяча микросекунд. Единица измерения, а не настройка.
+      EXIT(1000.0);
+    END;
+
+    LOCAL PROCEDURE PerRowPrecision@68() : Integer;
+    BEGIN
+      // Один знак после запятой у микросекунд на строку: десятые доли микросекунды не
+      // видны ни на одной машине, а целое число выдавало бы мнимую точность.
+      EXIT(1);
+    END;
+
+    BEGIN
+    {
+      Мерный прогон NAV-половины прохода - той самой, что дольше всех жила на обещании
+      "не тормозит". Ожиданий на стенде он не устраивает вовсе: на вход журналу подаются
+      разобранные строки очереди, поэтому мерить можно сколько угодно и когда угодно.
+
+      Меряются три прохода по 500 строк - ровно потолок, объявленный в разборе:
+      все открываются, все обновляются, все закрываются. Каждый - с COMMIT, потому что
+      без него замер вдвое красивее и вдвое бесполезнее.
+
+      Проверок семнадцать (счёт на 04.11.2026), и каждая ловит свою ошибку:
+        открытие   - что эпизод заводится на ждущего, а не на наблюдение;
+        обновление - что второй проход НЕ плодит строки (иначе в шторм журнал растёт
+                     на полтысячи строк каждые три секунды, и это заметят по диску);
+        закрытие   - что ушедший из очереди закрывается и получает исход, а не остаётся
+                     открытым навсегда;
+        промежуток - что исход считается по настоящему промежутку между проходами, а не
+                     по заданному периоду: остановленная цепочка не должна выдавать
+                     долгое ожидание за "предоставлено", а месяц с лишним - переполнять
+                     разрядность;
+        срок       - что хранение убирает состаренные и не переполняется на месяце;
+        потолок    - что журнал опускается до объявленного числа строк, старшие уходят
+                     первыми, а идущий эпизод остаётся;
+        имена      - что эпизод переспрашивается, пока идёт, что счёт попыток переживает
+                     съём, что поздний пустой ответ ничего не стирает и что вопросы
+                     прекращаются на объявленном потолке;
+        порог      - что короткое ожидание не открывает эпизода, равное порогу открывает,
+                     уже открытый эпизод обновляется и ниже порога, а ноль пишет всё;
+        цена       - что NAV-половина прохода укладывается между полом и потолком.
+
+      Мерный прогон работает только на пустом журнале и только при выключенном стороже:
+      его собственный проход закрыл бы чужие открытые эпизоды, а чистка по сроку удалила
+      бы чужие старые. Обе беды тихие, поэтому прогон на них не надеется, а отказывается.
+
+      Свои строки метятся отрицательным номером сессии - настоящий spid отрицательным не
+      бывает. По этой же метке идёт уборка, и она идёт всегда, даже если прогон падал.
+
+      Замерено на стенде 07.09.2026, шесть прогонов, по 500 строк на проход:
+        открытие   338-441 мс (0,7-0,9 мс на строку),
+        обновление 229-314 мс,
+        закрытие    88-169 мс,
+        уборка       2-15 мс.
+      Худший проход - 441 мс при потолке 1000. Это и есть цена NAV-половины в шторм: при
+      периоде 3000 мс она занимает около седьмой части времени, и потолок держится с
+      запасом вдвое с лишним. Дороже всего открытие - вставка с полной шириной строки.
+      Разброс между прогонами до пятой части: стенд делит машину с SQL, и точнее здесь не
+      бывает. Обещать "не тормозит" можно, обещать конкретные миллисекунды - нет.
+
+      Проверено поломкой 07.09.2026, обе поломки красят ровно то, что должны:
+        снятый отбор по сроку в чистке журнала - сцена срока краснеет: чистка вынесла бы
+          месяц наблюдений за один проход;
+        опознание эпизода ВМЕСТЕ с длительностью (лишний отбор по последней наблюдённой) -
+          второй проход не находит свою же строку и заводит ещё полтысячи: сцена
+          обновления краснеет числом строк в журнале.
+
+      Проверено поломкой 11.09.2026: ломалось ровно то, что проверки спрашивают
+      СЧЁТЧИКОМ, а не строкой. Каждая поломка оставляет счётчик прохода верным, и условия
+      на одних счётчиках зелены целиком:
+        строка ждущего не пишется, а считается - открытие краснеет числом строк в журнале;
+        новое ожидание не доезжает до колонки - обновление краснеет числом строк с новым
+        ожиданием. Потому обе сцены и спрашивают строки рядом со счётчиками.
+
+      Ещё три места приведены в правду без смены числа проверок: у цены появился ПОЛ
+      (замер в ноль проходил зелёным), мкс на строку считаются дробно (целое деление с
+      ROUND выдавало мнимую точность), а строк в уборке отчёт берёт счётом, а не
+      вычитанием сцен - вычитание тихо устарело на 483 против 473.
+    }
+    END.
+  }
+}

@@ -1,4 +1,4 @@
-OBJECT Codeunit 110235 LockWatch Task
+OBJECT Codeunit 110232 LockWatch Task
 {
   OBJECT-PROPERTIES
   {
@@ -18,16 +18,16 @@ OBJECT Codeunit 110235 LockWatch Task
   {
     VAR
       Setup@1000000000 : Record 110230;
-      Watchdog@1000000007 : Record 110237;
-      Parse@1000000006 : Codeunit 110230;
-      NoSchedulerErr@1000000001 : TextConst 'ENU=The platform will not let this session create a scheduled task (TASKSCHEDULER.CANCREATETASK says no). Measured separately - this answer is not about the EnableTaskScheduler key.;RUS=Платформа не даёт этой сессии завести запланированную задачу (TASKSCHEDULER.CANCREATETASK отвечает "нет"). Замерено отдельно - с ключом EnableTaskScheduler этот ответ не связан.';
-      StartedTxt@1000000002 : TextConst 'ENU=The watch is armed, the first pass is due shortly.;RUS=Сторож заведён, первый проход вот-вот.';
-      HealthMsg@1000000009 : TextConst 'ENU=LOCKWATCH-HEALTH %1;RUS=LOCKWATCH-HEALTH %1';
-      QuietTxt@1000000010 : TextConst 'ENU=the chain goes, the last pass is fresh;RUS=цепочка идёт, последний проход свежий';
-      StoppedTxt@1000000003 : TextConst 'ENU=The watch is stopped by hand.;RUS=Сторож остановлен вручную.';
-      DisabledTxt@1000000004 : TextConst 'ENU=The watch is switched off in the setup, the chain of passes ends here.;RUS=Сторож выключен в настройке, цепочка проходов на этом кончается.';
-      PassFailedTxt@1000000005 : TextConst 'ENU=The pass fell over and was picked up by the task: %1;RUS=Проход упал и был подхвачен задачей: %1';
-      SupersededTxt@1000000008 : TextConst 'ENU=The chain was armed anew while this pass was running: this pass does not re-arm itself, the new chain carries on.;RUS=Цепочку завели заново, пока шёл этот проход: он себя не перевзводит, наблюдение продолжает новая цепочка.';
+      Watchdog@1000000001 : Record 110233;
+      Watch@1000000002 : Codeunit 110230;
+      NoSchedulerErr@1000000003 : TextConst 'ENU=The platform will not let this session create a scheduled task (TASKSCHEDULER.CANCREATETASK says no). Measured separately - this answer is not about the EnableTaskScheduler key.;RUS=Платформа не даёт этой сессии завести запланированную задачу (TASKSCHEDULER.CANCREATETASK отвечает "нет"). Замерено отдельно - с ключом EnableTaskScheduler этот ответ не связан.';
+      StartedTxt@1000000004 : TextConst 'ENU=The watch is armed, the first pass is due shortly.;RUS=Сторож заведён, первый проход вот-вот.';
+      HealthMsg@1000000005 : TextConst 'ENU=LOCKWATCH-HEALTH %1;RUS=LOCKWATCH-HEALTH %1';
+      QuietTxt@1000000006 : TextConst 'ENU=the chain goes, the last pass is fresh;RUS=цепочка идёт, последний проход свежий';
+      StoppedTxt@1000000007 : TextConst 'ENU=The watch is stopped by hand.;RUS=Сторож остановлен вручную.';
+      DisabledTxt@1000000008 : TextConst 'ENU=The watch is switched off in the setup, the chain of passes ends here.;RUS=Сторож выключен в настройке, цепочка проходов на этом кончается.';
+      PassFailedTxt@1000000009 : TextConst 'ENU=The pass fell over and was picked up by the task: %1;RUS=Проход упал и был подхвачен задачей: %1';
+      SupersededTxt@1000000010 : TextConst 'ENU=The chain was armed anew while this pass was running: this pass does not re-arm itself, the new chain carries on.;RUS=Цепочку завели заново, пока шёл этот проход: он себя не перевзводит, наблюдение продолжает новая цепочка.';
 
     [External]
     PROCEDURE StartWatch@1();
@@ -94,20 +94,18 @@ OBJECT Codeunit 110235 LockWatch Task
 
     [External]
     PROCEDURE RunOnce@3();
-    VAR
-      Pass@1000000000 : Codeunit 110234;
     BEGIN
       // Вручную - напрямую и БЕЗ перехвата: человек, нажавший кнопку, должен увидеть
       // отказ окном, а не вычитать его потом из сообщения сторожа.
-      Pass.RunPass;
+      Watch.RunPass;
     END;
 
     [External]
     PROCEDURE RefreshContextNames@12() : Integer;
     VAR
-      ContextTable@1000000000 : Record 110232;
-      Before@1000000001 : Text;
-      Changed@1000000002 : Integer;
+      ContextTable@1000000011 : Record 110232;
+      Before@1000000012 : Text;
+      Changed@1000000013 : Integer;
     BEGIN
       // Перечитать имена таблиц и полей по номерам. Нужно ровно там, где строку завели
       // мимо экрана, и ещё там, где таблицу или поле переименовали: в настройке осталось
@@ -135,17 +133,17 @@ OBJECT Codeunit 110235 LockWatch Task
       // Третьим идёт часы ТОЙ сессии, из которой спрашивают, и это осознанно: страница
       // судит о свежести прохода здесь и сейчас, а других часов у неё нет. Расходятся они
       // с отметкой прохода только у читателя из чужого пояса - довод и его цена названы в
-      // Parse.WatchSilentNote.
+      // Watch.WatchSilentNote.
       Setup.FetchOnce;
       IF NOT Watchdog.GET THEN
         Watchdog.INIT;
-      EXIT(Parse.WatchSilentNote(Setup.Enabled,Watchdog."Last Pass At",CURRENTDATETIME,Setup."Poll Period (ms)"));
+      EXIT(Watch.WatchSilentNote(Setup.Enabled,Watchdog."Last Pass At",CURRENTDATETIME,Setup."Poll Period (ms)"));
     END;
 
     [External]
     PROCEDURE SayHealth@14();
     VAR
-      Note@1000000000 : Text;
+      Note@1000000014 : Text;
     BEGIN
       // Зовёт это прогон: страницу он не открывает, а спросить обязан то же самое.
       // Молчание говорится СЛОВОМ: пустой ответ снаружи не отличить от "вызов не дошёл".
@@ -158,7 +156,7 @@ OBJECT Codeunit 110235 LockWatch Task
     [External]
     PROCEDURE ScheduledCount@4() : Integer;
     VAR
-      ScheduledTask@1000000000 : Record 2000000175;
+      ScheduledTask@1000000015 : Record 2000000175;
     BEGIN
       ScheduledTask.SETRANGE("Run Codeunit",CODEUNIT::"LockWatch Task");
       ScheduledTask.SETRANGE(Company,COMPANYNAME);
@@ -167,14 +165,14 @@ OBJECT Codeunit 110235 LockWatch Task
 
     LOCAL PROCEDURE RunAndReschedule@5();
     VAR
-      Generation@1000000000 : Integer;
-      PassOk@1000000011 : Boolean;
-      PassError@1000000012 : Text;
+      Generation@1000000016 : Integer;
+      PassOk@1000000017 : Boolean;
+      PassError@1000000018 : Text;
     BEGIN
       Setup.FetchOnce;
       // Задача пишет свои слова тем же языком, что и проход: сообщение "сторож выключен",
       // пришедшее по-английски в русский журнал, выглядит чужим - и им и является.
-      Parse.UseJournalLanguage(Setup."Journal Language ID");
+      Watch.UseJournalLanguage(Setup."Journal Language ID");
       IF NOT Setup.Enabled THEN BEGIN
         // Выключатель сняли между проходами. Цепочка обрывается сама и говорит об этом:
         // сторож, замолчавший без объяснения, неотличим от сторожа, который умер.
@@ -196,7 +194,7 @@ OBJECT Codeunit 110235 LockWatch Task
       // предела ожидания NAV, проход срывается по-настоящему, сторож пишет "проход упал
       // и был подхвачен задачей", и проходы идут дальше. Снять перехват - и цепочка
       // умирает молча: ни слова в журнале сторожа, ни задачи в планировщике.
-      PassOk := CODEUNIT.RUN(CODEUNIT::"LockWatch Pass");
+      PassOk := CODEUNIT.RUN(CODEUNIT::"LockWatch Watch");
       IF NOT PassOk THEN
         // Текст ошибки берётся СРАЗУ: первый же следующий отказ его перезапишет (а отказы
         // тут возможны - хотя бы от того же перезавода), и слову об упавшем проходе нужен
@@ -215,10 +213,10 @@ OBJECT Codeunit 110235 LockWatch Task
         NoteFailure(PassError);
     END;
 
-    LOCAL PROCEDURE Reschedule@6(Generation@1000000002 : Integer);
+    LOCAL PROCEDURE Reschedule@6(Generation@1000000019 : Integer);
     VAR
-      DelayMs@1000000000 : Integer;
-      Floor@1000000001 : Integer;
+      DelayMs@1000000020 : Integer;
+      Floor@1000000021 : Integer;
     BEGIN
       // Обратная связь работает на РАЗРЕЖЕНИЕ, а не на учащение. Правило простое и
       // проверяемое: наблюдатель не берёт себе больше одной десятой времени. Если проход
@@ -259,9 +257,9 @@ OBJECT Codeunit 110235 LockWatch Task
       Schedule(DelayMs);
     END;
 
-    LOCAL PROCEDURE Schedule@7(DelayMs@1000000000 : Integer);
+    LOCAL PROCEDURE Schedule@7(DelayMs@1000000022 : Integer);
     VAR
-      Delay@1000000001 : Duration;
+      Delay@1000000023 : Duration;
     BEGIN
       // Отказ планировщика говорится СЛОВАМИ, а не молчанием. Молчаливый выход отсюда
       // обрывает цепочку: следующего прохода не будет, ставить его нечем, и сказать об
@@ -279,8 +277,8 @@ OBJECT Codeunit 110235 LockWatch Task
 
     LOCAL PROCEDURE CancelOurTasks@8() : Integer;
     VAR
-      ScheduledTask@1000000000 : Record 2000000175;
-      Cancelled@1000000001 : Integer;
+      ScheduledTask@1000000024 : Record 2000000175;
+      Cancelled@1000000025 : Integer;
     BEGIN
       // Таблица задач общая на базу (DataPerCompany No), поэтому отбор идёт и по компании:
       // снять чужую задачу той же компании нельзя, а снять свою в другой компании - тем более.
@@ -297,7 +295,7 @@ OBJECT Codeunit 110235 LockWatch Task
     END;
 
     [TryFunction]
-    LOCAL PROCEDURE NoteFailure@9(ErrorText@1000000000 : Text);
+    LOCAL PROCEDURE NoteFailure@9(ErrorText@1000000026 : Text);
     BEGIN
       // Запись идёт в TRY-функции, и это не перестраховка. Слово об упавшем проходе - это
       // такая же запись в таблицу, как всё остальное, и отказать она может наравне с ней:
@@ -305,7 +303,7 @@ OBJECT Codeunit 110235 LockWatch Task
       // Откажи она обычным порядком - упала бы ЗАДАЧА, а с ней и цепочка проходов: беда,
       // о которой писали, осталась бы несказанной и вдобавок оборвала наблюдение. Молчание
       // здесь - меньшее из зол, и оно не единственное: о мёртвой цепочке вслух говорит
-      // сторож тишины (Parse.WatchSilentNote) - по факту, а не по причине.
+      // сторож тишины (Watch.WatchSilentNote) - по факту, а не по причине.
       //
       // Обрезает длинный текст ошибки сама таблица состояния: у неё это поле, ей и знать
       // его длину. Здесь бы пришлось повторять MAXSTRLEN чужого поля.

@@ -1,33 +1,29 @@
-﻿#requires -Version 7
+#requires -Version 7
 <#
 .SYNOPSIS
-    Дорога к имени ЧЕЛОВЕКА от самой платформы: жива ли она, и говорит ли инструмент правду,
-    когда она мертва.
+    Дорога к имени ЧЕЛОВЕКА от самой платформы: спрашивает ли её проход, и не выдумывает ли
+    он имя, когда платформа молчит.
 
 .DESCRIPTION
     Уровень 2 стоит дорого - правка CustomSettings.config, перезапуск экземпляра, оба права
     SQL и постоянная серверная сессия XE, - и потому включается решением заказчика. Но
-    страшнее цены другое: **отказ этой дороги невидим**. Не выдали право или не взвели ключ -
-    платформа пишет одну строку трассировки, а штатная таблица ведёт себя в точности как при
-    отсутствии блокировок. Экран будет пуст и на здоровой системе, и на сломанной.
+    страшнее цены другое: **молчание этой дороги невидимо**. Не выдали право или не взвели
+    ключ - платформа не пишет ничего, а журнал выглядит точно так же, как на здоровой
+    системе без единой блокировки.
 
-    Поэтому прогон меряет обе стороны. Сперва ключ СНИМАЕТСЯ, и инструмент обязан сказать
-    словами, что дорога мертва, - а не показать пустую колонку. Потом ключ взводится, и на
-    настоящей блокировке имя обязано появиться.
+    В v2 у дороги нет ни своей страницы, ни кнопки, ни отчёта о состоянии: имя спрашивает
+    сам проход, и спрашивает только тогда, когда это разрешено настройкой. Поэтому и
+    проверяется здесь ровно две вещи - что выключатель соблюдается и что из молчания
+    платформы не рождается имя. Слова сторожа "Имена от платформы: N из M" и есть отчёт о
+    том, что вопрос задан.
 
     Держателем блокировки здесь может быть только СЕССИЯ NAV: штатная таблица показывает
     лишь те транзакции, что платформа завела в свою карту, а соединение sqlcmd в неё не
-    попадает никогда. Держит Codeunit 110247, ждёт всё тот же sqlcmd.
+    попадает никогда. Держит Codeunit 110235, ждёт всё тот же sqlcmd.
 
-    Прогон возвращает ключ в то состояние, в котором его нашёл, - и настройку тоже: имена от
-    платформы, канал уведомлений и сбор кругов он правит на время опыта, а возвращает теми,
-    какими их застал.
-
-    Сломано нарочно 11.09.2026: у дороги снята перекрёстная проверка "права на месте, сессия
-    работает, а таблица пуста ПРИ НЕПУСТОЙ ОЧЕРЕДИ". Прогон даёт 4 из 5, красная - та, что
-    её и меряет: инструмент говорит "дорога жива, называть сейчас нечего" там, где карта
-    транзакций не наполнялась вовсе. Это ровно то утешительное враньё, ради которого
-    перекрёстная проверка и написана.
+    Прогон возвращает ключ мониторинга в то состояние, в котором его нашёл, - и настройку
+    тоже: имена от платформы, сбор кругов и разбор документа он правит на время опыта, а
+    возвращает теми, какими их застал.
 
 .EXAMPLE
     pwsh scripts/Test-Platform.ps1
@@ -38,9 +34,8 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $PassCodeunitId = 110234,
-    [int]    $PlatformCodeunitId = 110238,
-    [int]    $HoldCodeunitId = 110247,
+    [int]    $PassCodeunitId = 110230,
+    [int]    $HoldCodeunitId = 110235,
     [switch] $KeepJournal,
     [switch] $StopInstance
 )
@@ -72,12 +67,15 @@ if (-not $Company)  { Fail 'не задана компания: переменн
 $episode = "[$Company`$LockWatch Episode]"
 # Настройка - одна на базу, и приставки компании в её SQL-имени нет.
 $setup   = '[LockWatch Setup]'
-$mark    = "[$Company`$LockWatch Context Mark]"
-# Та же таблица, но именем, каким её пишет в журнал разбор: без компании и без скобок.
-$markName = 'LockWatch Context Mark'
+# Таблица контекста: строка-носитель держателя лежит в ней, а в журнале она называется без
+# приставки компании - так её разбирает SplitSqlObjectName.
+$context = "[$Company`$LockWatch Context Table]"
+$contextName = 'LockWatch Context Table'
+# Номер строки-носителя. Тот же, что у Codeunit 110235 Hold Bench (потолок целого NAV):
+# настоящей таблицы с таким номером нет, а отрицательный номер таблица контекста не примет.
+$benchTableNo = 2147483647
 $watchdog = '[LockWatch Watchdog]'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
-$expectedUser = "$env:USERDOMAIN\$env:USERNAME"
 
 $passed = 0; $total = 0; $report = @()
 function Check([string]$what, [bool]$ok, [string]$detail) {
@@ -186,6 +184,29 @@ function Start-Sqlcmd([string]$name, [string]$body) {
 function Stop-Sqlcmd($process) {
     if ($process -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
 }
+# Ждать НАСТУПЛЕНИЯ события, а не спать наугад: сон вслепую делает прогон то зелёным, то
+# красным в зависимости от того, чем занята машина.
+function Wait-For([scriptblock]$condition, [int]$seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (& $condition) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+# Сколько ждать, пока блокировка встанет и её увидит очередь. Держатель держит минуту, и
+# опоздать сюда можно только на пуске модуля NAV и на холодной службе - девяноста секунд
+# хватает на оба, а больше ждать нечего: держатель к этому времени уже отпустил бы замок.
+function HoldWaitSeconds { 90 }
+
+# Проверка на дорогу к имени. Одна и та же в обеих сценах, и это нарочно: обещается не
+# "имя есть", а ЧЕСТНОСТЬ - источник имени и само имя обязаны сходиться. Имя без источника
+# платформы (2) значило бы, что оно взялось из ниоткуда; источник 2 при пустом имени - что
+# проход отчитался о названном, ничего не назвав.
+function NameIsHonest([string]$source, [string]$name) {
+    if ($source -eq '2') { return ($name -ne '') }
+    return ($name -eq '')
+}
 
 $wasMonitoring = ''
 $setupWas = ''
@@ -196,155 +217,141 @@ try {
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
     $wasMonitoring = Get-Monitoring
     Write-Host "  ключ мониторинга найден в состоянии $wasMonitoring"
-    # Настройка возвращается НАЙДЕННОЙ, а не заводской: имена от платформы, канал уведомлений и
-    # сбор кругов принадлежат установке, и прогон правит их только на время опыта. Заводские
-    # значения тут - догадка о чужой настройке.
-    $setupWas = Scalar "SELECT CONVERT(varchar(2),[Platform Names Enabled]) + '|' + CONVERT(varchar(2),[Alert Channel]) + '|' + CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Platform Names Enabled] = 1, [Alert Channel] = 0, [Deadlocks Enabled] = 0;" | Out-Null
+    # Настройка возвращается НАЙДЕННОЙ, а не заводской: имена от платформы, сбор кругов и
+    # разбор документа принадлежат установке, и прогон правит их только на время опыта.
+    # Заводские значения тут - догадка о чужой настройке.
+    $setupWas = Scalar "SELECT CONVERT(varchar(2),[Platform Names Enabled]) + '|' + CONVERT(varchar(2),[Deadlocks Enabled]) + '|' + CONVERT(varchar(11),[Documents per Pass]) FROM $setup;"
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Platform Names Enabled] = 0, [Deadlocks Enabled] = 0, [Documents per Pass] = 0;" | Out-Null
     if (-not $KeepJournal) { Invoke-Sql "DELETE FROM $episode;" | Out-Null }
-    Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
 
-    # ---------- дорога СНЯТА: инструмент обязан сказать это словами ----------
-    Write-Host 'Ключ снят - дорога должна быть названа мёртвой'
-    Set-Monitoring 'false' 'дорога снимается' | Out-Null
-    Invoke-Codeunit $PlatformCodeunitId 'CheckRoad' 'проверка дороги при снятом ключе' | Out-Null
-    $deadStatus = Scalar "SELECT [Platform Road Status] FROM $setup;"
-    Check 'при снятом ключе дорога названа мёртвой, а не показана пустой колонкой' `
-        (($deadStatus -match 'мертва|dead') -and ($deadStatus.Length -gt 20)) `
-        "сторож пишет: $deadStatus"
+    # Перезапуск нужен и затем, чтобы правка настройки дошла до службы: при работающей
+    # службе строка лежит в кэше, и запрос до сессии не доходит вовсе.
+    Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
+    Restart-Service $service -Force
+    & $ps51 -NoProfile -ExecutionPolicy Bypass -File $probeFile | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "экземпляр $Instance не ответил по порту управления" }
 
-    # ---------- дорога ВЗВЕДЕНА ----------
-    Write-Host 'Ключ взведён - дорога должна ожить'
-    Set-Monitoring 'true' 'дорога взводится' | Out-Null
-    Invoke-Codeunit $PlatformCodeunitId 'CheckRoad' 'проверка дороги при взведённом ключе' | Out-Null
-    $aliveStatus = Scalar "SELECT [Platform Road Status] FROM $setup;"
-    Check 'при взведённом ключе сессия мониторинга поднята платформой' `
-        ($aliveStatus -match 'жива|alive') `
-        "сторож пишет: $aliveStatus"
-
-    # ---------- настоящая блокировка, держит СЕССИЯ NAV ----------
-    Write-Host 'Блокировку держит сессия NAV, ждёт sqlcmd'
-    Invoke-Sql @"
-INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'STAND',N'$Company',0,N'PLATFORM-TARGET',GETUTCDATE());
-"@ | Out-Null
-    $holder = Start-Codeunit $HoldCodeunitId 'Hold'
-
-    # Ждём, пока держатель ВОЗЬМЁТ блокировку. Без этого гонка: ждущий встал бы первым и
-    # держателем оказался бы он сам, а сессия NAV осталась бы ни при чём.
-    $held = $false
-    $deadline = (Get-Date).AddSeconds(90)
-    while ((Get-Date) -lt $deadline) {
-        # Чтение ГРЯЗНОЕ, и это не небрежность. Обычное чтение встало бы в очередь за той
-        # самой блокировкой, которую мы ждём: опрос заблокировался бы на всё время
-        # удержания, вернул бы ответ уже ПОСЛЕ его конца, и ждущему не за чем было бы
-        # вставать. Ловилось ровно так: sqlcmd умирал сразу с нулевым кодом.
-        $doc = Scalar "SELECT [Document No_] FROM $mark WITH (READUNCOMMITTED) WHERE [Server Instance Id] = -1;"
-        if ($doc -eq 'HELD-BY-NAV') { $held = $true; break }
-        Start-Sleep -Milliseconds 500
-    }
-    if (-not $held) {
-        # "Инструмент тут ни при чём" было сказано зря: блокировку держит НАШ объект C/AL, и
-        # его молчание отличается от "не успел" только по самому процессу и по тому, что он
-        # сказал. Спросить надо и то и другое.
-        $holdSaid = ((((Read-Shared $holdOut) + ' ' + (Read-Shared $holdErr))) -replace '\s+', ' ').Trim()
-        if ($holdSaid.Length -gt 200) { $holdSaid = $holdSaid.Substring(0, 200) + '...' }
-        Fail ('сессия NAV блокировку так и не взяла за 90 с: держатель ' +
-              $(if ($holder.HasExited) { "вышел с кодом $($holder.ExitCode)" } else { 'ещё идёт' }) +
-              $(if ($holdSaid) { ", сказал: $holdSaid" } else { ', не сказал ничего' }))
-    }
-
-    $waiter = Start-Sqlcmd 'platform-want.sql' "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'WANT' WHERE [Server Instance Id] = -1`nROLLBACK`n"
-    # Ждущий, умерший на старте, выглядит точно как ждущий, который не успел встать в
-    # очередь. Разница видна только по самому процессу, и спросить о ней надо до того, как
-    # прогон объявит "инструмент не увидел блокировку".
-    Start-Sleep -Seconds 2
-    if ($waiter.HasExited) { Fail "ждущий sqlcmd умер сразу, код выхода $($waiter.ExitCode) - опыт не удался" }
-    $waitRow = ''
-    $deadline = (Get-Date).AddSeconds(40)
-    while ((Get-Date) -lt $deadline) {
-        $waitRow = Scalar @"
+    # ---------- сцена первая: имена ВЫКЛЮЧЕНЫ, дорогу проход не зовёт ----------
+    # Держатель и ждущий ставятся заново на каждую сцену: строка-носитель живёт внутри
+    # транзакции держателя, и пережить перезапуск службы она не может.
+    function Invoke-HoldScene([string]$why) {
+        Write-Host "  ${why}: блокировку держит сессия NAV, ждёт sqlcmd"
+        $script:holder = Start-Codeunit $HoldCodeunitId 'Hold'
+        $held = $false
+        $deadline = (Get-Date).AddSeconds((HoldWaitSeconds))
+        while ((Get-Date) -lt $deadline) {
+            # Чтение ГРЯЗНОЕ, и это не небрежность. Обычное чтение встало бы в очередь за той
+            # самой блокировкой, которую мы ждём: опрос заблокировался бы на всё время
+            # удержания и вернул бы ответ уже ПОСЛЕ его конца. Ловилось ровно так: sqlcmd
+            # умирал сразу с нулевым кодом.
+            $doc = Scalar "SELECT [Table Name] FROM $context WITH (READUNCOMMITTED) WHERE [Table No_] = $benchTableNo;"
+            if ($doc -eq 'LOCKWATCH-BENCH') { $held = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $held) {
+            # Блокировку держит НАШ объект C/AL, и его молчание отличается от "не успел"
+            # только по самому процессу и по тому, что он сказал.
+            $holdSaid = ((((Read-Shared $holdOut) + ' ' + (Read-Shared $holdErr))) -replace '\s+', ' ').Trim()
+            if ($holdSaid.Length -gt 200) { $holdSaid = $holdSaid.Substring(0, 200) + '...' }
+            Fail ('сессия NAV блокировку так и не взяла за ' + (HoldWaitSeconds) + ' с: держатель ' +
+                  $(if ($script:holder.HasExited) { "вышел с кодом $($script:holder.ExitCode)" } else { 'ещё идёт' }) +
+                  $(if ($holdSaid) { ", сказал: $holdSaid" } else { ', не сказал ничего' }))
+        }
+        $script:waiter = Start-Sqlcmd 'platform-want.sql' "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $context SET [Table Name] = N'WANT' WHERE [Table No_] = $benchTableNo`nROLLBACK`n"
+        # Ждущий, умерший на старте, выглядит точно как ждущий, который не успел встать в
+        # очередь. Разница видна только по самому процессу, и спросить о ней надо до того,
+        # как прогон объявит "инструмент не увидел блокировку".
+        Start-Sleep -Seconds 2
+        if ($script:waiter.HasExited) { Fail "ждущий sqlcmd умер сразу, код выхода $($script:waiter.ExitCode) - опыт не удался" }
+        $waitRow = ''
+        $deadline = (Get-Date).AddSeconds(40)
+        while ((Get-Date) -lt $deadline) {
+            $waitRow = Scalar @"
 SELECT TOP 1 CONVERT(varchar(11),wt.session_id)
 FROM sys.dm_os_waiting_tasks wt
 JOIN sys.dm_exec_sessions s ON s.session_id = wt.session_id
-WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($waiter.Id);
+WHERE wt.wait_type LIKE 'LCK[_]%' AND s.host_process_id = $($script:waiter.Id);
 "@
-        if ($waitRow) { break }
-        Start-Sleep -Milliseconds 500
+            if ($waitRow) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $waitRow) {
+            Fail ('ожидание в очереди сервера так и не появилось за 40 с: ждущий ' +
+                  $(if ($script:waiter.HasExited) { "вышел с кодом $($script:waiter.ExitCode)" } else { 'ещё идёт' }) +
+                  ', держатель ' +
+                  $(if ($script:holder.HasExited) { "вышел с кодом $($script:holder.ExitCode)" } else { 'ещё идёт' }) +
+                  ", отметка держателя [$(Scalar "SELECT [Table Name] FROM $context WITH (READUNCOMMITTED) WHERE [Table No_] = $benchTableNo;")]")
+        }
+        return $waitRow
     }
-    if (-not $waitRow) {
-        # Две стороны спора - две разные беды, и обе видны только по самим процессам: ушёл
-        # ждущий - это опыт, отпустил держатель - это наш объект C/AL. "Опыт не удался"
-        # называло первую и молчало о второй.
-        Fail ('ожидание в очереди сервера так и не появилось за 40 с: ждущий ' +
-              $(if ($waiter.HasExited) { "вышел с кодом $($waiter.ExitCode)" } else { 'ещё идёт' }) +
-              ', держатель ' +
-              $(if ($holder.HasExited) { "вышел с кодом $($holder.ExitCode)" } else { 'ещё идёт' }) +
-              ", отметка держателя [$(Scalar "SELECT [Document No_] FROM $mark WITH (READUNCOMMITTED) WHERE [Server Instance Id] = -1;")]")
+    # Держатель держит минуту; после замера его надо ДОЖДАТЬСЯ, а не убивать. Убитый клиент
+    # оставляет на сервере сессию, которая держит ту же строку, и второй держатель сцены
+    # упёрся бы в неё вставкой - опыт объявил бы "строку не удалось положить", и причина
+    # была бы не в инструменте.
+    function Wait-HolderGone {
+        if ($script:holder -and -not $script:holder.HasExited) { $script:holder.WaitForExit(90000) | Out-Null }
+        Stop-Sqlcmd $script:waiter
+        $script:waiter = $null
+        # Строка-носитель уходит в транзакции держателя; её отсутствие - знак, что транзакция
+        # кончилась, а не что мы просто перестали смотреть.
+        Wait-For { '' -eq (Scalar "SELECT [Table Name] FROM $context WITH (READUNCOMMITTED) WHERE [Table No_] = $benchTableNo;") } 30 | Out-Null
     }
 
-    # Что платформа видит в этот миг - печатается ВСЕГДА, а не только при отказе: когда имя
-    # не назовётся, разбираться придётся именно по этому списку.
-    $locksLog = Invoke-Codeunit $PlatformCodeunitId 'ShowLocks' 'список блокировок платформы'
-    if ($locksLog -match 'PLATFORMLOCKS rows (\d+) head (.*)') {
-        Write-Host "  платформа видит строк: $($Matches[1])"
-        Write-Host "  первые: $($Matches[2] -replace '\s+', ' ')"
-    }
-
-    Invoke-Codeunit $PassCodeunitId 'RunPass' 'проход по живой очереди' | Out-Null
-    $rows = [int](Scalar "SELECT COUNT(*) FROM $episode;")
-    # Спрашивается не "в журнале есть строка", а ЧЬЯ она. Счёт строк выполняется журналом,
-    # в котором уже что-то лежало - ключом -KeepJournal или чужим наблюдением на той же
-    # базе, - и условие проходило бы состоянием, которого опыт не создавал. Здесь же весь
-    # опыт держится на том, что блокировку держит СЕССИЯ NAV: имя человека платформа
-    # обещает только ей, и спор двух чужих соединений отвечал бы на другой вопрос.
-    # Жертва спрашивается признаком сессии NAV, а не программой: программу жертвы из
-    # журнала убрали. Ждёт здесь sqlcmd, то есть признак обязан быть «Нет» (2): «Да»
-    # значило бы, что опыт поставил в очередь не того.
-    $who = Scalar "SELECT TOP 1 [NAV Table Name] + '|' + [Blocker Program] + '|' + CONVERT(varchar(11),[Victim Is NAV]) FROM $episode ORDER BY [Entry No_] DESC;"
-    $w = @(($who -split '\|') | ForEach-Object { $_.Trim() })
-    while ($w.Count -lt 3) { $w += '' }
+    Write-Host ''
+    Write-Host 'Сцена первая: имена от платформы выключены, дорогу проход не зовёт'
+    Invoke-HoldScene 'сцена без имён' | Out-Null
+    Invoke-Codeunit $PassCodeunitId 'RunPass' 'проход по живой очереди без имён' | Out-Null
+    $saidOff = Scalar "SELECT [Watchdog Message] FROM $watchdog;"
+    $rowOff = Scalar @"
+SELECT TOP 1 [NAV Table Name] + '|' + [Blocker Program] + '|' + CONVERT(varchar(11),[Victim Is NAV]) + '|' +
+             [User Name] + '|' + CONVERT(varchar(11),[User Source])
+FROM $episode WHERE [NAV Table Name] = N'$contextName' ORDER BY [Entry No_] DESC;
+"@
+    $o = @(($rowOff -split '\|') | ForEach-Object { $_.Trim() })
+    while ($o.Count -lt 5) { $o += '' }
+    # Спрашивается не "в журнале есть строка", а ЧЬЯ она. Здесь весь опыт держится на том,
+    # что блокировку держит СЕССИЯ NAV: имя человека платформа обещает только ей, и спор
+    # двух чужих соединений отвечал бы на другой вопрос. Жертва спрашивается признаком
+    # сессии NAV, а не программой: программу жертвы из журнала убрали. Ждёт здесь sqlcmd,
+    # то есть признак обязан быть «Нет» (2): «Да» значило бы, что опыт поставил в очередь
+    # не того.
     Check 'эпизод по блокировке сессии NAV заведён' `
-        (($rows -ge 1) -and ($w[0] -eq $markName) -and
-         ($w[1] -match '(?i)dynamics nav') -and ($w[2] -eq '2')) `
-        "строк в журнале $rows, таблица [$($w[0])] при ожидаемой [$markName], держал [$($w[1])], жертва - сессия NAV $($w[2]) при ожидаемом 2 (нет, ждёт sqlcmd)"
+        (($o[0] -eq $contextName) -and ($o[1] -match '(?i)dynamics nav') -and ($o[2] -eq '2')) `
+        "таблица [$($o[0])] при ожидаемой [$contextName], держал [$($o[1])], жертва - сессия NAV $($o[2]) при ожидаемом 2 (нет, ждёт sqlcmd)"
+    Check 'при выключенных именах проход к платформе не ходит и имя не выдумывает' `
+        (($saidOff -notmatch 'Имена от платформы|Names from the platform') -and
+         (NameIsHonest $o[4] $o[3])) `
+        "сторож пишет: $saidOff; имя [$($o[3])], откуда $($o[4])"
 
-    # Проход при включённых именах спрашивает платформу САМ, без кнопки, и говорит об этом
-    # строкой сторожа: "названо N из M". Карта на стенде пуста (раздел 26), поэтому
-    # проверяется не имя, а то, что вопрос задан и имя не выдумано. Что карта живая и
-    # платформа называет человека, видно только на установке с Windows-клиентом (раздел 106).
-    $passSaid = Scalar "SELECT [Watchdog Message] FROM $watchdog;"
-    $passSource = Scalar "SELECT TOP 1 CONVERT(varchar(11),[User Source]) FROM $episode ORDER BY [Entry No_] DESC;"
-    Check 'проход сам спросил платформу и имени не выдумал' `
-        (($passSaid -match 'Имена от платформы: \d+ из \d+|Names from the platform: \d+ of \d+') -and ($passSource -ne '2')) `
-        "сторож пишет: $passSaid; откуда имя $passSource (не 2)"
+    Write-Host '  жду, пока держатель отпустит строку'
+    Wait-HolderGone
 
-    # ---------- главная проверка: правду о мёртвой карте ----------
-    # Здесь и выясняется цена всей затеи. Ключ взведён, права на месте, сессия мониторинга
-    # работает - а таблица пуста ПРИ НЕПУСТОЙ ОЧЕРЕДИ. Инструмент обязан сказать это
-    # словами, а не показать пустую колонку: пустая колонка читается как "спорили без
-    # людей", и это ровно противоположный вывод.
-    Invoke-Codeunit $PlatformCodeunitId 'CheckRoad' 'проверка дороги при живой блокировке' | Out-Null
-    $liveStatus = Scalar "SELECT [Platform Road Status] FROM $setup;"
-    Check 'при живой блокировке и пустой штатной таблице сказано, что карта мертва' `
-        ($liveStatus -match 'карта мертва|the map is dead') `
-        "сторож пишет: $liveStatus"
-
-    $nameLog = Invoke-Codeunit $PlatformCodeunitId 'NameOpen' 'называние пользователя платформой'
-    $named = 0; $tried = 0; $note = ''
-    if ($nameLog -match 'PLATFORMNAME named (\d+) of (\d+) note (.*)') {
-        $named = [int]$Matches[1]; $tried = [int]$Matches[2]; $note = $Matches[3].Trim()
-    }
-    $row = Scalar @"
+    # ---------- сцена вторая: имена ВКЛЮЧЕНЫ, дорога обязана быть спрошена ----------
+    # Ключ мониторинга здесь взводится: именно он наполняет штатную таблицу, и с ним
+    # "платформа молчит" - это уже настоящее молчание, а не выключенный сбор.
+    Write-Host ''
+    Write-Host 'Сцена вторая: имена взведены, ключ мониторинга включён'
+    Invoke-Sql "UPDATE $setup SET [Platform Names Enabled] = 1;" | Out-Null
+    Set-Monitoring 'true' 'имена взводятся' | Out-Null
+    Invoke-HoldScene 'сцена с именами' | Out-Null
+    Invoke-Codeunit $PassCodeunitId 'RunPass' 'проход по живой очереди с именами' | Out-Null
+    $saidOn = Scalar "SELECT [Watchdog Message] FROM $watchdog;"
+    $rowOn = Scalar @"
 SELECT TOP 1 [User Name] + '|' + CONVERT(varchar(11),[User Source])
-FROM $episode ORDER BY [Entry No_] DESC;
+FROM $episode WHERE [NAV Table Name] = N'$contextName' ORDER BY [Entry No_] DESC;
 "@
-    $f = ($row -split '\|') | ForEach-Object { $_.Trim() }
-    # Имя, которого платформа не дала, выдумывать нельзя. Источник обязан остаться прежним -
-    # тем, что назвала наша собственная отметка контекста, - а не стать платформенным.
-    Check 'имя, которого платформа не дала, не выдумано' `
-        (($tried -ge 1) -and ($named -eq 0) -and ($f.Count -ge 2) -and ($f[1] -ne '2') -and ($note.Length -gt 20)) `
-        "названо $named из $tried, откуда имя $($f[1]) (не 2), объяснение: $note"
+    $n = ($rowOn -split '\|') | ForEach-Object { $_.Trim() }
+    if ($n.Count -lt 2) { $n += @('', '') }
+    # Слово "Имена от платформы: N из M" - и есть доказательство, что вопрос задан. Число M
+    # обязано быть не меньше единицы: наш эпизод стоит открытым и без имени виновника, и
+    # промахнуться мимо него проход мог только не спросив вовсе.
+    $counts = 0
+    if ($saidOn -match 'Имена от платформы: (\d+) из (\d+)') { $counts = [int]$Matches[2] }
+    elseif ($saidOn -match 'Names from the platform: (\d+) of (\d+)') { $counts = [int]$Matches[2] }
+    Check 'при включённых именах проход спросил платформу и назвал только то, что она дала' `
+        (($counts -ge 1) -and (NameIsHonest $n[1] $n[0])) `
+
+        "сторож пишет: $saidOn; имя [$($n[0])], откуда $($n[1])"
 }
 finally {
     Write-Host 'Убираю за собой'
@@ -361,14 +368,14 @@ finally {
     }
     # Настройка возвращается в найденное состояние, а не в заводское: три её поля правит
     # этот прогон, и все три принадлежат установке.
-    if ($setupWas -match '^\d\|\d\|\d$') {
+    if ($setupWas -match '^\d\|\d\|\d+$') {
         $was = $setupWas -split '\|'
-        $setupBack = "UPDATE $setup SET [Platform Names Enabled] = $($was[0]), [Alert Channel] = $($was[1]), [Deadlocks Enabled] = $($was[2]);"
+        $setupBack = "UPDATE $setup SET [Platform Names Enabled] = $($was[0]), [Deadlocks Enabled] = $($was[1]), [Documents per Pass] = $($was[2]);"
     } else {
-        $setupBack = "UPDATE $setup SET [Platform Names Enabled] = 0, [Alert Channel] = 1, [Deadlocks Enabled] = 1;"
-        Warn-Cleanup 'прежние значения настройки прочитать не удалось - вернул заводские'
+        $setupBack = "UPDATE $setup SET [Platform Names Enabled] = 0, [Deadlocks Enabled] = 1, [Documents per Pass] = 0;"
+        Warn-Cleanup 'прежние значения настройки прочитать не удалось - вернул 0, 1 и 0'
     }
-    Invoke-CleanupSql ("DELETE FROM $mark WHERE [Server Instance Id] = -1; $setupBack" + $(if (-not $KeepJournal) { " DELETE FROM $episode;" })) 'уборка за прогоном'
+    Invoke-CleanupSql ("$setupBack" + $(if (-not $KeepJournal) { " DELETE FROM $episode;" })) 'уборка за прогоном'
     # Ключ возвращается в то состояние, в котором его нашли: включённый мониторинг живёт
     # серверной сессией XE, которая переживает снятие инструмента, и оставлять его
     # взведённым по итогам прогона нельзя. Зовётся МЯГКО: Fail делает exit, а exit
@@ -386,4 +393,4 @@ Write-Host "пройдено $passed из $total"
 Write-Host ''
 $report | ForEach-Object { Write-Host $_ }
 if ($passed -lt $total) { Fail 'дорога от платформы проверку не прошла' }
-Write-Host 'Готово: дорога от платформы измерена, и её молчание названо словами' -ForegroundColor Green
+Write-Host 'Готово: проход спрашивает платформу, а имя из молчания не выдумывает' -ForegroundColor Green

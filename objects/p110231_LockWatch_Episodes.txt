@@ -20,12 +20,9 @@ OBJECT Page 110231 LockWatch Episodes
                     ORDER(Descending);
     PageType=List;
     RefreshOnActivate=Yes;
-    OnOpenPage=BEGIN
-                 ReadAlertThreshold;
-               END;
-
     OnAfterGetRecord=BEGIN
-                       SetStyle;
+                       BlockerText := COPYSTR(Watch.StatementText("Entry No.",TRUE),1,PreviewChars);
+                       VictimText := COPYSTR(Watch.StatementText("Entry No.",FALSE),1,PreviewChars);
                      END;
 
     ActionList=ACTIONS
@@ -79,133 +76,6 @@ OBJECT Page 110231 LockWatch Episodes
                                  CurrPage.UPDATE(FALSE);
                                END;
                                 }
-      { 60      ;1   ;Action    ;
-                      Name=OpenHistory;
-                      CaptionML=[ENU=History;
-                                 RUS=История];
-                      ToolTipML=[ENU=Open the history: episodes older than the term from the setup move there and stay until they pass the history retention. Zero in the retention means keep forever, and after the update it is zero - the history is never deleted silently.;
-                                 RUS=Открыть историю: эпизоды старше срока из настройки переезжают туда и остаются, пока не станут старше срока хранения истории. Ноль в сроке хранения означает бессрочно, и после обновления он ноль: история не стирается молча.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      PromotedIsBig=Yes;
-                      Image=History;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 PAGE.RUN(PAGE::"LockWatch Episode History");
-                               END;
-                                }
-      { 44      ;1   ;Action    ;
-                      Name=OpenSummary;
-                      CaptionML=[ENU=Summary;
-                                 RUS=Сводка];
-                      ToolTipML=[ENU=Open the summary: which tables and keys waited, and for how long. A storm of five hundred rows is one trouble there, not five hundred.;
-                                 RUS=Открыть сводку: какие таблицы и ключи ждали и на сколько. Шторм из пятисот строк там - одна беда, а не пятьсот.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      PromotedIsBig=Yes;
-                      Image=StatisticsDocument;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 PAGE.RUN(PAGE::"LockWatch Summary");
-                               END;
-                                }
-      { 50      ;1   ;Action    ;
-                      Name=ShowBlockerStatement;
-                      CaptionML=[ENU=Culprit Statement;
-                                 RUS=Запрос виновника];
-                      ToolTipML=[ENU=Open the statement the culprit sent last before it took the lock. It is kept in the journal in full, so it can be copied out and run.;
-                                 RUS=Открыть оператор, который виновник послал последним перед тем, как взял блокировку. В журнале он лежит целиком, и его можно скопировать и выполнить.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      Image=ViewDetails;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 ShowStatement(TRUE);
-                               END;
-                                }
-      { 51      ;1   ;Action    ;
-                      Name=ShowVictimStatement;
-                      CaptionML=[ENU=Victim Statement;
-                                 RUS=Запрос жертвы];
-                      ToolTipML=[ENU=Open the statement the victim was waiting on. It is the operation a human saw stall, and it is kept in the journal in full.;
-                                 RUS=Открыть оператор, на котором стояла жертва. Это та самая операция, которую человек увидел зависшей, и в журнале она лежит целиком.];
-                      ApplicationArea=#All;
-                      Image=ViewDetails;
-                      OnAction=BEGIN
-                                 ShowStatement(FALSE);
-                               END;
-                                }
-      { 49      ;1   ;Action    ;
-                      Name=NameOpenUsers;
-                      CaptionML=[ENU=Name Everyone Waiting;
-                                 RUS=Назвать всех идущих];
-                      ToolTipML=[ENU=Ask the platform who is behind every wait going on right now. The standard table is read once per episode, which is not cheap - but the episodes going on are few, and the button is pressed by hand while someone is already sorting it out.;
-                                 RUS=Спросить у платформы, кто стоит за каждым идущим сейчас ожиданием. Штатная таблица читается по разу на эпизод, и это недёшево - но идущих эпизодов единицы, а кнопку жмут руками и тогда, когда уже разбираются.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      Image=Users;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 Platform.NameOpen;
-                                 CurrPage.UPDATE(FALSE);
-                               END;
-                                }
-      { 52      ;1   ;Action    ;
-                      Name=ShowPlatformLocks;
-                      CaptionML=[ENU=What the Platform Sees;
-                                 RUS=Что видит платформа];
-                      ToolTipML=[ENU=Show the standard lock table as the platform sees it right now. It is needed exactly when a name did not come back: an empty table and a table without the transaction in question are two different troubles, and they are cured differently.;
-                                 RUS=Показать штатную таблицу блокировок такой, какой её видит платформа сейчас. Нужно это ровно тогда, когда имя не назвалось: пустая таблица и таблица, где нет нужной транзакции, - две разные беды, и лечатся они по-разному.];
-                      ApplicationArea=#All;
-                      Image=ViewDetails;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 Platform.ShowLocks;
-                               END;
-                                }
-      { 47      ;1   ;Action    ;
-                      Name=NamePlatformUser;
-                      CaptionML=[ENU=Name the User;
-                                 RUS=Назвать пользователя];
-                      ToolTipML=[ENU=Ask the platform who is behind this lock. It reads the standard table, and that table materialises every lock of the instance on any read - so it is done by this button, on one episode, and never in the background pass.;
-                                 RUS=Спросить у платформы, кто стоит за этой блокировкой. Читается штатная таблица, а она при любом чтении материализует все блокировки экземпляра - поэтому только по этой кнопке, на один эпизод, и никогда в фоновом проходе.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      PromotedIsBig=Yes;
-                      Image=User;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 NamePlatformUser;
-                               END;
-                                }
-      { 46      ;1   ;Action    ;
-                      Name=OpenAlerts;
-                      CaptionML=[ENU=Alerts;
-                                 RUS=Уведомления];
-                      ToolTipML=[ENU=Open the alerts: one row per head of a chain, not per episode. A hundred alerts is not an alert but noise, and the latch is what keeps them apart.;
-                                 RUS=Открыть уведомления: строка на голову цепочки, а не на эпизод. Сотня уведомлений - это не уведомление, а шум, и держит их порознь защёлка.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      Image=Alerts;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 PAGE.RUN(PAGE::"LockWatch Alerts");
-                               END;
-                                }
-      { 45      ;1   ;Action    ;
-                      Name=OpenCoverage;
-                      CaptionML=[ENU=Coverage;
-                                 RUS=Охват];
-                      ToolTipML=[ENU=Open the coverage: how much of the waiting this journal can put a name to at all. A wait shorter than the poll period is invisible here by design.;
-                                 RUS=Открыть охват: какой доле ожидания этот журнал вообще может дать имя. Ожидание короче периода опроса тут не видно по устройству.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      Image=Completed;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 PAGE.RUN(PAGE::"LockWatch Coverage");
-                               END;
-                                }
       { 43      ;1   ;Action    ;
                       Name=OpenSetup;
                       CaptionML=[ENU=Setup;
@@ -239,10 +109,9 @@ OBJECT Page 110231 LockWatch Episodes
 
     { 4   ;2   ;Field     ;
                 Name=MaxWait;
-                ToolTipML=[ENU=Specifies how long the wait lasted, in milliseconds. The number comes from the server counter and not from the difference of two observations. It is coloured once it crosses the alert threshold from the setup.;
-                           RUS=Определяет, сколько ожидание длилось, в миллисекундах. Число взято у счётчика сервера, а не из разницы двух наблюдений. Красится, как только переваливает порог уведомления из настройки.];
+                ToolTipML=[ENU=Specifies how long the wait lasted, in milliseconds. The number comes from the server counter and not from the difference of two observations.;
+                           RUS=Определяет, сколько ожидание длилось, в миллисекундах. Число взято у счётчика сервера, а не из разницы двух наблюдений.];
                 ApplicationArea=#All;
-                StyleExpr=WaitStyle;
                 SourceExpr="Max Wait (ms)" }
 
     { 5   ;2   ;Field     ;
@@ -259,19 +128,7 @@ OBJECT Page 110231 LockWatch Episodes
                 ApplicationArea=#All;
                 SourceExpr=Outcome }
 
-    { 7   ;2   ;Field     ;
-                Name=Class;
-                ToolTipML=[ENU=Specifies what kind of trouble this is. The classes are cured differently: an escalation by the size of the batch, a forgotten transaction by a phone call, a plain row fight by code or by a key.;
-                           RUS=Определяет, что это за беда. Классы лечатся по-разному: эскалация - размером пачки, забытая транзакция - звонком, обычный спор за строку - кодом или ключом.];
-                ApplicationArea=#All;
-                SourceExpr=Class }
 
-    { 29  ;2   ;Field     ;
-                Name=Advice;
-                ToolTipML=[ENU=Specifies what to do about it. The advice follows from what is already known about the episode and adds nothing of its own: where nothing can be said, it is empty rather than polite.;
-                           RUS=Определяет, что с этим делать. Совет следует из того, что об эпизоде уже известно, и ничего от себя не добавляет: где сказать нечего, он пуст, а не вежлив.];
-                ApplicationArea=#All;
-                SourceExpr=Advice }
 
     { 8   ;2   ;Field     ;
                 Name=NAVTableName;
@@ -282,22 +139,16 @@ OBJECT Page 110231 LockWatch Episodes
 
     { 11  ;2   ;Field     ;
                 Name=DocumentNo;
-                ToolTipML=[ENU=Specifies the document the fight is over: the contended row read back by the lock hash, or - when that road stays silent - the one from the culprit's context mark. The column after this one names the road that answered, and the next explains an empty cell.;
-                           RUS=Определяет документ, ЗА КОТОРЫЙ идёт спор: спорная строка, поднятая обратным поиском по хэшу блокировки, а если та дорога промолчала - документ из отметки виновника. Следующая колонка называет ответившую дорогу, а за ней стоит причина пустой клетки.];
+                ToolTipML=[ENU=Specifies the document the fight is over: the contended row read back by the lock hash. An empty cell is not a failure - the row may sit in a table that is not listed among the context tables, or the lock may not be a key one - and the reason is stored with the episode.;
+                           RUS=Определяет документ, ЗА КОТОРЫЙ идёт спор: спорная строка, поднятая обратным поиском по хэшу блокировки. Пустая клетка - не сбой: строка может лежать в таблице, которой нет в списке таблиц контекста, или блокировка может быть не строчной, - и причина хранится вместе с эпизодом.];
                 ApplicationArea=#All;
                 SourceExpr="Document No." }
 
-    { 63  ;2   ;Field     ;
-                Name=CulpritDocumentNo;
-                ToolTipML=[ENU=Specifies what the CULPRIT is busy with: the last document its own transaction touched, taken from the context mark. A different question from the Document No. column - the fight is over one row, and a culprit touches many.;
-                           RUS=Определяет, ЧЕМ ЗАНЯТ ВИНОВНИК: последний документ, который тронула его собственная транзакция, - из отметки контекста. Вопрос это другой, чем у колонки "Документ": спор идёт за одну строку, а виновник трогает много.];
-                ApplicationArea=#All;
-                SourceExpr="Culprit Document No." }
 
     { 12  ;2   ;Field     ;
                 Name=UserName;
-                ToolTipML=[ENU=Specifies the account behind the culprit. Empty is not a failure: without the platform switch the tool names the operation, not the person, and it does not pretend otherwise. The column after this one says which road the name came by.;
-                           RUS=Определяет учётную запись виновника. Пусто - не сбой: без соответствующей настройки платформы инструмент называет операцию, а не человека, и не притворяется, что может иначе. Следующая колонка говорит, какой дорогой имя пришло.];
+                ToolTipML=[ENU=Specifies the account behind the culprit. Empty is not a failure: without the platform switch the tool names the operation, not the person, and it does not pretend otherwise.;
+                           RUS=Определяет учётную запись виновника. Пусто - не сбой: без включённых имён от платформы инструмент называет операцию, а не человека, и не притворяется, что может иначе.];
                 ApplicationArea=#All;
                 SourceExpr="User Name" }
 
@@ -308,26 +159,14 @@ OBJECT Page 110231 LockWatch Episodes
                 ApplicationArea=#All;
                 SourceExpr="User Source" }
 
-    { 67  ;2   ;Field     ;
-                Name=CulpritNavSessions;
-                ToolTipML=[ENU=Specifies the NAV session numbers of the culprit, in ascending order. A number gets here only when the road could tie it to the account: from the culprit's context mark, or from the live sessions of that same account in this database on this server. One live session makes the answer unambiguous, several are listed together, and then the number no longer says WHICH session did it - only that it was one of those.;
-                           RUS=Определяет номера сеансов NAV виновника по возрастанию. Номер попадает сюда, только когда дорога сумела привязать его к учётной записи: из отметки контекста виновника либо из живых сеансов этой же учётки в этой базе на этом сервере. Один живой сеанс делает ответ однозначным, несколько перечислены вместе, и тогда номер уже не говорит, КОТОРЫЙ из них виноват, - только что виноват один из них.];
-                ApplicationArea=#All;
-                SourceExpr="Culprit NAV Sessions" }
 
     { 55  ;2   ;Field     ;
                 Name=VictimUserName;
-                ToolTipML=[ENU=Specifies who was kept waiting. The name comes from the victim's own context mark - the one its transaction put down before it queued up. Without it the sufferer is named by a session number, which is to say not named at all.;
-                           RUS=Определяет, кого задержали. Имя приходит из СОБСТВЕННОЙ отметки жертвы - той, что её транзакция положила до того, как встала в очередь. Без неё пострадавший назван номером сеанса, то есть не назван вовсе.];
+                ToolTipML=[ENU=Specifies who was kept waiting. The name comes from the platform: it is asked for the waiters of the open episodes, and only while the platform names are switched on. Without it the sufferer is named by a session number, which is to say not named at all.;
+                           RUS=Определяет, кого задержали. Имя приходит от платформы: оно спрашивается для ждущих у идущих эпизодов и только при включённых именах от платформы. Без него пострадавший назван номером сеанса, то есть не назван вовсе.];
                 ApplicationArea=#All;
                 SourceExpr="Victim User Name" }
 
-    { 17  ;2   ;Field     ;
-                Name=VictimsBehindHead;
-                ToolTipML=[ENU=Specifies how many waiters stand behind this head. One head with forty victims is one trouble, not forty, and this number is what decides what to fix first.;
-                           RUS=Определяет, сколько ждущих стоит за этой головой. Одна голова с сорока жертвами - одна беда, а не сорок, и по этому числу решают, что чинить первым.];
-                ApplicationArea=#All;
-                SourceExpr="Victims Behind Head" }
 
     { 58  ;2   ;Field     ;
                 Name=BlockerHost;
@@ -342,6 +181,32 @@ OBJECT Page 110231 LockWatch Episodes
                            RUS=Определяет, как держащий сеанс представился серверу. Часто это говорит больше логина: шаг задания и человек с окном запросов ходят под одной учётной записью, а лечатся по-разному.];
                 ApplicationArea=#All;
                 SourceExpr="Blocker Program" }
+
+    { 70  ;2   ;Field     ;
+                Name=BlockerText;
+                CaptionML=[ENU=Culprit Statement (start);
+                           RUS=Запрос виновника (начало)];
+                ToolTipML=[ENU=Specifies the start of the statement the culprit sent last before it took the lock. The column is cut so that the list stays readable, and the full text opens by F4, and it is kept only for the episodes that opened while statement collection was on.;
+                           RUS=Определяет начало оператора, который виновник послал последним перед тем, как взял блокировку. Колонка обрезана, чтобы список оставался читаемым, а целиком текст открывается по F4, и хранится он только у эпизодов, открытых при включённом сборе операторов.];
+                ApplicationArea=#All;
+                DrillDown=Yes;
+                OnDrillDown=BEGIN
+                              ShowStatement(TRUE);
+                            END;
+                SourceExpr=BlockerText }
+
+    { 71  ;2   ;Field     ;
+                Name=VictimText;
+                CaptionML=[ENU=Victim Statement (start);
+                           RUS=Запрос жертвы (начало)];
+                ToolTipML=[ENU=Specifies the start of the statement the victim was waiting on - the operation a human saw stall. The full text opens by F4.;
+                           RUS=Определяет начало оператора, на котором стояла жертва, - той операции, которую человек увидел зависшей. Целиком текст открывается по F4.];
+                ApplicationArea=#All;
+                DrillDown=Yes;
+                OnDrillDown=BEGIN
+                              ShowStatement(FALSE);
+                            END;
+                SourceExpr=VictimText }
 
     { 27  ;2   ;Field     ;
                 Name=EndedAt;
@@ -360,24 +225,20 @@ OBJECT Page 110231 LockWatch Episodes
   CODE
   {
     VAR
-      AlertMs@1000000000 : Integer;
-      WaitStyle@1000000001 : Text[30];
-      Platform@1000000002 : Codeunit 110238;
-      PlatformOffErr@1000000003 : TextConst 'ENU=Names from the platform are switched off in the setup. Switching them on costs a config change, an instance restart and both SQL rights - it is a decision, not a checkbox.;RUS=Имена от платформы выключены в настройке. Их включение стоит правки конфига, перезапуска экземпляра и обоих прав SQL - это решение, а не галка.';
-      NamedMsg@1000000004 : TextConst 'ENU=The platform named the user - %1;RUS=Платформа назвала пользователя - %1';
-      NotNamedMsg@1000000005 : TextConst 'ENU=The platform did not name anyone. %1;RUS=Платформа никого не назвала. %1';
-      Journal@1000000006 : Codeunit 110232;
+      Watch@1000000006 : Codeunit 110230;
+      BlockerText@1000000010 : Text;
+      VictimText@1000000011 : Text;
       BlockerTxt@1000000007 : TextConst 'ENU=Culprit, SPID %1;RUS=Виновник, сеанс %1';
       VictimTxt@1000000008 : TextConst 'ENU=Victim, SPID %1;RUS=Жертва, сеанс %1';
       NoStatementErr@1000000009 : TextConst 'ENU=There is no statement text in this entry. The journal keeps it only when Collect Statement Values is on in the setup, and only from the moment it was switched on - the text is taken at the instant the episode opens and cannot be fetched afterwards.;RUS=Текста запроса в этой строке нет. Журнал хранит его только при включённом признаке "Собирать значения в операторах" и только с мига, когда его включили, - текст снимается в момент открытия эпизода и задним числом не берётся.';
+      StatementMsg@1000000012 : TextConst 'ENU=%1: %2;RUS=%1: %2';
 
     LOCAL PROCEDURE ShowStatement@6(Blocker@1000000000 : Boolean);
     VAR
-      Viewer@1000000001 : Page 110236;
-      Body@1000000002 : Text;
-      Whose@1000000003 : Text;
+      Body@1000000001 : Text;
+      Whose@1000000002 : Text;
     BEGIN
-      Body := Journal.StatementText("Entry No.",Blocker);
+      Body := Watch.StatementText("Entry No.",Blocker);
       // Пустой текст объясняется словами, а не пустым окном. Причин у пустоты две, и обе
       // не ошибка: признак выключен, либо эпизод открылся раньше, чем его включили.
       IF Body = '' THEN
@@ -386,67 +247,21 @@ OBJECT Page 110231 LockWatch Episodes
         Whose := STRSUBSTNO(BlockerTxt,"Blocker SPID")
       ELSE
         Whose := STRSUBSTNO(VictimTxt,"Victim SPID");
-      Viewer.SetStatement(Whose,Body);
-      Viewer.RUNMODAL;
-    END;
-
-    LOCAL PROCEDURE NamePlatformUser@5();
-    VAR
-      Setup@1000000000 : Record 110230;
-      Reason@1000000001 : Text;
-    BEGIN
-      // Пустая колонка ответом не является, поэтому отказ объясняется словами. Причин у
-      // него три, и они разные: у эпизода нет номера транзакции, блокировку уже отпустили,
-      // либо дорога от платформы мертва - последнее видно только отдельной проверкой.
-      Setup.FetchOnce;
-      IF NOT Setup."Platform Names Enabled" THEN
-        ERROR(PlatformOffErr);
-      IF Platform.NameUser("Entry No.",Reason) THEN BEGIN
-        CurrPage.UPDATE(FALSE);
-        MESSAGE(NamedMsg,"User Name");
-      END ELSE
-        MESSAGE(NotNamedMsg,Reason);
-    END;
-
-    LOCAL PROCEDURE ReadAlertThreshold@1();
-    VAR
-      Setup@1000000000 : Record 110230;
-    BEGIN
-      // Порог читается ОДИН раз при открытии, а не на каждой строке: страница листает
-      // тысячи строк, и чтение настройки на каждую было бы тысячей лишних обращений
-      // ради числа, которое за время просмотра не меняется.
-      Setup.FetchOnce;
-      AlertMs := Setup."Alert Threshold (ms)";
-    END;
-
-    LOCAL PROCEDURE SetStyle@2();
-    BEGIN
-      // Порог ноль означает "не уведомлять вовсе", и тогда не красится ничего: цвет не
-      // должен появляться сам собой у того, у кого уведомления выключены.
-      WaitStyle := StandardStyle;
-      IF (AlertMs > 0) AND ("Max Wait (ms)" >= AlertMs) THEN
-        WaitStyle := AlarmStyle;
+      MESSAGE(StatementMsg,Whose,Body);
     END;
 
     LOCAL PROCEDURE "------- Legal Hardcodes -------"@7();
     BEGIN
       // Разделитель, а не работа: ниже идут только величины, у которых есть имя.
       // Число в коде читается как случайное, а величины, зависящие от среды, живут
-      // в настройке LockWatch Setup. Имена стилей - язык клиента, а не среда.
+      // в настройке LockWatch Setup. Длина начала оператора к среде не относится.
     END;
 
-    LOCAL PROCEDURE StandardStyle@3() : Text[30];
+    LOCAL PROCEDURE PreviewChars@8() : Integer;
     BEGIN
-      // Имя платформенного стиля. Написать его с ошибкой можно молча: неизвестный стиль
-      // клиент рисует обычным, ничего не сказав.
-      EXIT('Standard');
-    END;
-
-    LOCAL PROCEDURE AlarmStyle@4() : Text[30];
-    BEGIN
-      // Имена стилей - платформенные, и написать их с ошибкой можно молча: неизвестный
-      // стиль клиент рисует обычным, ничего не сказав. Поэтому они здесь по одному разу.
-      EXIT('Unfavorable');
+      // Сто знаков - это имя операции и первые поля. Дальше в операторе идёт то, что и
+      // так видно по таблице и ключу, а колонка длиннее съела бы ширину у остальных.
+      EXIT(100);
     END;
 
     BEGIN
@@ -457,15 +272,14 @@ OBJECT Page 110231 LockWatch Episodes
       Порядок - по началу, сверху свежее. Отбор "только идущие" вынесен кнопкой, потому
       что вопрос "что происходит ПРЯМО СЕЙЧАС" задают первым и в спешке.
 
-      Колонки подписаны длинно и честно, и три подписи стоят того, чтобы их прочли:
-      голова цепочки - это не непосредственный блокирующий; исход "не определён" - это
-      ответ, а не пропуск; пустое имя пользователя - не сбой, а отсутствие права, которое
-      никто не выдавал.
+      Текст оператора показан прямо в списке началом, а целиком открывается по F4: за
+      началом ходить в другой экран пришлось бы за каждой строкой, а тащить в список все
+      шестнадцать тысяч знаков - значит утопить в них остальные колонки. Читаются блобы
+      только у видимых строк, и пустая клетка объясняется словами при открытии.
 
-      Совет говорит, что делать, и опирается на то, что и так есть в строке: класс,
-      длительность, число жертв за головой. Отдельного поля-улики нет: совет выдаётся
-      по этим признакам, и по ним же проверяется. Пустой совет тоже ответ: там, где
-      сказать нечего, вежливая общая фраза увела бы в сторону вернее, чем молчание.
+      Колонки подписаны длинно и честно, и две подписи стоят того, чтобы их прочли:
+      исход "не определён" - это ответ, а не пропуск; пустое имя пользователя - не сбой,
+      а отсутствие права, которое никто не выдавал.
     }
     END.
   }

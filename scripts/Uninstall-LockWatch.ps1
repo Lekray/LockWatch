@@ -23,23 +23,24 @@
     **Врезка в меню снимается до удаления страниц.** Иначе остаётся окно, в котором чужое
     меню ссылается на объекты, которых уже нет.
 
-    **Собранный переходник уходит раньше прочих объектов.** Он единственный исполняется
-    на чужой записи, и пока он есть, подписка срабатывает посреди разборки.
-
     **Свои объекты удаляются в обратном порядке сборки**: страницы, кодюниты, таблицы.
-    Вместе с таблицами уходят и ДАННЫЕ - журнал эпизодов, история эпизодов (её таблица
-    отдельная и наполняется сама), уведомления, охват и настройка. Обратного хода у этого нет,
-    поэтому без ключа -Yes скрипт только показывает, что снял бы, и ничего не трогает.
+    Вместе с таблицами уходят и ДАННЫЕ - журнал эпизодов, таблицы контекста, состояние
+    сторожа и настройка. Обратного хода у этого нет, поэтому без ключа -Yes скрипт только
+    показывает, что снял бы, и ничего не трогает.
 
     Вердикт снимается из базы, а не из лога finsql: удаление несуществующего объекта - не
     отказ, а пустое место, и различать эти два случая по тексту в логе значит гадать.
 
-    **Чего снять нельзя**, перечислено отдельно и со снятым не смешивается. Источник
-    событий Windows заводится администратором и живёт в реестре машины; серверная сессия
+    **Чего снять нельзя**, перечислено отдельно и со снятым не смешивается. Серверная сессия
     Extended Events, если ключ мониторинга когда-нибудь включали, переживает снятие
     инструмента и уходит только обратным выключением ключа. Опытные логины прогона
     взаимоблокировок (scripts/Test-Deadlock.ps1) снятие ищет и убирает само, а если не
     удалось - называет оставшиеся: это чужие учётные записи сервера, и сами они не уйдут.
+
+    **Набор разрешений LOCKWATCH остался от прежней версии.** Нынешняя выкладка его не
+    заводит, но снятие обязано убрать его, если он есть: строки прав переживают удаление
+    объектов и ссылаются на таблицы, которых больше нет. Ищется он по Role ID и снимается
+    SQL-путём - звать для этого нечего, кодюнита прав в поставке больше нет.
 
     **Номер объекта-меню не спрашивается ключом.** Врезка ищется по GUID своих узлов в
     объектах-меню базы, и снимается там, где стоит: номер уровня меню выбирает установка,
@@ -50,7 +51,7 @@
     pwsh scripts/Uninstall-LockWatch.ps1
 
 .EXAMPLE
-    pwsh scripts/Uninstall-LockWatch.ps1 -Yes -AdapterObjectNo 110250 -MenuTargetId 1090
+    pwsh scripts/Uninstall-LockWatch.ps1 -Yes -MenuTargetId 1090
 #>
 [CmdletBinding()]
 param(
@@ -59,7 +60,6 @@ param(
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
     [int]    $MgmtPort = 7145,
-    [int]    $AdapterObjectNo = 0,
     [int]    $MenuTargetId    = 0,
     [int]    $TimeoutMinutes  = 3,
     [switch] $Yes
@@ -177,15 +177,16 @@ function Sql-Tables       { Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [na
 function Our-Rows {
     Count-Sql "SELECT ISNULL(SUM(p.[rows]),0) FROM sys.tables t JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0,1) WHERE t.[name] LIKE '%LockWatch%';"
 }
-# Собранный переходник ставится ВНЕ объявленного диапазона - номер ему выбирают под
-# установку. Забытый при снятии, он остаётся подписан на чужую таблицу, потребителя у
-# которой уже нет: подписка срабатывает на каждой записи и падает. Ищется он по имени -
-# сборщик зовёт его "LockWatch Adapter <номер таблицы>", и это единственный след, который
-# не зависит от того, вспомнил ли человек номер.
+# Объекты с нашим именем где угодно, а не только в диапазоне. По имени же ищется и набор
+# разрешений, который объектом не является: он живёт в данных, и в описи объектов его нет.
 function Named-Objects { Count-Sql "SELECT COUNT(*) FROM [dbo].[Object] WHERE [Name] LIKE 'LockWatch%';" }
-# Права на НАШИ таблицы, то есть на диапазон. Строка прав, пережившая снятие, ссылается на
-# таблицу, которой больше нет, и чинить это придётся уже без инструмента.
-function Rights-Rows { Count-Sql "SELECT COUNT(*) FROM [dbo].[Permission] WHERE [Object ID] BETWEEN $rangeFrom AND $rangeTo;" }
+# Права, пережившие снятие: строки на наши таблицы (диапазон) и строки набора LOCKWATCH,
+# оставшегося от прежней версии. И те и другие ссылаются на таблицы, которых после снятия
+# нет, и чинить это придётся уже без инструмента.
+function Rights-Rows {
+    Count-Sql ("SELECT COUNT(*) FROM [dbo].[Permission] " +
+               "WHERE [Object ID] BETWEEN $rangeFrom AND $rangeTo OR [Role ID] LIKE 'LOCKWATCH%';")
+}
 function Rights-Sets { Count-Sql "SELECT COUNT(*) FROM [dbo].[Permission Set] WHERE [Name] LIKE 'LockWatch%' OR [Role ID] LIKE 'LOCKWATCH%';" }
 function Named-Outside {
     $rows = Invoke-Sql "SELECT [Type], [ID], [Name] FROM [dbo].[Object] WHERE [Name] LIKE 'LockWatch%' AND ([ID] < $rangeFrom OR [ID] > $rangeTo) ORDER BY [ID];"
@@ -197,18 +198,10 @@ function Episode-Rows {
     if ((Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] = N'$name';") -eq 0) { return -1 }
     Count-Sql "SELECT COUNT(*) FROM [$name];"
 }
-# История эпизодов - ОТДЕЛЬНАЯ таблица со своим номером (110238), и в описи её надо назвать
-# своей строкой: она наполняется сама и переживает чистку журнала, поэтому "журнал эпизодов"
-# её не считает, а снятие уносит её вместе со всеми.
-function History-Rows {
-    $name = "$Company`$LockWatch Episode History"
-    if ((Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] = N'$name';") -eq 0) { return -1 }
-    Count-Sql "SELECT COUNT(*) FROM [$name];"
-}
 # Опытные логины заводятся прогоном взаимоблокировок (scripts/Test-Deadlock.ps1) и им же
 # убираются - но прогон, оборванный на середине опыта, оставляет их на сервере. Это ЧУЖИЕ
 # учётные записи в списке безопасности, которых никто не заказывал, и снятие обязано
-# назвать их так же честно, как источник событий Windows: сами они не уйдут.
+# назвать их так же честно, как сессию мониторинга: сами они не уйдут.
 $probeLike = 'LW Probe%'
 function Probe-Logins { Count-Sql "SELECT COUNT(*) FROM sys.server_principals WHERE [name] LIKE '$probeLike' AND [type] = 'S';" }
 function Probe-Users  { Count-Sql "SELECT COUNT(*) FROM sys.database_principals WHERE [name] LIKE '$probeLike' AND [type] = 'S';" }
@@ -225,9 +218,14 @@ function Drop-Probes {
            " IF @drop <> N'' EXEC sp_executesql @drop;"
     return Invoke-Sql-Soft $sql
 }
-function Adapter-Rows {
-    if ($AdapterObjectNo -le 0) { return 0 }
-    Count-Sql "SELECT COUNT(*) FROM [dbo].[Object] WHERE [ID] = $AdapterObjectNo;"
+function Drop-PermissionSet {
+    # Набор - данные, и удаление объектов его не уносит. Уносятся и НАЗНАЧЕНИЯ: набор,
+    # удалённый без них, оставил бы людям ссылки на то, чего больше нет. Порядок от
+    # назначений к самому набору: строка набора - последняя, на неё ссылаются остальные.
+    $sql = "DELETE FROM [dbo].[Access Control] WHERE [Role ID] LIKE 'LOCKWATCH%';" +
+           " DELETE FROM [dbo].[Permission] WHERE [Role ID] LIKE 'LOCKWATCH%';" +
+           " DELETE FROM [dbo].[Permission Set] WHERE [Role ID] LIKE 'LOCKWATCH%';"
+    return Invoke-Sql-Soft $sql
 }
 
 # GUID узлов берутся из той же заготовки, по которой врезка и ставилась: сверять снятие по
@@ -296,15 +294,13 @@ Write-Host ("  в диапазоне {0}-{1}: {2}" -f $rangeFrom, $rangeTo, (Foo
 Write-Host ("  таблиц SQL с именем LockWatch: {0}" -f (Sql-Tables))
 $episodesBefore = Episode-Rows
 if ($episodesBefore -ge 0) { Write-Host ("  строк в журнале эпизодов: {0} - уйдут вместе с таблицей" -f $episodesBefore) }
-$historyBefore = History-Rows
-if ($historyBefore -ge 0) { Write-Host ("  строк в истории эпизодов: {0} - уйдёт вместе с таблицей" -f $historyBefore) }
 $rowsBefore = Our-Rows
 Write-Host ("  строк во всех наших таблицах: {0} - уйдут вместе с ними" -f $rowsBefore)
 Write-Host ("  строк в планировщике задач: {0}" -f (Task-Rows))
 # Набор разрешений - ДАННЫЕ, а не объект, и в диапазоне номеров его не видно. Строки прав
-# ищутся по нашим таблицам, то есть по тому же диапазону, каким инструмент назван; сам
-# набор - по имени, как и объекты вне диапазона. Ни то, ни другое не требует знать код
-# набора отдельным числом.
+# ищутся по нашим таблицам, то есть по тому же диапазону, каким инструмент назван, и по
+# Role ID набора, оставшегося от прежней версии; сам набор - по имени. Ни то, ни другое не
+# требует знать код набора отдельным числом.
 $rightsBefore = Rights-Rows
 $setsBefore = Rights-Sets
 Write-Host ("  набор разрешений: строк прав {0}, наборов с нашим именем {1}" -f $rightsBefore, $setsBefore)
@@ -313,13 +309,6 @@ $tablesBefore  = Sql-Tables
 $namedBefore   = Named-Objects
 $foreignBefore = @(Foreign-In-Range)
 $probeBefore   = Probe-Logins
-# Источник событий берётся из настройки, пока она ещё есть: после удаления таблиц
-# спросить будет не у кого, а имя источника выбирает установка, а не мы.
-$eventSource = 'LockWatch'
-if ((Count-Sql "SELECT COUNT(*) FROM sys.tables WHERE [name] = N'LockWatch Setup';") -gt 0) {
-    $fromSetup = Scalar "SELECT TOP 1 ISNULL([Alert Event Source],'') FROM [LockWatch Setup];"
-    if ($fromSetup) { $eventSource = $fromSetup }
-}
 # Врезка в чужом меню ищется ПО GUID НАШИХ УЗЛОВ, а ключ -MenuTargetId остался только
 # возможностью назвать номер самому. Так снятие находит врезку и там, где номер уровня
 # меню никому не известен, - а знать его человек, снимающий инструмент, не обязан.
@@ -329,17 +318,14 @@ $outside = Named-Outside
 if ($outside.Count -gt 0) {
     Write-Host '  ВНЕ ДИАПАЗОНА нашлись объекты с нашим именем:' -ForegroundColor Yellow
     $outside | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
-    if ($AdapterObjectNo -le 0) {
-        Write-Host '    Номер их не назван ключом -AdapterObjectNo, и сам скрипт их не тронет:' -ForegroundColor Yellow
-        Write-Host '    удалять объект, которого никто не называл, он не вправе. Сверка это заметит.' -ForegroundColor Yellow
-    }
+    Write-Host '    Сам скрипт их не тронет: удалять объект, которого никто не называл, он не вправе.' -ForegroundColor Yellow
+    Write-Host '    Сверка это заметит.' -ForegroundColor Yellow
 }
 if ($foreignBefore.Count -gt 0) {
     Write-Host '  В САМОМ ДИАПАЗОНЕ нашлись объекты ЧУЖОГО имени:' -ForegroundColor Yellow
     $foreignBefore | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
     Write-Host '    Диапазон снимается ЦЕЛИКОМ, и чужую работу снятие не тронет: с ключом -Yes оно откажет.' -ForegroundColor Yellow
 }
-if ($AdapterObjectNo -gt 0) { Write-Host ("  собранный переходник {0}: {1}" -f $AdapterObjectNo, (Adapter-Rows)) }
 if ($menuTarget -gt 0) {
     $ourNodes = Our-Menu-Ids
     $standing = Menu-Ours-Left $menuTarget
@@ -358,7 +344,7 @@ if (-not $Yes) {
     Write-Host ''
     Write-Host 'Ничего не удалено: это перечисление следа, а не снятие.' -ForegroundColor Yellow
     Write-Host 'Снять по-настоящему - тот же вызов с ключом -Yes. Вместе с таблицами уйдут' -ForegroundColor Yellow
-    Write-Host 'и данные: журнал эпизодов, история эпизодов, уведомления, охват и настройка.' -ForegroundColor Yellow
+    Write-Host 'и данные: журнал эпизодов, таблицы контекста, состояние сторожа и настройка.' -ForegroundColor Yellow
     Write-Host 'Обратного хода нет.' -ForegroundColor Yellow
     exit 0
 }
@@ -402,7 +388,7 @@ $runner = Join-Path $outDir 'uninstall-stopwatch.ps1'
 $body = @"
 `$ErrorActionPreference = 'Stop'
 Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110235 -MethodName StopWatch -ErrorAction Stop
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110232 -MethodName StopWatch -ErrorAction Stop
 "@
 [IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-Null
@@ -429,30 +415,24 @@ if ($left -gt 0) {
 }
 
 # ---------- 1а. набор разрешений ----------
-# Снимается ДО удаления объектов: потом звать будет некого. Набор - данные, удаление
-# объектов его не уносит, и оставленный он пережил бы инструмент - ссылками на таблицы,
-# которых уже нет, и назначениями людям, которым они больше ничего не дают.
+# Снимается ДО удаления объектов: строки прав ссылаются на таблицы, и после удаления они
+# повисли бы в пустоту. Нынешняя версия своего набора не заводит - уходит тот, что остался
+# от прежней выкладки, и ищется он по Role ID, а не по номеру объекта, которого у набора нет.
 Write-Host ''
-Write-Host 'Снимаю набор разрешений'
-$runner = Join-Path $outDir 'uninstall-droprights.ps1'
-$body = @"
-`$ErrorActionPreference = 'Stop'
-Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId 110242 -MethodName DropPermissionSet -ErrorAction Stop
-"@
-[IO.File]::WriteAllText($runner, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
-$rightsSaid = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $runner 2>&1 | Out-String
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "  $(($rightsSaid -replace '\s+', ' ').Trim())"
+Write-Host 'Снимаю набор разрешений, оставшийся от прежней версии'
+$rightsSaid = Drop-PermissionSet
+if ($rightsSaid) {
+    Write-Host "  снять удалось не всё: $rightsSaid" -ForegroundColor Yellow
 } else {
-    Write-Host '  свой путь не отработал - остаток назовёт сверка ниже' -ForegroundColor Yellow
+    Write-Host ("  строк прав было {0}, наборов было {1}; осталось прав {2}, наборов {3}" -f
+                $rightsBefore, $setsBefore, (Rights-Rows), (Rights-Sets))
 }
 
 # ---------- 1б. опытные логины ----------
 # Их заводит прогон взаимоблокировок (scripts/Test-Deadlock.ps1) и им же убирает. Прогон,
 # оборванный на середине опыта, оставил бы их на сервере, и снятие обязано искать их само:
 # это чужие учётные записи в списке безопасности, которых никто не заказывал, и сами они
-# не уйдут. Не снятое называется ниже, рядом с источником событий.
+# не уйдут. Не снятое называется ниже, рядом с сессией мониторинга.
 if ($probeBefore -gt 0) {
     Write-Host ''
     Write-Host 'Снимаю опытные логины, оставшиеся от прогона взаимоблокировок'
@@ -470,23 +450,16 @@ if ($menuTarget -gt 0) {
     if ($LASTEXITCODE -ne 0) { Fail 'врезку снять не удалось - объекты не трогаю, иначе меню останется со ссылками в пустоту' }
 }
 
-# ---------- 3. собранный переходник ----------
-if ($AdapterObjectNo -gt 0) {
-    Write-Host ''
-    Write-Host "Удаляю собранный переходник $AdapterObjectNo"
-    Invoke-Finsql "Command=DeleteObjects,Filter=`"Type=Codeunit;ID=$AdapterObjectNo`"" 'uninstall-adapter.log'
-}
-
-# ---------- 4. свои объекты ----------
+# ---------- 3. свои объекты ----------
 Write-Host ''
 Write-Host 'Удаляю объекты инструмента'
 # Координаты службы нужны таблицам: их снятие - это изменение схемы SQL, и проводит его
 # служба. Без них finsql падает с "Management Port: 0" уже после удаления страниц.
 $navServerArgs = ",NavServerName=$Server,NavServerInstance=$Instance,NavServerManagementPort=$MgmtPort"
-# Порядок не случайный, и XMLport стоит в нём ПЕРЕД таблицей: он на неё ссылается, а
-# удалённая таблица оставила бы ссылку в никуда. Своего XMLport инструмент больше не ставит,
-# но снимать его продолжает: в базе, где стояла версия с выгрузкой истории в файл, он
-# пережил бы снятие и остался в чужой базе один. Список типов - место, о котором забывают:
+# Порядок не случайный: страницы и кодюниты ссылаются на таблицы, и удалённая первой
+# таблица оставила бы ссылки в никуда. XMLport в списке остался от прежних выкладок - в
+# базе, где такая версия стояла, он пережил бы снятие и остался один. Список типов - место,
+# о котором забывают:
 # новый тип объекта в проекте появляется раз в полгода, а снятие его не заметит и уйдёт
 # зелёным, оставив объект в чужой базе. Сверка ниже ловит это по диапазону, а не по списку.
 foreach ($type in 'Page', 'XMLport', 'Codeunit', 'Table') {
@@ -494,7 +467,7 @@ foreach ($type in 'Page', 'XMLport', 'Codeunit', 'Table') {
     Invoke-Finsql "Command=DeleteObjects,Filter=`"Type=$type;ID=$rangeFrom..$rangeTo`",SynchronizeSchemaChanges=Force$navServerArgs" "uninstall-$type.log"
 }
 
-# ---------- 5. сверка по базе ----------
+# ---------- 4. сверка по базе ----------
 $passed = 0; $total = 0; $report = @()
 function Check([string]$what, [bool]$ok, [string]$detail) {
     $script:total++
@@ -553,10 +526,6 @@ $rightsLeft = Rights-Rows
 $setsLeft = Rights-Sets
 Check 'набор разрешений снят вместе с инструментом' (($rightsLeft -eq 0) -and ($setsLeft -eq 0)) `
     "строк прав было $rightsBefore, осталось $rightsLeft; наборов было $setsBefore, осталось $setsLeft"
-if ($AdapterObjectNo -gt 0) {
-    $adapterLeft = Adapter-Rows
-    Check 'собранный переходник удалён' ($adapterLeft -eq 0) "объектов с номером $AdapterObjectNo $adapterLeft"
-}
 if ($menuTarget -gt 0) {
     $menuLeft = Menu-Ours-Left $menuTarget
     # $null тут значит "объект не выгрузился", а не "узлов не осталось": сверить снятие
@@ -571,18 +540,8 @@ Write-Host "пройдено $passed из $total"
 Write-Host ''
 $report | ForEach-Object { Write-Host $_ }
 
-# ---------- 6. чего снять нельзя ----------
+# ---------- 5. чего снять нельзя ----------
 $leftovers = @()
-# Чтение реестра может быть и запрещено, а падать этим ПОСЛЕ удачного снятия - худшее из
-# возможных: работа сделана, а прогон объявляет отказ.
-try {
-    if ([System.Diagnostics.EventLog]::SourceExists($eventSource)) {
-        $leftovers += "Источник событий Windows $eventSource - в реестре машины, не в базе."
-        $leftovers += "Снимает администратор: Remove-EventLog -Source $eventSource"
-    }
-} catch {
-    $leftovers += "Источник событий Windows $eventSource - проверить не удалось: $($_.Exception.Message)"
-}
 # Сессию мониторинга платформа зовёт по имени базы: <база>_deadlock_monitor (замер
 # 09.09.2026). Значит на сервере с несколькими базами отбор по одному лишь роду сессии
 # поймал бы и ЧУЖИЕ - и снятие велело бы гасить ключ у чужой установки. Своя считается по

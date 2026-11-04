@@ -1,4 +1,4 @@
-OBJECT Codeunit 110231 LockWatch Parse Test
+OBJECT Codeunit 110233 LockWatch Parse Test
 {
   OBJECT-PROPERTIES
   {
@@ -17,78 +17,70 @@ OBJECT Codeunit 110231 LockWatch Parse Test
   CODE
   {
     VAR
-      Parse@1000000000 : Codeunit 110230;
+      Watch@1000000000 : Codeunit 110230;
       PassedTxt@1000000001 : TextConst 'ENU=PASS;RUS=пройдено';
       // Пробелов после "ПРОВАЛ" ДВА, а не один: слово занимает те же восемь знаков, что и
       // "пройдено", и имя проверки в отчёте стоит в одной колонке у обеих строк.
       FailedTxt@1000000002 : TextConst 'ENU=FAIL;RUS=ПРОВАЛ  ';
       VerdictTxt@1000000003 : TextConst 'ENU=passed %1 of %2;RUS=пройдено %1 из %2';
-      ChkWaitKeyTxt@1000000010 : TextConst 'ENU=a keylock line of the wait queue splits into kind, hobt, database and object;RUS=строка keylock из очереди ожиданий разбирается на род, hobt, базу и объект';
-      WaitKeyTxt@1000000011 : TextConst 'ENU=kind %1, hobt %2, database %3, object %4;RUS=род %1, hobt %2, база %3, объект %4';
-      ChkWaitObjTxt@1000000012 : TextConst 'ENU=an objectlock line gives the object and leaves hobt empty;RUS=строка objectlock отдаёт объект и оставляет hobt пустым';
-      WaitObjTxt@1000000013 : TextConst 'ENU=object %1, hobt %2;RUS=объект %1, hobt %2';
-      ChkWaitBoundTxt@1000000014 : TextConst 'ENU=names are matched on a word boundary, not as a substring;RUS=имена ищутся на границе слова, а не подстрокой';
-      WaitBoundTxt@1000000015 : TextConst 'ENU=hobt %1 taken past id lock..., object %2 not taken from associatedObjectId;RUS=hobt %1 взят мимо id lock..., объект %2 не взят из associatedObjectId';
-      ChkWaitJunkTxt@1000000016 : TextConst 'ENU=a line without a database number is refused, not half-parsed;RUS=строка без номера базы отвергается, а не разбирается наполовину';
-      WaitJunkTxt@1000000017 : TextConst 'ENU=answer %1;RUS=ответ %1';
-      ChkHashTxt@1000000018 : TextConst 'ENU=the key hash loses its padding and a non-hash gives nothing;RUS=хэш ключа теряет добивку пробелами, а не-хэш не даёт ничего';
-      HashTxt@1000000019 : TextConst 'ENU=hash [%1], page resource [%2];RUS=хэш [%1], страничный ресурс [%2]';
-      ChkSplitPlainTxt@1000000020 : TextConst 'ENU=an ordinary SQL name splits into company and table;RUS=обычное имя SQL разбирается на компанию и таблицу';
-      SplitPlainTxt@1000000021 : TextConst 'ENU=company [%1], table [%2], sift key %3;RUS=компания [%1], таблица [%2], ключ SIFT %3';
-      ChkSplitNoCoTxt@1000000022 : TextConst 'ENU=a table with DataPerCompany No has no company prefix and that is not an error;RUS=у таблицы без разделения по компаниям префикса нет, и это не ошибка';
-      ChkSplitSiftTxt@1000000023 : TextConst 'ENU=a SIFT view gives the key number from its own name;RUS=SIFT-представление отдаёт номер ключа из собственного имени';
-      ChkSplitNdoTxt@1000000024 : TextConst 'ENU=a platform $ndo$ name is refused instead of passing as a nameless company;RUS=платформенное имя $ndo$ отвергается, а не выдаётся за безымянную компанию';
-      ChkKeyNoTxt@1000000025 : TextConst 'ENU=the NAV key number comes off the index name, and VSIFTIDX carries none;RUS=номер ключа NAV снимается с имени индекса, а VSIFTIDX его не несёт';
-      KeyNoTxt@1000000026 : TextConst 'ENU=clustered %1, secondary %2, VSIFTIDX %3;RUS=кластерный %1, вторичный %2, VSIFTIDX %3';
-      ChkStartTxt@1000000027 : TextConst 'ENU=the episode start is counted back from the observation, not from our own clock;RUS=начало эпизода считается назад от наблюдения, а не по своим часам';
-      StartTxt@1000000028 : TextConst 'ENU=difference %1 against the expected %2;RUS=разница %1 против ожидаемых %2';
-      ChkNewEpTxt@1000000029 : TextConst 'ENU=a wait counter that went backwards means a second episode, not the same one;RUS=счётчик ожидания, пошедший назад, означает второй эпизод, а не тот же';
-      NewEpTxt@1000000030 : TextConst 'ENU=backwards %1, forwards %2;RUS=назад %1, вперёд %2';
-      ChkOutcomeTxt@1000000031 : TextConst 'ENU=the outcome has three values and a foreign session never gets one;RUS=исход имеет три значения, а чужой сессии не приписывается вовсе';
-      OutcomeTxt@1000000032 : TextConst 'ENU=at the limit %1, well short %2, gap under one period %3, foreign session %4;RUS=на пределе %1, с запасом %2, зазор меньше периода %3, чужая сессия %4';
-      ChkChainTxt@1000000033 : TextConst 'ENU=the chain is unwound to the head, not to the neighbour;RUS=цепочка разматывается до головы, а не до соседа';
-      ChainTxt@1000000034 : TextConst 'ENU=head %1 at depth %2, ring %3;RUS=голова %1 на глубине %2, кольцо %3';
-      ChkCycleTxt@1000000035 : TextConst 'ENU=a ring is broken and reported, not spun in;RUS=кольцо обрывается и отмечается, а не крутится';
-      CycleTxt@1000000036 : TextConst 'ENU=ring %1, steps counted %2;RUS=кольцо %1, шагов насчитано %2';
-      ChkVictimsTxt@1000000037 : TextConst 'ENU=victims behind one head are counted, so one trouble is not read as many;RUS=жертвы за одной головой сосчитаны, и одна беда не читается как много';
-      VictimsTxt@1000000038 : TextConst 'ENU=behind the shared head %1, behind the other one %2;RUS=за общей головой %1, за чужой %2';
-      ChkClassTxt@1000000039 : TextConst 'ENU=a whole-table lock outranks a sleeping transaction, and idling under the threshold is plain;RUS=спор за таблицу целиком старше спящей транзакции, а простой ниже порога - обычный случай';
-      ClassTxt@1000000040 : TextConst 'ENU=whole table %1, sleeping %2, under threshold %3, working %4;RUS=таблица целиком %1, спит %2, ниже порога %3, работает %4';
-      ChkPrintTxt@1000000041 : TextConst 'ENU=the fingerprint is stable, sensitive, and equal to the recorded one;RUS=отпечаток устойчив, чувствителен и равен записанному';
-      PrintTxt@1000000042 : TextConst 'ENU=same [%1] and [%2], other [%3], empty [%4], recorded [%5];RUS=одинаковые [%1] и [%2], другой [%3], пустой [%4], записанный [%5]';
-      ChkPatternTxt@1000000044 : TextConst 'ENU=a field name becomes a LIKE pattern where every replaceable sign stands for any one sign;RUS=имя поля превращается в образец LIKE, где каждый заменяемый знак подходит к любому одному';
-      PatternTxt@1000000045 : TextConst 'ENU=[%1], cyrillic [%2], the ampersand kept its place [%3];RUS=[%1], кириллица [%2], амперсанд остался на месте [%3]';
-      ChkSameNameTxt@1000000046 : TextConst 'ENU=an SQL name is recognised as the NAV one only where the difference is a replaceable sign;RUS=имя из SQL признаётся именем NAV только там, где расхождение приходится на заменяемый знак';
-      SameNameTxt@1000000047 : TextConst 'ENU=dot against underscore %1, slash %2, another letter %3, other length %4;RUS=точка против подчёркивания %1, косая черта %2, другая буква %3, другая длина %4';
-      ChkAdviceOrderTxt@1000000048 : TextConst 'ENU=the advice follows the order of cures, not the order of signs;RUS=совет следует порядку лечений, а не порядку признаков';
-      AdviceOrderTxt@1000000049 : TextConst 'ENU=whole table %1, foreign head %2, SIFT %3, queue %4, deadlock %5;RUS=таблица целиком %1, чужая голова %2, SIFT %3, очередь %4, взаимоблокировка %5';
-      ChkAdviceNumbersTxt@1000000050 : TextConst 'ENU=the advice switches on at the very number it declares as its threshold, and stays silent one short of it;RUS=совет включается на том самом числе, которое объявлено его порогом, и молчит на единицу раньше';
-      AdviceNumbersTxt@1000000051 : TextConst 'ENU=queue at %1, silent at %2, long at %3 of %4;RUS=очередь при %1, молчание при %2, долгое при %3 из %4';
-      ChkAdviceQuietTxt@1000000052 : TextConst 'ENU=below the threshold the advice is silent, and a zero threshold is not an alert on everything;RUS=ниже порога советчик молчит, а нулевой порог - не уведомление на всём';
-      AdviceQuietTxt@1000000053 : TextConst 'ENU=quiet %1, zero threshold %2, right on the threshold %3;RUS=тихо %1, нулевой порог %2, ровно на пороге %3';
-      ChkCounterDeltaTxt@1000000054 : TextConst 'ENU=a counter that went backwards is read as a reset, not as a negative gain;RUS=пошедший назад счётчик читается как обнуление, а не как отрицательный прирост';
-      CounterDeltaTxt@1000000055 : TextConst 'ENU=gain %1, no move %2, after a reset %3, reset seen %4;RUS=прирост %1, без движения %2, после обнуления %3, обнуление замечено %4';
-      ChkRingHeadTxt@1000000056 : TextConst 'ENU=in a ring the culprit is the immediate blocker, not the victim itself;RUS=в кольце виновником назван непосредственный блокирующий, а не сама жертва';
-      RingHeadTxt@1000000057 : TextConst 'ENU=head %1 expected %2, depth %3 expected 1;RUS=голова %1 при ожидаемой %2, глубина %3 при ожидаемой 1';
-      ChkCutTxt@1000000058 : TextConst 'ENU=truncation is visible to the reader, and a whole statement is left alone;RUS=усечение видно читающему, а целый оператор не тронут';
-      CutMarkTxt@1000000059 : TextConst 'ENU=kept %1 of %2, with the mark %3 chars, mark starts with [%4], whole %5, empty %6;RUS=оставлено %1 из %2, с отметкой %3 знаков, отметка начинается с [%4], целый %5, пустой %6';
-      ChkOverrunTxt@1000000060 : TextConst 'ENU=the pass says it overran the ceiling, and says nothing when it did not;RUS=проход говорит о превышении потолка и молчит, когда его не было';
-      OverrunTxt@1000000061 : TextConst 'ENU=over [%1], exactly [%2], under [%3], ceiling off [%4];RUS=выше [%1], ровно [%2], ниже [%3], потолок снят [%4]';
-      ChkRingTxt@1000000062 : TextConst 'ENU=a ring gone silent is named, and a ring that spoke is not blamed;RUS=замолчавшее кольцо названо, а отдавшее - не оболгано';
-      RingTxt@1000000063 : TextConst 'ENU=silent [%1], spoke [%2], quiet [%3];RUS=смолчало [%1], отдало [%2], тихо [%3]';
-      ChkSilentTxt@1000000064 : TextConst 'ENU=a chain gone quiet is named, and a live one is not blamed;RUS=замолчавшая цепочка названа, а идущая - не оболгана';
-      SilentTxt@1000000065 : TextConst 'ENU=fresh [%1], silent [%2], never [%3], stopped [%4];RUS=свежий [%1], молчит [%2], ни разу [%3], остановлен [%4]';
-      ChkCeilRingTxt@1000000066 : TextConst 'ENU=a ring the start does not belong to is stopped by the step ceiling and answers with the immediate blocker;RUS=кольцо, в которое начало не входит, обрывается потолком шагов и отвечает непосредственным блокирующим';
-      ChkCeilChainTxt@1000000067 : TextConst 'ENU=a chain longer than the ceiling is cut at the ceiling instead of being unwound to the end;RUS=цепочка длиннее потолка обрывается на потолке, а не разматывается до конца';
-      CeilChainTxt@1000000068 : TextConst 'ENU=links %1 with the array bound %2, head %3 at depth %4, ring %5;RUS=звеньев %1 при пределе массивов %2, голова %3 на глубине %4, кольцо %5';
-      FailedRunErr@1000000043 : TextConst 'ENU=%1;RUS=%1';
+      ChkWaitKeyTxt@1000000004 : TextConst 'ENU=a keylock line of the wait queue splits into kind, hobt, database and object;RUS=строка keylock из очереди ожиданий разбирается на род, hobt, базу и объект';
+      WaitKeyTxt@1000000005 : TextConst 'ENU=kind %1, hobt %2, database %3, object %4;RUS=род %1, hobt %2, база %3, объект %4';
+      ChkWaitObjTxt@1000000006 : TextConst 'ENU=an objectlock line gives the object and leaves hobt empty;RUS=строка objectlock отдаёт объект и оставляет hobt пустым';
+      WaitObjTxt@1000000007 : TextConst 'ENU=object %1, hobt %2;RUS=объект %1, hobt %2';
+      ChkWaitBoundTxt@1000000008 : TextConst 'ENU=names are matched on a word boundary, not as a substring;RUS=имена ищутся на границе слова, а не подстрокой';
+      WaitBoundTxt@1000000009 : TextConst 'ENU=hobt %1 taken past id lock..., object %2 not taken from associatedObjectId;RUS=hobt %1 взят мимо id lock..., объект %2 не взят из associatedObjectId';
+      ChkWaitJunkTxt@1000000010 : TextConst 'ENU=a line without a database number is refused, not half-parsed;RUS=строка без номера базы отвергается, а не разбирается наполовину';
+      WaitJunkTxt@1000000011 : TextConst 'ENU=answer %1;RUS=ответ %1';
+      ChkHashTxt@1000000012 : TextConst 'ENU=the key hash loses its padding and a non-hash gives nothing;RUS=хэш ключа теряет добивку пробелами, а не-хэш не даёт ничего';
+      HashTxt@1000000013 : TextConst 'ENU=hash [%1], page resource [%2];RUS=хэш [%1], страничный ресурс [%2]';
+      ChkSplitPlainTxt@1000000014 : TextConst 'ENU=an ordinary SQL name splits into company and table;RUS=обычное имя SQL разбирается на компанию и таблицу';
+      SplitPlainTxt@1000000015 : TextConst 'ENU=company [%1], table [%2], sift key %3;RUS=компания [%1], таблица [%2], ключ SIFT %3';
+      ChkSplitNoCoTxt@1000000016 : TextConst 'ENU=a table with DataPerCompany No has no company prefix and that is not an error;RUS=у таблицы без разделения по компаниям префикса нет, и это не ошибка';
+      ChkSplitSiftTxt@1000000017 : TextConst 'ENU=a SIFT view gives the key number from its own name;RUS=SIFT-представление отдаёт номер ключа из собственного имени';
+      ChkSplitNdoTxt@1000000018 : TextConst 'ENU=a platform $ndo$ name is refused instead of passing as a nameless company;RUS=платформенное имя $ndo$ отвергается, а не выдаётся за безымянную компанию';
+      ChkKeyNoTxt@1000000019 : TextConst 'ENU=the NAV key number comes off the index name, and VSIFTIDX carries none;RUS=номер ключа NAV снимается с имени индекса, а VSIFTIDX его не несёт';
+      KeyNoTxt@1000000020 : TextConst 'ENU=clustered %1, secondary %2, VSIFTIDX %3;RUS=кластерный %1, вторичный %2, VSIFTIDX %3';
+      ChkStartTxt@1000000021 : TextConst 'ENU=the episode start is counted back from the observation, not from our own clock;RUS=начало эпизода считается назад от наблюдения, а не по своим часам';
+      StartTxt@1000000022 : TextConst 'ENU=difference %1 against the expected %2;RUS=разница %1 против ожидаемых %2';
+      ChkNewEpTxt@1000000023 : TextConst 'ENU=a wait counter that went backwards means a second episode, not the same one;RUS=счётчик ожидания, пошедший назад, означает второй эпизод, а не тот же';
+      NewEpTxt@1000000024 : TextConst 'ENU=backwards %1, forwards %2;RUS=назад %1, вперёд %2';
+      ChkOutcomeTxt@1000000025 : TextConst 'ENU=the outcome has three values and a foreign session never gets one;RUS=исход имеет три значения, а чужой сессии не приписывается вовсе';
+      OutcomeTxt@1000000026 : TextConst 'ENU=at the limit %1, well short %2, gap under one period %3, foreign session %4;RUS=на пределе %1, с запасом %2, зазор меньше периода %3, чужая сессия %4';
+      ChkChainTxt@1000000027 : TextConst 'ENU=the chain is unwound to the head, not to the neighbour;RUS=цепочка разматывается до головы, а не до соседа';
+      ChainTxt@1000000028 : TextConst 'ENU=head %1 at depth %2, ring %3;RUS=голова %1 на глубине %2, кольцо %3';
+      ChkCycleTxt@1000000029 : TextConst 'ENU=a ring is broken and reported, not spun in;RUS=кольцо обрывается и отмечается, а не крутится';
+      CycleTxt@1000000030 : TextConst 'ENU=ring %1, steps counted %2;RUS=кольцо %1, шагов насчитано %2';
+      ChkVictimsTxt@1000000031 : TextConst 'ENU=victims behind one head are counted, so one trouble is not read as many;RUS=жертвы за одной головой сосчитаны, и одна беда не читается как много';
+      VictimsTxt@1000000032 : TextConst 'ENU=behind the shared head %1, behind the other one %2;RUS=за общей головой %1, за чужой %2';
+      ChkPrintTxt@1000000033 : TextConst 'ENU=the fingerprint is stable, sensitive, and equal to the recorded one;RUS=отпечаток устойчив, чувствителен и равен записанному';
+      PrintTxt@1000000034 : TextConst 'ENU=same [%1] and [%2], other [%3], empty [%4], recorded [%5];RUS=одинаковые [%1] и [%2], другой [%3], пустой [%4], записанный [%5]';
+      ChkPatternTxt@1000000035 : TextConst 'ENU=a field name becomes a LIKE pattern where every replaceable sign stands for any one sign;RUS=имя поля превращается в образец LIKE, где каждый заменяемый знак подходит к любому одному';
+      PatternTxt@1000000036 : TextConst 'ENU=[%1], cyrillic [%2], the ampersand kept its place [%3];RUS=[%1], кириллица [%2], амперсанд остался на месте [%3]';
+      ChkSameNameTxt@1000000037 : TextConst 'ENU=an SQL name is recognised as the NAV one only where the difference is a replaceable sign;RUS=имя из SQL признаётся именем NAV только там, где расхождение приходится на заменяемый знак';
+      SameNameTxt@1000000038 : TextConst 'ENU=dot against underscore %1, slash %2, another letter %3, other length %4;RUS=точка против подчёркивания %1, косая черта %2, другая буква %3, другая длина %4';
+      ChkCounterDeltaTxt@1000000039 : TextConst 'ENU=a counter that went backwards is read as a reset, not as a negative gain;RUS=пошедший назад счётчик читается как обнуление, а не как отрицательный прирост';
+      CounterDeltaTxt@1000000040 : TextConst 'ENU=gain %1, no move %2, after a reset %3, reset seen %4;RUS=прирост %1, без движения %2, после обнуления %3, обнуление замечено %4';
+      ChkRingHeadTxt@1000000041 : TextConst 'ENU=in a ring the culprit is the immediate blocker, not the victim itself;RUS=в кольце виновником назван непосредственный блокирующий, а не сама жертва';
+      RingHeadTxt@1000000042 : TextConst 'ENU=head %1 expected %2, depth %3 expected 1;RUS=голова %1 при ожидаемой %2, глубина %3 при ожидаемой 1';
+      ChkCutTxt@1000000043 : TextConst 'ENU=truncation is visible to the reader, and a whole statement is left alone;RUS=усечение видно читающему, а целый оператор не тронут';
+      CutMarkTxt@1000000044 : TextConst 'ENU=kept %1 of %2, with the mark %3 chars, mark starts with [%4], whole %5, empty %6;RUS=оставлено %1 из %2, с отметкой %3 знаков, отметка начинается с [%4], целый %5, пустой %6';
+      ChkOverrunTxt@1000000045 : TextConst 'ENU=the pass says it overran the ceiling, and says nothing when it did not;RUS=проход говорит о превышении потолка и молчит, когда его не было';
+      OverrunTxt@1000000046 : TextConst 'ENU=over [%1], exactly [%2], under [%3], ceiling off [%4];RUS=выше [%1], ровно [%2], ниже [%3], потолок снят [%4]';
+      ChkRingTxt@1000000047 : TextConst 'ENU=a ring gone silent is named, and a ring that spoke is not blamed;RUS=замолчавшее кольцо названо, а отдавшее - не оболгано';
+      RingTxt@1000000048 : TextConst 'ENU=silent [%1], spoke [%2], quiet [%3];RUS=смолчало [%1], отдало [%2], тихо [%3]';
+      ChkSilentTxt@1000000049 : TextConst 'ENU=a chain gone quiet is named, and a live one is not blamed;RUS=замолчавшая цепочка названа, а идущая - не оболгана';
+      SilentTxt@1000000050 : TextConst 'ENU=fresh [%1], silent [%2], never [%3], stopped [%4];RUS=свежий [%1], молчит [%2], ни разу [%3], остановлен [%4]';
+      ChkCeilRingTxt@1000000051 : TextConst 'ENU=a ring the start does not belong to is stopped by the step ceiling and answers with the immediate blocker;RUS=кольцо, в которое начало не входит, обрывается потолком шагов и отвечает непосредственным блокирующим';
+      ChkCeilChainTxt@1000000052 : TextConst 'ENU=a chain longer than the ceiling is cut at the ceiling instead of being unwound to the end;RUS=цепочка длиннее потолка обрывается на потолке, а не разматывается до конца';
+      CeilChainTxt@1000000053 : TextConst 'ENU=links %1 with the array bound %2, head %3 at depth %4, ring %5;RUS=звеньев %1 при пределе массивов %2, голова %3 на глубине %4, кольцо %5';
+      FailedRunErr@1000000054 : TextConst 'ENU=%1;RUS=%1';
 
     [External]
     PROCEDURE SelfTest@1();
     VAR
-      Passed@1000000000 : Integer;
-      Total@1000000001 : Integer;
-      Report@1000000002 : Text;
+      Passed@1000000055 : Integer;
+      Total@1000000056 : Integer;
+      Report@1000000057 : Text;
     BEGIN
       // Обкатка судит сама: первой строкой "пройдено N из M", и при любом провале
       // выходит ошибкой, а не сообщением. Запуск через Invoke-NAVCodeunit тогда
@@ -100,7 +92,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       MESSAGE(Report);
     END;
 
-    LOCAL PROCEDURE RunChecks@2(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE RunChecks@2(VAR Passed@1000000058 : Integer;VAR Total@1000000059 : Integer;VAR Report@1000000060 : Text);
     BEGIN
       CheckWaitKey(Passed,Total,Report);
       CheckWaitObject(Passed,Total,Report);
@@ -119,13 +111,9 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckChainRing(Passed,Total,Report);
       CheckChainCeiling(Passed,Total,Report);
       CheckVictims(Passed,Total,Report);
-      CheckClass(Passed,Total,Report);
       CheckFingerprint(Passed,Total,Report);
       CheckSqlNamePattern(Passed,Total,Report);
       CheckSameSqlName(Passed,Total,Report);
-      CheckAdviceOrder(Passed,Total,Report);
-      CheckAdviceNumbers(Passed,Total,Report);
-      CheckAdviceQuiet(Passed,Total,Report);
       CheckCounterDelta(Passed,Total,Report);
       CheckStatementCut(Passed,Total,Report);
       CheckPassOverrun(Passed,Total,Report);
@@ -133,228 +121,228 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       CheckWatchSilent(Passed,Total,Report);
     END;
 
-    LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckWaitKey@10(VAR Passed@1000000061 : Integer;VAR Total@1000000062 : Integer;VAR Report@1000000063 : Text);
     VAR
-      Kind@1000000003 : Text;
-      HobtId@1000000004 : BigInteger;
-      ObjectId@1000000005 : Integer;
-      DatabaseId@1000000006 : Integer;
-      Ok@1000000008 : Boolean;
+      Kind@1000000064 : Text;
+      HobtId@1000000065 : BigInteger;
+      ObjectId@1000000066 : Integer;
+      DatabaseId@1000000067 : Integer;
+      Ok@1000000068 : Boolean;
     BEGIN
       // Строка снята с живого ожидания на стенде 07.09.2026, не придумана.
-      Ok := Parse.ParseWaitResource(SampleKeyLock,Kind,HobtId,ObjectId,DatabaseId);
+      Ok := Watch.ParseWaitResource(SampleKeyLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitKeyTxt,
         Ok AND (Kind = ResourceKeyLock) AND (HobtId = SampleHobt) AND
         (DatabaseId = SampleDatabaseId),
         STRSUBSTNO(WaitKeyTxt,Kind,HobtId,DatabaseId,ObjectId));
     END;
 
-    LOCAL PROCEDURE CheckWaitObject@11(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckWaitObject@11(VAR Passed@1000000069 : Integer;VAR Total@1000000070 : Integer;VAR Report@1000000071 : Text);
     VAR
-      Kind@1000000003 : Text;
-      HobtId@1000000004 : BigInteger;
-      ObjectId@1000000005 : Integer;
-      DatabaseId@1000000006 : Integer;
-      Ok@1000000008 : Boolean;
+      Kind@1000000072 : Text;
+      HobtId@1000000073 : BigInteger;
+      ObjectId@1000000074 : Integer;
+      DatabaseId@1000000075 : Integer;
+      Ok@1000000076 : Boolean;
     BEGIN
       // У блокировки на объект hobt нет вовсе: там objid. Отдать чужое число за hobt
       // значит разрешить его в постороннюю таблицу - и это будет выглядеть правдоподобно.
-      Ok := Parse.ParseWaitResource(SampleObjectLock,Kind,HobtId,ObjectId,DatabaseId);
+      Ok := Watch.ParseWaitResource(SampleObjectLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitObjTxt,
         Ok AND (Kind = ResourceObjectLock) AND (ObjectId = SampleObjectId) AND (HobtId = 0),
         STRSUBSTNO(WaitObjTxt,ObjectId,HobtId));
     END;
 
-    LOCAL PROCEDURE CheckWaitBoundary@12(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckWaitBoundary@12(VAR Passed@1000000077 : Integer;VAR Total@1000000078 : Integer;VAR Report@1000000079 : Text);
     VAR
-      Kind@1000000003 : Text;
-      HobtId@1000000004 : BigInteger;
-      ObjectId@1000000005 : Integer;
-      DatabaseId@1000000006 : Integer;
+      Kind@1000000080 : Text;
+      HobtId@1000000081 : BigInteger;
+      ObjectId@1000000082 : Integer;
+      DatabaseId@1000000083 : Integer;
     BEGIN
       // В строке keylock рядом стоят hobtid=, id=lock... и associatedObjectId=.
       // Поиск подстрокой без границы слова взял бы id= внутри hobtid=, а objid -
       // из associatedObjectId. Обе подмены беззвучны: числа выглядят настоящими.
-      Parse.ParseWaitResource(CraftedKeyLock,Kind,HobtId,ObjectId,DatabaseId);
+      Watch.ParseWaitResource(CraftedKeyLock,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitBoundTxt,
         (HobtId = SampleHobt) AND (ObjectId = 0),
         STRSUBSTNO(WaitBoundTxt,HobtId,ObjectId));
     END;
 
-    LOCAL PROCEDURE CheckWaitJunk@13(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckWaitJunk@13(VAR Passed@1000000084 : Integer;VAR Total@1000000085 : Integer;VAR Report@1000000086 : Text);
     VAR
-      Kind@1000000003 : Text;
-      HobtId@1000000004 : BigInteger;
-      ObjectId@1000000005 : Integer;
-      DatabaseId@1000000006 : Integer;
-      Ok@1000000008 : Boolean;
+      Kind@1000000087 : Text;
+      HobtId@1000000088 : BigInteger;
+      ObjectId@1000000089 : Integer;
+      DatabaseId@1000000090 : Integer;
+      Ok@1000000091 : Boolean;
     BEGIN
-      Ok := Parse.ParseWaitResource(JunkWaitResource,Kind,HobtId,ObjectId,DatabaseId);
+      Ok := Watch.ParseWaitResource(JunkWaitResource,Kind,HobtId,ObjectId,DatabaseId);
       Check(Passed,Total,Report,ChkWaitJunkTxt,NOT Ok,STRSUBSTNO(WaitJunkTxt,Ok));
     END;
 
-    LOCAL PROCEDURE CheckHash@14(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckHash@14(VAR Passed@1000000092 : Integer;VAR Total@1000000093 : Integer;VAR Report@1000000094 : Text);
     VAR
-      Hash@1000000003 : Text;
-      NotHash@1000000004 : Text;
+      Hash@1000000095 : Text;
+      NotHash@1000000096 : Text;
     BEGIN
       // dm_tran_locks добивает хэш пробелами до ширины столбца, а страничный ресурс
       // выглядит как 1:25456 и хэшем не является вовсе.
-      Hash := Parse.TrimLockHash(SampleLockHashPadded);
-      NotHash := Parse.TrimLockHash(SamplePageResource);
+      Hash := Watch.TrimLockHash(SampleLockHashPadded);
+      NotHash := Watch.TrimLockHash(SamplePageResource);
       Check(Passed,Total,Report,ChkHashTxt,
         (Hash = SampleLockHash) AND (NotHash = ''),
         STRSUBSTNO(HashTxt,Hash,NotHash));
     END;
 
-    LOCAL PROCEDURE CheckSplitPlain@15(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckSplitPlain@15(VAR Passed@1000000097 : Integer;VAR Total@1000000098 : Integer;VAR Report@1000000099 : Text);
     VAR
-      Company@1000000003 : Text;
-      TableName@1000000004 : Text;
-      SiftKeyNo@1000000005 : Integer;
-      Ok@1000000006 : Boolean;
+      Company@1000000100 : Text;
+      TableName@1000000101 : Text;
+      SiftKeyNo@1000000102 : Integer;
+      Ok@1000000103 : Boolean;
     BEGIN
-      Ok := Parse.SplitSqlObjectName(SampleSqlObjectName,Company,TableName,SiftKeyNo);
+      Ok := Watch.SplitSqlObjectName(SampleSqlObjectName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitPlainTxt,
         Ok AND (Company = SampleCompanySql) AND (TableName = SampleTableSql) AND
-        (SiftKeyNo = Parse.UnknownKeyNo),
+        (SiftKeyNo = Watch.UnknownKeyNo),
         STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
-    LOCAL PROCEDURE CheckSplitNoCompany@16(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckSplitNoCompany@16(VAR Passed@1000000104 : Integer;VAR Total@1000000105 : Integer;VAR Report@1000000106 : Text);
     VAR
-      Company@1000000003 : Text;
-      TableName@1000000004 : Text;
-      SiftKeyNo@1000000005 : Integer;
-      Ok@1000000006 : Boolean;
+      Company@1000000107 : Text;
+      TableName@1000000108 : Text;
+      SiftKeyNo@1000000109 : Integer;
+      Ok@1000000110 : Boolean;
     BEGIN
       // Настройка инструмента объявлена с DataPerCompany=No: префикса компании у неё нет.
-      Ok := Parse.SplitSqlObjectName(NoCompanyTableName,Company,TableName,SiftKeyNo);
+      Ok := Watch.SplitSqlObjectName(NoCompanyTableName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitNoCoTxt,
         Ok AND (Company = '') AND (TableName = NoCompanyTableName),
         STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
-    LOCAL PROCEDURE CheckSplitSift@17(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckSplitSift@17(VAR Passed@1000000111 : Integer;VAR Total@1000000112 : Integer;VAR Report@1000000113 : Text);
     VAR
-      Company@1000000003 : Text;
-      TableName@1000000004 : Text;
-      SiftKeyNo@1000000005 : Integer;
-      Ok@1000000006 : Boolean;
+      Company@1000000114 : Text;
+      TableName@1000000115 : Text;
+      SiftKeyNo@1000000116 : Integer;
+      Ok@1000000117 : Boolean;
     BEGIN
       // Самый частый случай блокировок NAV садится не на таблицу, а на её SIFT-агрегат.
       // Правило "номер ключа из имени индекса" на нём даёт VSIFTIDX, то есть ничего:
       // номер лежит в имени самого представления, после последнего $VSIFT$.
-      Ok := Parse.SplitSqlObjectName(SampleSiftSqlObjectName,Company,TableName,SiftKeyNo);
+      Ok := Watch.SplitSqlObjectName(SampleSiftSqlObjectName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitSiftTxt,
         Ok AND (Company = SampleCompanySql) AND (TableName = SampleTableSql) AND
         (SiftKeyNo = SampleSiftKeyNo),
         STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
-    LOCAL PROCEDURE CheckSplitPlatform@18(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckSplitPlatform@18(VAR Passed@1000000118 : Integer;VAR Total@1000000119 : Integer;VAR Report@1000000120 : Text);
     VAR
-      Company@1000000003 : Text;
-      TableName@1000000004 : Text;
-      SiftKeyNo@1000000005 : Integer;
-      Ok@1000000006 : Boolean;
+      Company@1000000121 : Text;
+      TableName@1000000122 : Text;
+      SiftKeyNo@1000000123 : Integer;
+      Ok@1000000124 : Boolean;
     BEGIN
       // $ndo$dbproperty начинается с $, и наивное правило "до первого $ - компания"
       // выдало бы безымянную компанию и таблицу ndo$dbproperty. Правдоподобно и неверно.
-      Ok := Parse.SplitSqlObjectName(PlatformSqlObjectName,Company,TableName,SiftKeyNo);
+      Ok := Watch.SplitSqlObjectName(PlatformSqlObjectName,Company,TableName,SiftKeyNo);
       Check(Passed,Total,Report,ChkSplitNdoTxt,NOT Ok,STRSUBSTNO(SplitPlainTxt,Company,TableName,SiftKeyNo));
     END;
 
-    LOCAL PROCEDURE CheckKeyNo@19(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckKeyNo@19(VAR Passed@1000000125 : Integer;VAR Total@1000000126 : Integer;VAR Report@1000000127 : Text);
     VAR
-      Clustered@1000000003 : Integer;
-      Secondary@1000000004 : Integer;
-      Sift@1000000005 : Integer;
+      Clustered@1000000128 : Integer;
+      Secondary@1000000129 : Integer;
+      Sift@1000000130 : Integer;
     BEGIN
-      Clustered := Parse.KeyNoFromIndexName(SampleClusteredIndexName);
-      Secondary := Parse.KeyNoFromIndexName(SampleSecondaryIndexName);
-      Sift := Parse.KeyNoFromIndexName(SiftIndexName);
+      Clustered := Watch.KeyNoFromIndexName(SampleClusteredIndexName);
+      Secondary := Watch.KeyNoFromIndexName(SampleSecondaryIndexName);
+      Sift := Watch.KeyNoFromIndexName(SiftIndexName);
       Check(Passed,Total,Report,ChkKeyNoTxt,
         (Clustered = ClusteredKeyNo) AND (Secondary = SampleSecondaryKeyNo) AND
-        (Sift = Parse.UnknownKeyNo),
+        (Sift = Watch.UnknownKeyNo),
         STRSUBSTNO(KeyNoTxt,Clustered,Secondary,Sift));
     END;
 
-    LOCAL PROCEDURE CheckEpisodeStart@20(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckEpisodeStart@20(VAR Passed@1000000131 : Integer;VAR Total@1000000132 : Integer;VAR Report@1000000133 : Text);
     VAR
-      ObservedAt@1000000003 : DateTime;
-      StartedAt@1000000004 : DateTime;
-      Difference@1000000005 : Duration;
-      Expected@1000000006 : Duration;
+      ObservedAt@1000000134 : DateTime;
+      StartedAt@1000000135 : DateTime;
+      Difference@1000000136 : Duration;
+      Expected@1000000137 : Duration;
     BEGIN
       ObservedAt := SampleObservedAt;
-      StartedAt := Parse.EpisodeStart(ObservedAt,SampleStartWaitMs);
+      StartedAt := Watch.EpisodeStart(ObservedAt,SampleStartWaitMs);
       Difference := ObservedAt - StartedAt;
       Expected := SampleStartWaitMs;
       Check(Passed,Total,Report,ChkStartTxt,Difference = Expected,STRSUBSTNO(StartTxt,Difference,Expected));
     END;
 
-    LOCAL PROCEDURE CheckNewEpisode@21(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckNewEpisode@21(VAR Passed@1000000138 : Integer;VAR Total@1000000139 : Integer;VAR Report@1000000140 : Text);
     VAR
-      Backwards@1000000003 : Boolean;
-      Forwards@1000000004 : Boolean;
+      Backwards@1000000141 : Boolean;
+      Forwards@1000000142 : Boolean;
     BEGIN
-      Backwards := Parse.IsNewEpisode(SampleLongWaitMs,SampleShortWaitMs);
-      Forwards := Parse.IsNewEpisode(SampleShortWaitMs,SampleLongWaitMs);
+      Backwards := Watch.IsNewEpisode(SampleLongWaitMs,SampleShortWaitMs);
+      Forwards := Watch.IsNewEpisode(SampleShortWaitMs,SampleLongWaitMs);
       Check(Passed,Total,Report,ChkNewEpTxt,Backwards AND (NOT Forwards),STRSUBSTNO(NewEpTxt,Backwards,Forwards));
     END;
 
-    LOCAL PROCEDURE CheckOutcome@22(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckOutcome@22(VAR Passed@1000000143 : Integer;VAR Total@1000000144 : Integer;VAR Report@1000000145 : Text);
     VAR
-      AtLimit@1000000003 : Integer;
-      WellShort@1000000004 : Integer;
-      NarrowGap@1000000005 : Integer;
-      Foreign@1000000006 : Integer;
+      AtLimit@1000000146 : Integer;
+      WellShort@1000000147 : Integer;
+      NarrowGap@1000000148 : Integer;
+      Foreign@1000000149 : Integer;
     BEGIN
       // Три набора и чужая сессия. Средний случай самый важный: 8 000 мс при периоде
       // в 3 000 - это НЕ отказ и НЕ успех, а незнание, и подписывать его надо так.
-      AtLimit := Parse.Outcome(OutcomeAtLimitWaitMs,SamplePeriodMs,TRUE);
-      WellShort := Parse.Outcome(OutcomeShortWaitMs,SamplePeriodMs,TRUE);
-      NarrowGap := Parse.Outcome(OutcomeNarrowGapWaitMs,SamplePeriodMs,TRUE);
-      Foreign := Parse.Outcome(OutcomeForeignWaitMs,SamplePeriodMs,FALSE);
+      AtLimit := Watch.Outcome(OutcomeAtLimitWaitMs,SamplePeriodMs,TRUE);
+      WellShort := Watch.Outcome(OutcomeShortWaitMs,SamplePeriodMs,TRUE);
+      NarrowGap := Watch.Outcome(OutcomeNarrowGapWaitMs,SamplePeriodMs,TRUE);
+      Foreign := Watch.Outcome(OutcomeForeignWaitMs,SamplePeriodMs,FALSE);
       Check(Passed,Total,Report,ChkOutcomeTxt,
-        (AtLimit = Parse.OutcomeTimedOut) AND (WellShort = Parse.OutcomeGranted) AND
-        (NarrowGap = Parse.OutcomeUnknown) AND (Foreign = Parse.OutcomeUnknown),
+        (AtLimit = Watch.OutcomeTimedOut) AND (WellShort = Watch.OutcomeGranted) AND
+        (NarrowGap = Watch.OutcomeUnknown) AND (Foreign = Watch.OutcomeUnknown),
         STRSUBSTNO(OutcomeTxt,AtLimit,WellShort,NarrowGap,Foreign));
     END;
 
-    LOCAL PROCEDURE CheckChain@23(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckChain@23(VAR Passed@1000000150 : Integer;VAR Total@1000000151 : Integer;VAR Report@1000000152 : Text);
     VAR
-      Waiter@1000000003 : ARRAY [500] OF Integer;
-      Blocker@1000000004 : ARRAY [500] OF Integer;
-      Head@1000000005 : Integer;
-      Depth@1000000006 : Integer;
-      Cycle@1000000007 : Boolean;
+      Waiter@1000000153 : ARRAY [500] OF Integer;
+      Blocker@1000000154 : ARRAY [500] OF Integer;
+      Head@1000000155 : Integer;
+      Depth@1000000156 : Integer;
+      Cycle@1000000157 : Boolean;
     BEGIN
       // Цепочка 3 -> 2 -> 1. Непосредственный виновник у сеанса 3 - это 2, но 2 сам
       // стоит в очереди за 1. Назвать виновным 2 значит назвать виновным пострадавшего.
       Waiter[1] := ChainSessionC; Blocker[1] := ChainSessionB;
       Waiter[2] := ChainSessionB; Blocker[2] := ChainSessionA;
-      Head := Parse.ChainHead(Waiter,Blocker,ChainRows,ChainSessionC,Depth,Cycle);
+      Head := Watch.ChainHead(Waiter,Blocker,ChainRows,ChainSessionC,Depth,Cycle);
       Check(Passed,Total,Report,ChkChainTxt,
         (Head = ChainSessionA) AND (Depth = ChainDepthExpected) AND (NOT Cycle),
         STRSUBSTNO(ChainTxt,Head,Depth,Cycle));
     END;
 
-    LOCAL PROCEDURE CheckChainRing@24(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckChainRing@24(VAR Passed@1000000158 : Integer;VAR Total@1000000159 : Integer;VAR Report@1000000160 : Text);
     VAR
-      Waiter@1000000003 : ARRAY [500] OF Integer;
-      Blocker@1000000004 : ARRAY [500] OF Integer;
-      Head@1000000005 : Integer;
-      Depth@1000000006 : Integer;
-      Cycle@1000000007 : Boolean;
+      Waiter@1000000161 : ARRAY [500] OF Integer;
+      Blocker@1000000162 : ARRAY [500] OF Integer;
+      Head@1000000163 : Integer;
+      Depth@1000000164 : Integer;
+      Cycle@1000000165 : Boolean;
     BEGIN
       // Кольцо 1 -> 2 -> 1. Это взаимоблокировка на подходе либо уже разобранная
       // сервером. Разматывание обязано оборваться и сказать об этом, а не зациклиться:
       // фоновая задача, ушедшая в вечный цикл, держит слот планировщика насмерть.
       Waiter[1] := ChainSessionA; Blocker[1] := ChainSessionB;
       Waiter[2] := ChainSessionB; Blocker[2] := ChainSessionA;
-      Head := Parse.ChainHead(Waiter,Blocker,ChainRows,ChainSessionA,Depth,Cycle);
+      Head := Watch.ChainHead(Waiter,Blocker,ChainRows,ChainSessionA,Depth,Cycle);
       // Глубина после обрыва приходит ЕДИНИЦЕЙ, а не числом пройденных шагов: головы в
       // кольце нет вовсе, и объявленный ответ - непосредственный блокирующий. Сравнение с
       // потолком шагов стояло здесь прежде и покраснеть не могло: единица меньше потолка у
@@ -383,21 +371,21 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Waiter[1] := ChainSessionA; Blocker[1] := ChainSessionC;
       Waiter[2] := ChainSessionC; Blocker[2] := ChainSessionB;
       Waiter[3] := ChainSessionB; Blocker[3] := ChainSessionC;
-      Head := Parse.ChainHead(Waiter,Blocker,RingRows,ChainSessionA,Depth,Cycle);
+      Head := Watch.ChainHead(Waiter,Blocker,RingRows,ChainSessionA,Depth,Cycle);
       Check(Passed,Total,Report,ChkCeilRingTxt,
         Cycle AND (Head = ChainSessionC) AND (Depth = 1) AND (Head <> ChainSessionA),
         STRSUBSTNO(ChainTxt,Head,Depth,Cycle));
     END;
 
-    LOCAL PROCEDURE CheckChainCeiling@75(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckChainCeiling@75(VAR Passed@1000000166 : Integer;VAR Total@1000000167 : Integer;VAR Report@1000000168 : Text);
     VAR
-      Waiter@1000000003 : ARRAY [500] OF Integer;
-      Blocker@1000000004 : ARRAY [500] OF Integer;
-      Index@1000000005 : Integer;
-      Links@1000000006 : Integer;
-      Head@1000000007 : Integer;
-      Depth@1000000008 : Integer;
-      Cycle@1000000009 : Boolean;
+      Waiter@1000000169 : ARRAY [500] OF Integer;
+      Blocker@1000000170 : ARRAY [500] OF Integer;
+      Index@1000000171 : Integer;
+      Links@1000000172 : Integer;
+      Head@1000000173 : Integer;
+      Depth@1000000174 : Integer;
+      Cycle@1000000175 : Boolean;
     BEGIN
       // Цепочка ДЛИННЕЕ потолка и БЕЗ кольца: 1 ждёт 2, 2 ждёт 3, и так до конца. Такой
       // набор мерит сам потолок, а не кольцо: без обрыва разматывание дошло бы до головы,
@@ -413,20 +401,20 @@ OBJECT Codeunit 110231 LockWatch Parse Test
         Blocker[Index] := Index + 1;
       END;
       Links := CeilingChainLinksUnderTest;
-      Head := Parse.ChainHead(Waiter,Blocker,Links,ChainSessionA,Depth,Cycle);
+      Head := Watch.ChainHead(Waiter,Blocker,Links,ChainSessionA,Depth,Cycle);
       Check(Passed,Total,Report,ChkCeilChainTxt,
         (Links <= ChainBoundUnderTest) AND (Head = ChainSessionB) AND (Depth = 1),
         STRSUBSTNO(CeilChainTxt,Links,ChainBoundUnderTest,Head,Depth,Cycle));
     END;
 
-    LOCAL PROCEDURE CheckVictims@25(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckVictims@25(VAR Passed@1000000176 : Integer;VAR Total@1000000177 : Integer;VAR Report@1000000178 : Text);
     VAR
-      Waiter@1000000003 : ARRAY [500] OF Integer;
-      Blocker@1000000004 : ARRAY [500] OF Integer;
-      Head@1000000005 : ARRAY [500] OF Integer;
-      Depth@1000000006 : ARRAY [500] OF Integer;
-      Ring@1000000007 : ARRAY [500] OF Boolean;
-      Behind@1000000008 : ARRAY [500] OF Integer;
+      Waiter@1000000179 : ARRAY [500] OF Integer;
+      Blocker@1000000180 : ARRAY [500] OF Integer;
+      Head@1000000181 : ARRAY [500] OF Integer;
+      Depth@1000000182 : ARRAY [500] OF Integer;
+      Ring@1000000183 : ARRAY [500] OF Boolean;
+      Behind@1000000184 : ARRAY [500] OF Integer;
     BEGIN
       // Три ждущих за одной головой и четвёртый - за своей. Отчёт, считающий первых троих
       // тремя бедами, отправит чинить три операции вместо одной. Считается всё разом:
@@ -441,7 +429,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Waiter[2] := ChainSessionB; Blocker[2] := ChainSessionA;
       Waiter[3] := ChainSessionD; Blocker[3] := ChainSessionA;
       Waiter[4] := ChainSessionF; Blocker[4] := ChainSessionE;
-      Parse.Chains(Waiter,Blocker,VictimRows,Head,Depth,Ring,Behind);
+      Watch.Chains(Waiter,Blocker,VictimRows,Head,Depth,Ring,Behind);
       Check(Passed,Total,Report,ChkVictimsTxt,
         (Head[1] = ChainSessionA) AND (Behind[1] = VictimsBehindSharedHead) AND
         (Behind[3] = VictimsBehindSharedHead) AND (Head[4] = ChainSessionE) AND
@@ -449,33 +437,12 @@ OBJECT Codeunit 110231 LockWatch Parse Test
         STRSUBSTNO(VictimsTxt,Behind[1],Behind[4]));
     END;
 
-    LOCAL PROCEDURE CheckClass@26(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckFingerprint@27(VAR Passed@1000000185 : Integer;VAR Total@1000000186 : Integer;VAR Report@1000000187 : Text);
     VAR
-      WholeTable@1000000003 : Integer;
-      Sleeping@1000000004 : Integer;
-      UnderThreshold@1000000005 : Integer;
-      Working@1000000006 : Integer;
-    BEGIN
-      // Спор за таблицу целиком старше сна, и первый случай про это: виновник спит, но
-      // замок стоит на объекте - класс обязан назвать объект. Род ресурса приходит из
-      // разбора описания ожидания, и сравнивается он с ИМЕНЕМ рода, а не с числом.
-      WholeTable := Parse.EpisodeClass(TRUE,FALSE,SleepThresholdMs,TRUE);
-      Sleeping := Parse.EpisodeClass(TRUE,FALSE,SleepThresholdMs,FALSE);
-      UnderThreshold := Parse.EpisodeClass(TRUE,FALSE,UnderThresholdMs,FALSE);
-      Working := Parse.EpisodeClass(FALSE,TRUE,0,FALSE);
-      Check(Passed,Total,Report,ChkClassTxt,
-        (WholeTable = Parse.ClassWholeTable) AND (Sleeping = Parse.ClassSleepingTran) AND
-        (UnderThreshold = Parse.ClassPlain) AND (Working = Parse.ClassPlain) AND
-        (Parse.WholeTableKind = ResourceObjectLock),
-        STRSUBSTNO(ClassTxt,WholeTable,Sleeping,UnderThreshold,Working));
-    END;
-
-    LOCAL PROCEDURE CheckFingerprint@27(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
-    VAR
-      First@1000000003 : Code[20];
-      Second@1000000004 : Code[20];
-      Other@1000000005 : Code[20];
-      Empty@1000000006 : Code[20];
+      First@1000000188 : Code[20];
+      Second@1000000189 : Code[20];
+      Other@1000000190 : Code[20];
+      Empty@1000000191 : Code[20];
     BEGIN
       // Один и тот же граф придёт при каждом чтении кольцевого буфера, пока не
       // вытеснится. Без устойчивого отпечатка журнал наполнится копиями одной беды.
@@ -488,122 +455,38 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       //
       // Ловит это только ЗАПИСАННОЕ число. Красный цвет здесь и есть предупреждение:
       // лежащее в базе больше не сойдётся с тем, что посчитает новый код.
-      First := Parse.TextFingerprint(SampleGraph);
-      Second := Parse.TextFingerprint(SampleGraph);
-      Other := Parse.TextFingerprint(SampleGraph + ' ');
-      Empty := Parse.TextFingerprint('');
+      First := Watch.TextFingerprint(SampleGraph);
+      Second := Watch.TextFingerprint(SampleGraph);
+      Other := Watch.TextFingerprint(SampleGraph + ' ');
+      Empty := Watch.TextFingerprint('');
       Check(Passed,Total,Report,ChkPrintTxt,
         (First = Second) AND (First <> '') AND (First <> Other) AND (Empty = '') AND
         (First = KnownPrint),
         STRSUBSTNO(PrintTxt,First,Second,Other,Empty,KnownPrint));
     END;
 
-    LOCAL PROCEDURE CheckAdviceOrder@59(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckCounterDelta@62(VAR Passed@1000000192 : Integer;VAR Total@1000000193 : Integer;VAR Report@1000000194 : Text);
     VAR
-      AdviceText@1000000003 : Text;
-      WholeTable@1000000005 : Integer;
-      Foreign@1000000006 : Integer;
-      Sift@1000000007 : Integer;
-      Queue@1000000008 : Integer;
-      Deadlock@1000000009 : Integer;
-    BEGIN
-      // Случай нарочно составлен так, что признаков сходится сразу несколько: и агрегат
-      // SIFT, и очередь за головой, и отказ по пределу, и ожидание выше порога. Совет
-      // обязан быть один, и именно тот, у которого лечение точнее. Проверка на случае с
-      // ОДНИМ признаком прошла бы и на коде, где правила переставлены местами, - то есть
-      // была бы пустой.
-      WholeTable := Parse.Advise(Parse.ClassWholeTable,Parse.OutcomeTimedOut,AdviceWaitMs,
-                                 AdviceAlertMs,AdviceVictims,TRUE,TRUE,AdviceText);
-      Foreign := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,AdviceWaitMs,
-                              AdviceAlertMs,AdviceVictims,TRUE,TRUE,AdviceText);
-      Sift := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,AdviceWaitMs,
-                           AdviceAlertMs,AdviceVictims,TRUE,FALSE,AdviceText);
-      Queue := Parse.Advise(Parse.ClassPlain,Parse.OutcomeTimedOut,AdviceWaitMs,
-                            AdviceAlertMs,AdviceVictims,FALSE,FALSE,AdviceText);
-      Deadlock := Parse.Advise(Parse.ClassDeadlock,Parse.OutcomeDeadlocked,AdviceWaitMs,
-                               AdviceAlertMs,AdviceVictims,TRUE,TRUE,AdviceText);
-      Check(Passed,Total,Report,ChkAdviceOrderTxt,
-        (WholeTable = Parse.AdviceWholeTable) AND (Foreign = Parse.AdviceForeignHead) AND
-        (Sift = Parse.AdviceSift) AND (Queue = Parse.AdviceQueue) AND
-        (Deadlock = Parse.AdviceDeadlock),
-        STRSUBSTNO(AdviceOrderTxt,WholeTable,Foreign,Sift,Queue,Deadlock));
-    END;
-
-    LOCAL PROCEDURE CheckAdviceNumbers@60(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
-    VAR
-      AdviceText@1000000003 : Text;
-      QueueOk@1000000008 : Boolean;
-      ShortOk@1000000009 : Boolean;
-      LongOk@1000000010 : Boolean;
-      Victims@1000000011 : Integer;
-      WaitMs@1000000013 : Integer;
-      AlertMs@1000000014 : Integer;
-    BEGIN
-      // Совет обязан включаться на ТОМ САМОМ числе, которое объявлено его порогом: очередь -
-      // с AdviceQueueWaiters жертв, долгое ожидание - с порога уведомления, - и молчать на
-      // единицу раньше. Числа держатся в переменных нарочно: порог подаётся разбору и
-      // проверяется рядом, а не переписывается в проверку цифрой.
-      Victims := Parse.AdviceQueueWaiters;
-      WaitMs := AdviceLongWaitMs;
-      AlertMs := AdviceAlertMs;
-      QueueOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AdviceShortWaitMs,0,Victims,
-                              FALSE,FALSE,AdviceText) = Parse.AdviceQueue;
-      ShortOk := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AdviceShortWaitMs,0,Victims - 1,
-                              FALSE,FALSE,AdviceText) = Parse.AdviceNone;
-      LongOk := (Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,WaitMs,AlertMs,1,FALSE,FALSE,
-                              AdviceText) = Parse.AdviceLongWait) AND
-                (Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AlertMs - 1,AlertMs,1,
-                              FALSE,FALSE,AdviceText) = Parse.AdviceNone);
-      Check(Passed,Total,Report,ChkAdviceNumbersTxt,
-        QueueOk AND ShortOk AND LongOk,
-        STRSUBSTNO(AdviceNumbersTxt,Victims,Victims - 1,WaitMs,AlertMs));
-    END;
-
-    LOCAL PROCEDURE CheckAdviceQuiet@61(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
-    VAR
-      AdviceText@1000000003 : Text;
-      Quiet@1000000005 : Integer;
-      Zero@1000000006 : Integer;
-      Edge@1000000007 : Integer;
-      QuietOk@1000000008 : Boolean;
-    BEGIN
-      // Три случая молчания и один случай речи. Ноль в пороге означает "не уведомлять
-      // вовсе": без этой оговорки совет получил бы КАЖДЫЙ эпизод.
-      // Граница проверяется ровно на пороге - там, где ошибка на единицу и живёт.
-      Quiet := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,QuietWaitMs,AdviceAlertMs,1,
-                            FALSE,FALSE,AdviceText);
-      QuietOk := (Quiet = Parse.AdviceNone) AND (AdviceText = '');
-      Zero := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,ZeroThresholdWaitMs,0,1,
-                           FALSE,FALSE,AdviceText);
-      Edge := Parse.Advise(Parse.ClassPlain,Parse.OutcomeGranted,AdviceAlertMs,AdviceAlertMs,1,
-                           FALSE,FALSE,AdviceText);
-      Check(Passed,Total,Report,ChkAdviceQuietTxt,
-        QuietOk AND (Zero = Parse.AdviceNone) AND (Edge = Parse.AdviceLongWait),
-        STRSUBSTNO(AdviceQuietTxt,Quiet,Zero,Edge));
-    END;
-
-    LOCAL PROCEDURE CheckCounterDelta@62(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
-    VAR
-      Grew@1000000003 : BigInteger;
-      Still@1000000004 : BigInteger;
-      AfterReset@1000000005 : BigInteger;
-      GrewFlag@1000000006 : Boolean;
-      StillFlag@1000000007 : Boolean;
-      ResetFlag@1000000008 : Boolean;
+      Grew@1000000195 : BigInteger;
+      Still@1000000196 : BigInteger;
+      AfterReset@1000000197 : BigInteger;
+      GrewFlag@1000000198 : Boolean;
+      StillFlag@1000000199 : Boolean;
+      ResetFlag@1000000200 : Boolean;
     BEGIN
       // Обнуление счётчика - единственное место накопительного слоя, где ошибка не видна
       // глазами: итог просто поедет назад, и объяснить это будет нечем. Три случая:
       // счётчик вырос, счётчик не двинулся, счётчик обнулился и успел набрать заново.
-      Grew := Parse.CounterDelta(CounterBase,CounterGrown,GrewFlag);
-      Still := Parse.CounterDelta(CounterBase,CounterBase,StillFlag);
-      AfterReset := Parse.CounterDelta(CounterBase,CounterAfterReset,ResetFlag);
+      Grew := Watch.CounterDelta(CounterBase,CounterGrown,GrewFlag);
+      Still := Watch.CounterDelta(CounterBase,CounterBase,StillFlag);
+      AfterReset := Watch.CounterDelta(CounterBase,CounterAfterReset,ResetFlag);
       Check(Passed,Total,Report,ChkCounterDeltaTxt,
         (Grew = CounterGrowDelta) AND (NOT GrewFlag) AND (Still = 0) AND (NOT StillFlag) AND
         (AfterReset = CounterAfterReset) AND ResetFlag,
         STRSUBSTNO(CounterDeltaTxt,Grew,Still,AfterReset,ResetFlag));
     END;
 
-    LOCAL PROCEDURE Check@50(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text;CheckName@1000000003 : Text;Ok@1000000004 : Boolean;Detail@1000000005 : Text);
+    LOCAL PROCEDURE Check@50(VAR Passed@1000000201 : Integer;VAR Total@1000000202 : Integer;VAR Report@1000000203 : Text;CheckName@1000000204 : Text;Ok@1000000205 : Boolean;Detail@1000000206 : Text);
     BEGIN
       Total := Total + 1;
       IF Ok THEN BEGIN
@@ -617,47 +500,47 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       Report := Report + CrLf;
     END;
 
-    LOCAL PROCEDURE CheckSqlNamePattern@57(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckSqlNamePattern@57(VAR Passed@1000000207 : Integer;VAR Total@1000000208 : Integer;VAR Report@1000000209 : Text);
     VAR
-      Dotted@1000000003 : Text;
-      Cyrillic@1000000004 : Text;
-      Kept@1000000005 : Text;
+      Dotted@1000000210 : Text;
+      Cyrillic@1000000211 : Text;
+      Kept@1000000212 : Text;
     BEGIN
       // Имена сняты с базы заказчика: "Acc. Schedule Name" лежит в SQL как "Acc_ Schedule
       // Name", а кириллица и амперсанд платформой не трогаются вовсе.
-      Dotted := Parse.SqlNamePattern(PatternNavDotted);
-      Cyrillic := Parse.SqlNamePattern(PatternNavCyrillic);
-      Kept := Parse.SqlNamePattern(PatternNavKept);
+      Dotted := Watch.SqlNamePattern(PatternNavDotted);
+      Cyrillic := Watch.SqlNamePattern(PatternNavCyrillic);
+      Kept := Watch.SqlNamePattern(PatternNavKept);
       Check(Passed,Total,Report,ChkPatternTxt,
         (Dotted = PatternSqlDotted) AND (Cyrillic = PatternNavCyrillic) AND
         (Kept = PatternSqlKept),
         STRSUBSTNO(PatternTxt,Dotted,Cyrillic,Kept));
     END;
 
-    LOCAL PROCEDURE CheckSameSqlName@58(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckSameSqlName@58(VAR Passed@1000000213 : Integer;VAR Total@1000000214 : Integer;VAR Report@1000000215 : Text);
     VAR
-      Dot@1000000003 : Boolean;
-      Slash@1000000004 : Boolean;
-      Other@1000000005 : Boolean;
-      Length@1000000006 : Boolean;
+      Dot@1000000216 : Boolean;
+      Slash@1000000217 : Boolean;
+      Other@1000000218 : Boolean;
+      Length@1000000219 : Boolean;
     BEGIN
       // Расхождение позволено только там, где в имени NAV стоит заменяемый знак. Иначе
       // "Gen_ Journal Line" совпало бы с "Gen. Journal Lint", и таблица нашлась бы не та.
-      Dot := Parse.SameSqlName(SqlNamePart(SameNameNavDot),SameNameNavDot);
-      Slash := Parse.SameSqlName(SqlNamePart(SameNameNavSlash),SameNameNavSlash);
-      Other := Parse.SameSqlName(SqlNamePart(SameNameNavOther),SameNameNavDot);
-      Length := Parse.SameSqlName(SqlNamePart(SameNameNavLonger),SameNameNavDot);
+      Dot := Watch.SameSqlName(SqlNamePart(SameNameNavDot),SameNameNavDot);
+      Slash := Watch.SameSqlName(SqlNamePart(SameNameNavSlash),SameNameNavSlash);
+      Other := Watch.SameSqlName(SqlNamePart(SameNameNavOther),SameNameNavDot);
+      Length := Watch.SameSqlName(SqlNamePart(SameNameNavLonger),SameNameNavDot);
       Check(Passed,Total,Report,ChkSameNameTxt,
         Dot AND Slash AND (NOT Other) AND (NOT Length),
         STRSUBSTNO(SameNameTxt,Dot,Slash,Other,Length));
     END;
 
-    LOCAL PROCEDURE CheckStatementCut@64(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckStatementCut@64(VAR Passed@1000000220 : Integer;VAR Total@1000000221 : Integer;VAR Report@1000000222 : Text);
     VAR
-      Body@1000000003 : Text;
-      Cut@1000000004 : Text;
-      Whole@1000000005 : Text;
-      Blank@1000000006 : Text;
+      Body@1000000223 : Text;
+      Cut@1000000224 : Text;
+      Whole@1000000225 : Text;
+      Blank@1000000226 : Text;
     BEGIN
       // Обещание стоит рядом с усечением с первого дня и не мерялось ничем: "усечение
       // обязано быть видно ТОМУ, КТО ЧИТАЕТ". Обрезанный текст без отметки выглядит как
@@ -672,9 +555,9 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Спрашиваются и первые два знака отметки: текст из журнала копируют в studio и
       // запускают, и отметка обязана быть комментарием SQL, а не мусором в запросе.
       Body := CutBody;
-      Cut := Parse.StatementWithMark(Body,CutWhole);
-      Whole := Parse.StatementWithMark(Body,STRLEN(Body));
-      Blank := Parse.StatementWithMark('',CutWhole);
+      Cut := Watch.StatementWithMark(Body,CutWhole);
+      Whole := Watch.StatementWithMark(Body,STRLEN(Body));
+      Blank := Watch.StatementWithMark('',CutWhole);
       Check(Passed,Total,Report,ChkCutTxt,
         (STRPOS(Cut,Body) = 1) AND (STRLEN(Cut) > STRLEN(Body)) AND
         (STRPOS(Cut,FORMAT(CutWhole)) > 0) AND (STRPOS(Cut,FORMAT(STRLEN(Body))) > 0) AND
@@ -684,12 +567,12 @@ OBJECT Codeunit 110231 LockWatch Parse Test
                    COPYSTR(Cut,STRLEN(Body) + 3,2),STRLEN(Whole),STRLEN(Blank)));
     END;
 
-    LOCAL PROCEDURE CheckPassOverrun@65(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckPassOverrun@65(VAR Passed@1000000227 : Integer;VAR Total@1000000228 : Integer;VAR Report@1000000229 : Text);
     VAR
-      Over@1000000003 : Text;
-      Exact@1000000004 : Text;
-      Under@1000000005 : Text;
-      NoCeiling@1000000006 : Text;
+      Over@1000000230 : Text;
+      Exact@1000000231 : Text;
+      Under@1000000232 : Text;
+      NoCeiling@1000000233 : Text;
     BEGIN
       // Потолок прохода сравнивал с настоящей ценой только мерный прогон на стенде, а на
       // установке заказчика прогонов нет. Теперь сравнивает сам проход, и спрашивается
@@ -699,10 +582,10 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       //
       // Равенство потолку - не превышение: "уложился ровно" и "вышел за" читаются
       // по-разному, и граница обязана лежать там, где названа.
-      Over := Parse.PassOverrunNote(CeilingUnderTest + 1,CeilingUnderTest);
-      Exact := Parse.PassOverrunNote(CeilingUnderTest,CeilingUnderTest);
-      Under := Parse.PassOverrunNote(CeilingUnderTest - 1,CeilingUnderTest);
-      NoCeiling := Parse.PassOverrunNote(CeilingUnderTest + 1,0);
+      Over := Watch.PassOverrunNote(CeilingUnderTest + 1,CeilingUnderTest);
+      Exact := Watch.PassOverrunNote(CeilingUnderTest,CeilingUnderTest);
+      Under := Watch.PassOverrunNote(CeilingUnderTest - 1,CeilingUnderTest);
+      NoCeiling := Watch.PassOverrunNote(CeilingUnderTest + 1,0);
       Check(Passed,Total,Report,ChkOverrunTxt,
         (STRPOS(Over,FORMAT(CeilingUnderTest + 1)) > 0) AND
         (STRPOS(Over,FORMAT(CeilingUnderTest)) > 0) AND
@@ -710,11 +593,11 @@ OBJECT Codeunit 110231 LockWatch Parse Test
         STRSUBSTNO(OverrunTxt,Over,Exact,Under,NoCeiling));
     END;
 
-    LOCAL PROCEDURE CheckRingSilent@70(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckRingSilent@70(VAR Passed@1000000234 : Integer;VAR Total@1000000235 : Integer;VAR Report@1000000236 : Text);
     VAR
-      Silent@1000000003 : Text;
-      Spoke@1000000004 : Text;
-      Quiet@1000000005 : Text;
+      Silent@1000000237 : Text;
+      Spoke@1000000238 : Text;
+      Quiet@1000000239 : Text;
     BEGIN
       // Кольцо system_health умеет замолкать целиком, и заметить это можно только счётом
       // самого сервера (FINDINGS, раздел 62). Спрашиваются обе стороны и одна граница.
@@ -728,23 +611,23 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       //
       // Тихо: кругов не было вовсе - молчание тут единственный честный ответ. Ноль кругов
       // и ноль графов - это исправная тишина, а не потеря.
-      Silent := Parse.RingSilentNote(RingCirclesUnderTest,0);
-      Spoke := Parse.RingSilentNote(RingCirclesUnderTest,RingGraphsSeen);
-      Quiet := Parse.RingSilentNote(0,0);
+      Silent := Watch.RingSilentNote(RingCirclesUnderTest,0);
+      Spoke := Watch.RingSilentNote(RingCirclesUnderTest,RingGraphsSeen);
+      Quiet := Watch.RingSilentNote(0,0);
       Check(Passed,Total,Report,ChkRingTxt,
         (STRPOS(Silent,FORMAT(RingCirclesUnderTest)) > 0) AND (Spoke = '') AND (Quiet = ''),
         STRSUBSTNO(RingTxt,Silent,Spoke,Quiet));
     END;
 
-    LOCAL PROCEDURE CheckWatchSilent@72(VAR Passed@1000000000 : Integer;VAR Total@1000000001 : Integer;VAR Report@1000000002 : Text);
+    LOCAL PROCEDURE CheckWatchSilent@72(VAR Passed@1000000240 : Integer;VAR Total@1000000241 : Integer;VAR Report@1000000242 : Text);
     VAR
-      Asked@1000000003 : DateTime;
-      Ceiling@1000000004 : Duration;
-      Gap@1000000005 : Duration;
-      Fresh@1000000006 : Text;
-      Silent@1000000007 : Text;
-      Never@1000000008 : Text;
-      Stopped@1000000009 : Text;
+      Asked@1000000243 : DateTime;
+      Ceiling@1000000244 : Duration;
+      Gap@1000000245 : Duration;
+      Fresh@1000000246 : Text;
+      Silent@1000000247 : Text;
+      Never@1000000248 : Text;
+      Stopped@1000000249 : Text;
     BEGIN
       // Цепочка, стоящая в очереди и не исполняющаяся ни разу, - состояние измеренное, а не
       // выдуманное (FINDINGS, раздел 63). Сказать о нём некому: строку сторожа пишет проход,
@@ -762,23 +645,23 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // Остановлен: галку сняли нарочно, и молчание тут законно. Без этой половины сторож
       // кричал бы после каждой остановки и перестал бы читаться до того, как окажется прав.
       Asked := SilentObservedAt;
-      Ceiling := Parse.SilenceCeilingMs(PollPeriodUnderTest);
-      Gap := SilentMinutesUnderTest * Parse.MsPerMinute;
-      Fresh := Parse.WatchSilentNote(TRUE,Asked - Ceiling,Asked,PollPeriodUnderTest);
-      Silent := Parse.WatchSilentNote(TRUE,Asked - Gap,Asked,PollPeriodUnderTest);
-      Never := Parse.WatchSilentNote(TRUE,0DT,Asked,PollPeriodUnderTest);
-      Stopped := Parse.WatchSilentNote(FALSE,Asked - Gap,Asked,PollPeriodUnderTest);
+      Ceiling := Watch.SilenceCeilingMs(PollPeriodUnderTest);
+      Gap := SilentMinutesUnderTest * Watch.MsPerMinute;
+      Fresh := Watch.WatchSilentNote(TRUE,Asked - Ceiling,Asked,PollPeriodUnderTest);
+      Silent := Watch.WatchSilentNote(TRUE,Asked - Gap,Asked,PollPeriodUnderTest);
+      Never := Watch.WatchSilentNote(TRUE,0DT,Asked,PollPeriodUnderTest);
+      Stopped := Watch.WatchSilentNote(FALSE,Asked - Gap,Asked,PollPeriodUnderTest);
       Check(Passed,Total,Report,ChkSilentTxt,
         (Fresh = '') AND (Stopped = '') AND (Never <> '') AND (Silent <> Never) AND
         (STRPOS(Silent,FORMAT(SilentMinutesUnderTest)) > 0),
         STRSUBSTNO(SilentTxt,Fresh,Silent,Never,Stopped));
     END;
 
-    LOCAL PROCEDURE SqlNamePart@142(Name@1000000000 : Text) : Text;
+    LOCAL PROCEDURE SqlNamePart@142(Name@1000000250 : Text) : Text;
     VAR
-      Part@1000000001 : Text;
-      Index@1000000002 : Integer;
-      Ch@1000000003 : Text[1];
+      Part@1000000251 : Text;
+      Index@1000000252 : Integer;
+      Ch@1000000253 : Text[1];
     BEGIN
       // Имя объекта или поля NAV платформа переводит в имя SQL заменой точки, косой
       // черты, обратной косой черты и кавычки подчёркиванием (FINDINGS, раздел 5).
@@ -793,9 +676,9 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       EXIT(Part);
     END;
 
-    LOCAL PROCEDURE SqlObjectName@143(TableNo@1000000000 : Integer) : Text;
+    LOCAL PROCEDURE SqlObjectName@143(TableNo@1000000254 : Integer) : Text;
     VAR
-      RecRef@1000000001 : RecordRef;
+      RecRef@1000000255 : RecordRef;
     BEGIN
       // Имя таблицы в SQL: <Компания>$<Таблица>. Компания берётся у сессии, а не из
       // литерала: обкатка обязана работать в любой компании стенда.
@@ -805,7 +688,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 
     LOCAL PROCEDURE SampleTableName@144() : Text;
     VAR
-      RecRef@1000000000 : RecordRef;
+      RecRef@1000000256 : RecordRef;
     BEGIN
       // Настоящее имя таблицы, а не догадка: имя для входа теста и имя для разбора - одно
       // и то же, и переименование таблицы не оставит тест врать о ней.
@@ -840,7 +723,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 
     LOCAL PROCEDURE NoCompanyTableName@150() : Text;
     VAR
-      RecRef@1000000000 : RecordRef;
+      RecRef@1000000257 : RecordRef;
     BEGIN
       // Своя таблица настройки объявлена с DataPerCompany=No: префикса компании у неё
       // нет, и разбор обязан отдать её имя без компании.
@@ -864,8 +747,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 
     LOCAL PROCEDURE ResourceObjectLock@80() : Text;
     BEGIN
-      // Род блокировки на объект целиком. Второе слово платформы, с которым сверяется
-      // Parse.WholeTableKind, и его же обязана отдать проверка разбора.
+      // Род блокировки на объект целиком. Второе слово платформы, и его же обязана
+      // отдать проверка разбора описания ожидания.
       EXIT('objectlock');
     END;
 
@@ -904,7 +787,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 
     LOCAL PROCEDURE SampleHobt@55() : BigInteger;
     VAR
-      Value@1000000000 : BigInteger;
+      Value@1000000258 : BigInteger;
     BEGIN
       // Числовой литерал в C/AL - это Decimal, а он кончается на 999 999 999 999 999,99.
       // hobt_id в семнадцать знаков через литерал не проходит вовсе: импорт объекта падает
@@ -1131,61 +1014,6 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       EXIT(2);
     END;
 
-    LOCAL PROCEDURE SleepThresholdMs@118() : Integer;
-    BEGIN
-      // Спящая транзакция: простой дольше минуты считается сном, и класс эпизода меняется.
-      EXIT(60000);
-    END;
-
-    LOCAL PROCEDURE UnderThresholdMs@119() : Integer;
-    BEGIN
-      // Простой ниже порога сна: эпизод остаётся обычным случаем.
-      EXIT(5000);
-    END;
-
-    LOCAL PROCEDURE AdviceWaitMs@120() : Integer;
-    BEGIN
-      // Долгое ожидание в сцене советчика: выше порога уведомления.
-      EXIT(9000);
-    END;
-
-    LOCAL PROCEDURE AdviceAlertMs@121() : Integer;
-    BEGIN
-      // Порог уведомления в сцене советчика: пять секунд, как в умолчании настройки.
-      EXIT(5000);
-    END;
-
-    LOCAL PROCEDURE AdviceVictims@122() : Integer;
-    BEGIN
-      // Жертв за головой больше порога очереди: совет обязан назвать очередь.
-      EXIT(7);
-    END;
-
-    LOCAL PROCEDURE AdviceLongWaitMs@123() : Integer;
-    BEGIN
-      // Ожидание выше порога уведомления, но ниже других признаков: совет - долгое ожидание.
-      EXIT(7100);
-    END;
-
-    LOCAL PROCEDURE AdviceShortWaitMs@124() : Integer;
-    BEGIN
-      // Ожидание ниже порога: само по себе оно совет не поднимает.
-      EXIT(1000);
-    END;
-
-    LOCAL PROCEDURE QuietWaitMs@125() : Integer;
-    BEGIN
-      // Ожидание короткое, порог высокий: советчик обязан молчать.
-      EXIT(900);
-    END;
-
-    LOCAL PROCEDURE ZeroThresholdWaitMs@126() : Integer;
-    BEGIN
-      // Ожидание огромное при нулевом пороге: ноль значит "не уведомлять", а не
-      // "уведомлять обо всём".
-      EXIT(900000);
-    END;
-
     LOCAL PROCEDURE CounterBase@127() : Integer;
     BEGIN
       // Первое чтение счётчика сервера в сцене прироста.
@@ -1296,7 +1124,7 @@ OBJECT Codeunit 110231 LockWatch Parse Test
       // На два звена больше потолка шагов. Голова такой цепочки лежит на шаге "потолок
       // плюс два", то есть обрыв обязан случиться РАНЬШЕ, чем она найдётся, а без потолка
       // разматывание дошло бы до неё и вернуло её же головой.
-      EXIT(Parse.MaxChainSteps + 2);
+      EXIT(Watch.MaxChainSteps + 2);
     END;
 
     LOCAL PROCEDURE PollPeriodUnderTest@73() : Integer;
@@ -1359,8 +1187,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 
     LOCAL PROCEDURE CrLf@54() : Text[2];
     VAR
-      Cr@1000000000 : Char;
-      Lf@1000000001 : Char;
+      Cr@1000000259 : Char;
+      Lf@1000000260 : Char;
     BEGIN
       Cr := 13;
       Lf := 10;
@@ -1369,7 +1197,8 @@ OBJECT Codeunit 110231 LockWatch Parse Test
 
     BEGIN
     {
-      Обкатка разбора. Базы не касается вовсе: всё, что она проверяет, - чистые
+      Обкатка чистых функций сторожа. Базы не касается вовсе: всё, что она проверяет, -
+      счёт и разбор над данными, а не обращение к базе.
       функции над данными, и потому её можно гонять где угодно и сколько угодно.
 
       Три правила, по которым она сделана:

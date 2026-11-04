@@ -20,9 +20,7 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $TaskCodeunitId = 110235,
-    [int]    $PermissionsCodeunitId = 110242,
-    [int]    $AdapterObjectNo = 0,
+    [int]    $TaskCodeunitId = 110232,
     [int]    $MenuTargetId = 0
 )
 
@@ -111,27 +109,41 @@ if (-not $armed) {
 Write-Host "  сторож заведён и ПРОШЁЛ: задач в планировщике $(TaskCount), отметка прохода $(PassStamp)"
 
 # Набор разрешений заводится НАРОЧНО - по той же причине, по какой выше заводится сторож:
-# снятие того, чего не было, зелено само собой. Выкладка объектов набор не привозит (он
-# данные), а обкатка сборки убирает за собой, поэтому на стенде его может не быть вовсе.
+# снятие того, чего не было, зелено само собой. Нынешняя версия своего набора не заводит,
+# и снимается тот, что остался от прежней выкладки. Заводим его тем же следом, каким он
+# лежит в базе: строка набора и строка прав на нашу таблицу. Через NAV его не завести -
+# кодюнита прав в поставке больше нет, - а снятие ищет набор SQL-путём и по Role ID.
 Write-Host ''
-Write-Host 'Завожу набор разрешений: снимать будем и его'
-$rightsRunner = Join-Path $outDir 'test-uninstall-rights.ps1'
-$rightsBody = @"
-`$ErrorActionPreference = 'Stop'
-Import-Module 'C:\Program Files\Microsoft Dynamics NAV\110\Service\NavAdminTool.ps1' -DisableNameChecking -WarningAction SilentlyContinue | Out-Null
-Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $PermissionsCodeunitId -MethodName EnsurePermissionSet -ErrorAction Stop
-"@
-[IO.File]::WriteAllText($rightsRunner, (($rightsBody -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
-$rightsLog = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $rightsRunner 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
-    Fail "набор разрешений не завёлся, и снятие его ничего не докажет: $(($rightsLog -replace '\s+', ' ').Trim())"
+Write-Host 'Завожу набор разрешений LOCKWATCH: снимать будем и его'
+$permissionsBefore = [int](Scalar ("SELECT COUNT(*) FROM [dbo].[Permission] " +
+                                   "WHERE [Object ID] BETWEEN 110230 AND 110249 OR [Role ID] LIKE 'LOCKWATCH%';"))
+if ($permissionsBefore -eq 0) {
+    # Каждое из двух заведений под своим условием: оборванный прошлый прогон мог оставить
+    # набор без строки прав, и повтор тогда обязан добрать недостающее, а не пропустить
+    # опыт целиком. Столбцы перечислены ВСЕ: в таблице прав есть NOT NULL без умолчания
+    # ([Security Filter], двоичный), и пропущенный столбец валит вставку, а снятие после
+    # неё снимает пустоту.
+    Scalar ("IF NOT EXISTS (SELECT 1 FROM [dbo].[Permission Set] WHERE [Role ID] = N'LOCKWATCH')" +
+            " INSERT INTO [dbo].[Permission Set] ([Role ID], [Name]) VALUES (N'LOCKWATCH', N'LockWatch: пишущим документы');" +
+            " IF NOT EXISTS (SELECT 1 FROM [dbo].[Permission] WHERE [Role ID] = N'LOCKWATCH')" +
+            " INSERT INTO [dbo].[Permission] ([Role ID], [Object Type], [Object ID], [Read Permission]," +
+            " [Insert Permission], [Modify Permission], [Delete Permission], [Execute Permission], [Security Filter])" +
+            " VALUES (N'LOCKWATCH', 1, 110232, 1, 0, 0, 0, 0, 0x);")
+    $setsSeeded = [int](Scalar "SELECT COUNT(*) FROM [dbo].[Permission Set] WHERE [Role ID] = N'LOCKWATCH';")
+    $rightsSeeded = [int](Scalar "SELECT COUNT(*) FROM [dbo].[Permission] WHERE [Role ID] = N'LOCKWATCH';")
+    if (($setsSeeded -ne 1) -or ($rightsSeeded -lt 1)) {
+        Fail "набор разрешений не завёлся (наборов $setsSeeded, строк прав $rightsSeeded), и снятие его ничего не докажет"
+    }
+    Write-Host "  набор LOCKWATCH и строка прав на таблицу 110232 заведены (наборов $setsSeeded, строк прав $rightsSeeded)"
+} else {
+    # Набор мог остаться от прежней выкладки - тогда снятие снимает именно его, и заводить
+    # второй поверх первого незачем.
+    Write-Host "  набор уже стоял в базе: строк прав $permissionsBefore"
 }
-Write-Host "  $(($rightsLog -replace '\s+', ' ').Trim())"
 
 Write-Host ''
 $argList = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'Uninstall-LockWatch.ps1'),
              '-Server', $Server, '-Database', $Database, '-Instance', $Instance, '-Company', $Company, '-Yes')
-if ($AdapterObjectNo -gt 0) { $argList += @('-AdapterObjectNo', $AdapterObjectNo) }
-if ($MenuTargetId -gt 0)    { $argList += @('-MenuTargetId', $MenuTargetId) }
+if ($MenuTargetId -gt 0) { $argList += @('-MenuTargetId', $MenuTargetId) }
 & pwsh @argList
 exit $LASTEXITCODE

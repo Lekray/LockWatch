@@ -29,7 +29,8 @@ param(
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
     [int]    $Waiters  = 100,
-    [int]    $PassCodeunitId = 110234,
+    [int]    $TaskCodeunitId = 110232,
+    [int]    $PassCodeunitId = 110230,
     [switch] $StopInstance
 )
 
@@ -55,7 +56,11 @@ $episode = "[$Company`$LockWatch Episode]"
 # Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
 $setup   = '[LockWatch Setup]'
 $state   = '[LockWatch Watchdog]'
-$mark    = "[$Company`$LockWatch Context Mark]"
+# Спор идёт за строки таблицы контекста: настоящая её таблица начинается с номера 110232,
+# а опытные строки лежат с отрицательными номерами и выключены. В журнале же таблица
+# называется без приставки компании - так её разбирает SplitSqlObjectName.
+$context = "[$Company`$LockWatch Context Table]"
+$contextName = 'LockWatch Context Table'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
 function Invoke-Sql([string]$query) {
@@ -99,7 +104,7 @@ function Write-Ps51([string]$path, [string]$body) {
     [IO.File]::WriteAllText($path, (($body -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
 }
 
-$markEsc  = $mark.Replace('$', '`$')
+$contextEsc = $context.Replace('$', '`$')
 $stopFile = Join-Path $outDir 'load-stop.flag'
 $loadFile = Join-Path $outDir 'load-waiters.ps1'
 $crowd = $null
@@ -111,6 +116,14 @@ $deadlocksWas = ''
 # последние ждущие к первому проходу ждали меньше двух секунд. С порогом по умолчанию
 # они не дали бы строк вовсе, а проверки считают ЭПИЗОДЫ, а не увиденную очередь.
 $minWaitWas = ''
+# Пусто - "не прочиталось". Фоновый сторож на время замера гасится: его проход переписал бы
+# строку состояния между нашим проходом и чтением её чисел, и измеренная цена оказалась бы
+# чужой. Погашенный выключатель задачу не воскрешает - она просыпается, видит "выключено" и
+# кончается сама.
+$enabledWas = ''
+# Трогали ли выключатель ВООБЩЕ. Сцена может отказать до того, как настройка прочитана, - и
+# тогда уборка не вправе гасить чужой заведённый сторож по своему усмотрению.
+$enabledTouched = $false
 
 # Один процесс на всю толпу. Сотня процессов sqlcmd съела бы память рабочей станции, а
 # память на этом стенде уже однажды уронила SQL Server: он перестал выдавать рабочие
@@ -128,7 +141,7 @@ try {
     `$hold = New-Object System.Data.SqlClient.SqlConnection(`$cs)
     `$hold.Open()
     `$c = `$hold.CreateCommand()
-    `$c.CommandText = "SET LOCK_TIMEOUT -1; BEGIN TRAN; UPDATE $markEsc SET [Document No_] = N'HELD' WHERE [Server Instance Id] = -1;"
+    `$c.CommandText = "SET LOCK_TIMEOUT -1; BEGIN TRAN; UPDATE $contextEsc SET [Table Name] = N'HELD' WHERE [Table No_] = -1;"
     `$c.ExecuteNonQuery() | Out-Null
     [void]`$conns.Add(`$hold)
     for (`$i = 0; `$i -lt $Waiters; `$i++) {
@@ -136,7 +149,7 @@ try {
         `$w.Open()
         `$cmd = `$w.CreateCommand()
         `$cmd.CommandTimeout = 0
-        `$cmd.CommandText = "SET LOCK_TIMEOUT -1; BEGIN TRAN; UPDATE $markEsc SET [Document No_] = N'WANT' WHERE [Server Instance Id] = -1; ROLLBACK;"
+        `$cmd.CommandText = "SET LOCK_TIMEOUT -1; BEGIN TRAN; UPDATE $contextEsc SET [Table Name] = N'WANT' WHERE [Table No_] = -1; ROLLBACK;"
         `$cmd.BeginExecuteNonQuery() | Out-Null
         [void]`$conns.Add(`$w)
     }
@@ -184,12 +197,14 @@ try {
     # его нашли: единица тут - догадка о чужой настройке, а не находка.
     $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
     $minWaitWas = Scalar "SELECT CONVERT(varchar(11),[Journal Min Wait (ms)]) FROM $setup;"
-    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0, [Journal Min Wait (ms)] = 0, [Max Pass (ms)] = $(CeilingProbeMs);" | Out-Null
+    $enabledWas = Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"
+    Invoke-Sql "UPDATE $setup SET [SQL Server] = N'$Server', [Enabled] = 0, [Deadlocks Enabled] = 0, [Journal Min Wait (ms)] = 0, [Max Pass (ms)] = $(CeilingProbeMs);" | Out-Null
+    $enabledTouched = $true
     Invoke-Sql "DELETE FROM $episode;" | Out-Null
-    Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
+    Invoke-Sql "DELETE FROM $context WHERE [Table No_] BETWEEN -6000 AND -1;" | Out-Null
     Invoke-Sql @"
-INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
+INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
+VALUES (-1,N'LW Fixture',0,N'',N'',0);
 "@ | Out-Null
 
     Write-Host "  перезапускаю службу $Instance и жду ответа порта управления"
@@ -263,14 +278,19 @@ exit 1
         $timings += "обновление {0}: {1} мс на {2} строк, {3} мкс на строку" -f $i, $second[0], $second[1], [int]([int]$second[0] * 1000 / [Math]::Max(1,[int]$second[1]))
     }
     $steady = ($updateMs | Measure-Object -Minimum).Minimum
-    $rows = [int](Scalar "SELECT COUNT(*) FROM $episode;")
-    Check 'второй проход не наплодил строк' ($rows -eq [int]$first[1]) "строк в журнале $rows при $($first[1]) в первом проходе"
+    $rows = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [NAV Table Name] = N'$contextName';")
+    Check 'второй проход не наплодил строк' ($rows -eq [int]$first[1]) "строк в журнале по нашей таблице $rows при $($first[1]) в первом проходе"
 
-    $behind = [int](Scalar "SELECT TOP 1 [Victims Behind Head] FROM $episode ORDER BY [Entry No_];")
-    $depth  = [int](Scalar "SELECT TOP 1 [Chain Depth] FROM $episode ORDER BY [Entry No_];")
-    $heads  = [int](Scalar "SELECT COUNT(DISTINCT [Head SPID]) FROM $episode;")
-    Check 'одна беда сосчитана как одна' (($heads -eq 1) -and ($behind -eq $rows) -and ($depth -eq 1)) `
-        "голов $heads, жертв за головой $behind из $rows, глубина $depth"
+    # Толпа стоит за ОДНОЙ строкой, и в журнале это обязано выглядеть одной бедой: у всех
+    # строк один и тот же виновник, и он ни в одной из них не жертва. Числа "жертв за
+    # головой" и "глубины" в v2 нет - цепочка не размечается полями, а СВОРАЧИВАЕТСЯ:
+    # CollapseRow подставляет в строку ждущего голову, и по журналу видно, кто настоящий
+    # держатель. Проверяется поэтому то же обещание, но его нынешними средствами.
+    $heads  = [int](Scalar "SELECT COUNT(DISTINCT [Blocker SPID]) FROM $episode WHERE [NAV Table Name] = N'$contextName';")
+    $headSpid = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Blocker SPID]) FROM $episode WHERE [NAV Table Name] = N'$contextName' ORDER BY [Entry No_];"
+    $selfBlocked = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [NAV Table Name] = N'$contextName' AND [Blocker SPID] = [Victim SPID];")
+    Check 'одна беда сосчитана как одна' (($heads -eq 1) -and ($selfBlocked -eq 0) -and (([int]$headSpid) -gt 0)) `
+        "виновников $heads (SPID $headSpid), жертв за ним $rows, строк, где виновник и жертва один сеанс: $selfBlocked"
 
     Write-Host 'Отпускаю толпу'
     New-Item -ItemType File -Path $stopFile -Force | Out-Null
@@ -279,7 +299,7 @@ exit 1
     Write-Host 'Проход третий - все эпизоды закрываются'
     $third = Invoke-Pass
     $timings += "закрытие: {0} мс на {1} строк" -f $third[0], $rows
-    $open = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1;")
+    $open = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1 AND [NAV Table Name] = N'$contextName';")
     Check 'ушедшая очередь закрыла все эпизоды' ($open -eq 0) "открытых осталось $open из $rows"
 
     $worst = [Math]::Max([Math]::Max([int]$first[0], ($updateMs | Measure-Object -Maximum).Maximum), [int]$third[0])
@@ -315,16 +335,50 @@ finally {
     if ($deadlocksWas -notmatch '^\d+$') {
         Warn-Cleanup 'прежнее значение [Deadlocks Enabled] прочитать не удалось - вернул 1'
     }
-    $restore = "DELETE FROM $mark WHERE [Server Instance Id] = -1; DELETE FROM $episode; UPDATE $setup SET [Deadlocks Enabled] = $deadlocksSet"
-    if ($ceilingWas -gt 0) { $restore += ", [Max Pass (ms)] = $ceilingWas" }
+    # Выключатель сторожа возвращается найденным. Гасился он как условие замера, а не потому,
+    # что установке так лучше: с заведённой цепочкой её проход переписал бы строку состояния
+    # между нашим проходом и чтением чисел. Погашенная задача просыпается, видит "выключено"
+    # и кончается сама, а в очереди после неё ничего не остаётся - поэтому найденную единицу
+    # мало вернуть галкой, цепочку надо ЗАВЕСТИ ЗАНОВО, иначе галка будет стоять над мёртвой
+    # цепочкой. Заводим её ниже, когда служба ещё работает.
+    $enabledBack = if ($enabledWas -match '^\d+$') { [int]$enabledWas } else { 0 }
+    if ($enabledWas -notmatch '^\d+$') {
+        Warn-Cleanup 'прежнее значение [Enabled] прочитать не удалось - вернул 0'
+    }
+    $setParts = @("[Deadlocks Enabled] = $deadlocksSet")
+    if ($ceilingWas -gt 0) { $setParts += "[Max Pass (ms)] = $ceilingWas" }
     # Порог записи возвращается найденным, как и прочие поля настроек: ноль вернуть вместо
     # него значило бы оставить установку писать всё после прогона, который его снял.
     if ($minWaitWas -match '^\d+$') {
-        $restore += ", [Journal Min Wait (ms)] = $minWaitWas"
+        $setParts += "[Journal Min Wait (ms)] = $minWaitWas"
     } else {
         Warn-Cleanup 'прежнее значение [Journal Min Wait (ms)] прочитать не удалось - порог оставлен нулём'
     }
+    # Выключатель трогается только тогда, когда его вправду гасили: сцена могла отказать ДО
+    # правки, и гасить чужой заведённый сторож в уборке было бы самоуправством.
+    if ($enabledTouched) { $setParts += "[Enabled] = $enabledBack" }
+    $restore = "DELETE FROM $context WHERE [Table No_] BETWEEN -6000 AND -1; DELETE FROM $episode; " +
+               "UPDATE $setup SET " + ($setParts -join ', ')
     Invoke-CleanupSql "$restore;" 'уборка за прогоном'
+    # Цепочка возвращается НАСТОЯЩИМ путём. Одной галки мало: задача прежней цепочки уже
+    # проснулась и погасла, а новой никто не поставил. StartWatch читает строку из базы
+    # (SELECTLATESTVERSION) и переживает правку мимо NAV - ту самую, которой мы её гасили.
+    if ($enabledTouched -and ($enabledBack -eq 1)) {
+        if ($StopInstance) {
+            Warn-Cleanup 'сторож был заведён, а экземпляр по просьбе останавливается: цепочка не перевзведена, галка оставлена включённой'
+        } else {
+            $armFile = Join-Path $outDir 'rearm-watch.ps1'
+            Write-Ps51 $armFile @"
+`$ErrorActionPreference = 'Stop'
+$navImport
+Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId $TaskCodeunitId -MethodName StartWatch -ErrorAction Stop
+"@
+            $armLog = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $armFile 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                Warn-Cleanup "сторож был заведён, а вернуть его цепочку не вышло: $(($armLog -replace '\s+', ' ').Trim())"
+            }
+        }
+    }
     if (Test-Path $stopFile) { Remove-Item $stopFile -Force }
     if ($StopInstance) { Stop-Service $service -Force }
 }

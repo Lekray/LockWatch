@@ -1,4 +1,4 @@
-﻿#requires -Version 7
+#requires -Version 7
 <#
 .SYNOPSIS
     Проверка фоновой задачи: заводится ли сторож, идут ли проходы САМИ, не двоится ли
@@ -12,6 +12,10 @@
     Проверяется и то, о чём легко забыть: что цепочка не двоится. Два наблюдателя,
     идущие вперемежку, закрывают эпизоды друг другу, и разобрать такой журнал потом
     нельзя - а на экране всё это время всё выглядит здоровым.
+
+    Срок хранения в v2 - это УДАЛЕНИЕ, и второго места, куда строка могла бы переехать,
+    больше нет. Поэтому здесь же проверяется, что состаренный эпизод исчезает из журнала
+    насовсем и что сторож говорит об этом словом; лишний по потолку уходит тем же путём.
 
     Оба трудных случая - завод и остановка ПОВЕРХ идущего прохода - устраиваются нарочно:
     проход держат замком на журнале, и окно, в которое сном не попасть, открывается на
@@ -27,7 +31,7 @@ param(
     [string] $Database = $env:LW_DATABASE,
     [string] $Instance = $env:LW_INSTANCE,
     [string] $Company  = $env:LW_COMPANY,
-    [int]    $TaskCodeunitId = 110235,
+    [int]    $TaskCodeunitId = 110232,
     [switch] $StopInstance
 )
 
@@ -42,14 +46,13 @@ if (-not $Instance) { Fail 'не задан экземпляр службы: п�
 if (-not $Company)  { Fail 'не задана компания: переменная LW_COMPANY' }
 
 $episode = "[$Company`$LockWatch Episode]"
-$history = "[$Company`$LockWatch Episode History]"
 # Настройка и состояние - одни на базу, и приставки компании в их SQL-имени нет.
 $setup   = '[LockWatch Setup]'
 $state   = '[LockWatch Watchdog]'
-$mark    = "[$Company`$LockWatch Context Mark]"
+$context = "[$Company`$LockWatch Context Table]"
 # Та же таблица, но именем, каким её пишет в журнал разбор: без компании и без скобок.
 # Спор в опыте идёт за неё, и спрашивать эпизод надо по ЭТОМУ имени.
-$markName = 'LockWatch Context Mark'
+$contextName = 'LockWatch Context Table'
 $tasks   = '[dbo].[Scheduled Task]'
 $service = "MicrosoftDynamicsNavServer`$$Instance"
 
@@ -110,9 +113,9 @@ function Wait-For([scriptblock]$condition, [int]$seconds) {
 
 $blocker = $null
 $cover = $null
-# Номер эпизода, уехавшего в историю. Историю не чистит ничто - ни проход, ни задача, ни
-# срок, - поэтому свою строку прогон уносит за собой сам: иначе стенд копил бы по опытному
-# эпизоду за прогон, и однажды они стали бы объяснением чужого замера.
+# Номер эпизода, который ушёл по сроку. Своего в журнале прогон уносит за собой сам: иначе
+# стенд копил бы по опытному эпизоду за прогон, и однажды они стали бы объяснением чужого
+# замера.
 $movedNo = ''
 $movedSaid = ''
 # Подготовленные вызовы ждут знака файлом и без него висели бы вечно: их снимает уборка.
@@ -122,7 +125,6 @@ function Start-Sqlcmd([string]$name, [string]$sql) {
     # Срок ЗАПРОСА здесь нарочно не ставится: эти соединения держат замок, а держателю
     # положено ждать - в его скрипте стоит WAITFOR, и замок и есть то, ради чего он поднят.
     # Оборвав его по сроку, прогон кончил бы опыт посреди окна и стал бы винить инструмент.
-    # Висящий держатель снимает уборка прогона: ради неё процессы и запомнены.
     $file = Join-Path $outDir $name
     [IO.File]::WriteAllText($file, (($sql -replace "`r`n", "`n") -replace "`n", "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
     Start-Process -FilePath 'sqlcmd' -PassThru -WindowStyle Hidden -ArgumentList @(
@@ -170,10 +172,8 @@ function Invoke-Prepared($prepared, [int]$seconds) {
 }
 
 # Замок, которым открывается окно длиной в проход. Держим ЖУРНАЛ: его проход читает и
-# пишет каждым проходом - переезд старых строк идёт всегда, - а завод и остановка к нему
-# не обращаются вовсе и потому проходят целиком, пока проход стоит. Накопительный слой на
-# эту роль не годится: на тихом стенде счётчики не двигаются, проход в него не заходит и
-# замка не видит (проверено - двенадцать проходов подряд мимо запертой таблицы охвата).
+# пишет каждым проходом - удаление старых строк идёт всегда, - а завод и остановка к нему
+# не обращаются вовсе и потому проходят целиком, пока проход стоит.
 $journalHold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nDELETE FROM $episode WITH (TABLOCKX)`nWAITFOR DELAY '00:01:00'`nROLLBACK`n"
 # Ждём ФАКТА - что проход и вправду встал на журнале. Номер объекта спрашивается у
 # каталога: обратный перевод (OBJECT_NAME от resource_associated_entity_id) роняет запрос
@@ -205,9 +205,8 @@ WHERE l.request_status = 'GRANT' AND l.resource_type = 'OBJECT'
 # Десять секунд - это два полных круга с запасом, и тратятся они только на отказе.
 function PassProbeSeconds { 10 }
 
-# Отказ обязан называть то, что ИЗМЕРИЛ. Прежнее слово было "окно не открылось, опыт не
-# удался" - и читалось оно как "замок не встал", то есть посылало смотреть на sqlcmd даже
-# тогда, когда замок стоял, а не шли проходы. Различает их только замер обеих сторон.
+# Отказ обязан называть то, что ИЗМЕРИЛ. "Окно не открылось" читается как "замок не встал",
+# то есть посылает смотреть на sqlcmd даже тогда, когда замок стоял, а не шли проходы.
 function Fail-NoWindow([string]$scene) {
     $holder = Scalar $holderSql
     $was = LastPass
@@ -220,9 +219,7 @@ function Fail-NoWindow([string]$scene) {
 }
 
 # То же различение для "прохода не случилось". Опыт к этому непричастен ВСЕГДА: он тут
-# только зовёт StartWatch, и не отработай вызов - отказал бы сам Invoke-Method. Отвечает за
-# молчание либо инструмент (цепочка не перевзвелась), либо стенд (планировщик экземпляра не
-# исполняет задачи), и назвать надо замер, а не виноватого.
+# только зовёт StartWatch, и не отработай вызов - отказал бы сам Invoke-Method.
 function Fail-NoPass([string]$scene) {
     Fail ("$scene - прохода не случилось за 60 с, и опыт тут ни при чём: он только завёл сторожа. " +
           "Выключатель $(Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"), " +
@@ -236,17 +233,15 @@ function Fail-NoPass([string]$scene) {
 # запасом, и ждём мы тут наступления события, а не спим на всякий случай.
 function FallWaitSeconds { 30 }
 
-# Сколько ждать ПЕРЕЕЗДА в историю. Переезд идёт тем же проходом, что и съём очереди, а
+# Сколько ждать удаления строки. Удаление идёт тем же проходом, что и съём очереди, а
 # проход случается раз в период опроса - три секунды по умолчанию. Тридцати секунд хватает
-# на десяток проходов подряд: если за десять проходов не уехало, дело не в невезении.
+# на десяток проходов подряд: если за десять проходов не ушло, дело не в невезении.
 function MoveWaitSeconds { 30 }
 
-# Пустая дата NAV в SQL. Ни NULL, ни ноль: столбец NOT NULL, а нулю отвечает 1900 год.
-$blankDate = "CONVERT(datetime,'17530101')"
-# Сколько времени двум отметкам позволено разойтись. Обе ставит ОДИН проход - одна с часов
-# SQL, другая с часов NAV, - и разойтись они могут только на длительность самого прохода.
-# Минута - это шестьдесят его цен при объявленном потолке в тысячу миллисекунд, то есть
-# запас, который не спрячет ошибки в часовой пояс: тот дал бы три часа, а не секунду.
+# Сколько времени отметке прохода позволено разойтись с часами SQL. Её ставит сам проход
+# моментом от SQL, и разойтись они могут только на длительность самого прохода. Минута -
+# это шестьдесят его цен при объявленном потолке в тысячу миллисекунд, то есть запас,
+# который не спрячет ошибки в часовой пояс: тот дал бы три часа, а не секунду.
 function ClockSlackSeconds { 60 }
 
 $probeFile = Join-Path $outDir 'wait-nav.ps1'
@@ -270,9 +265,8 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
 }
 
 function Try-Method([string]$method) {
-    # Тот же вызов, но отказ здесь - не беда прогона, а ОТВЕТ: сцена спрашивает, падает ли
-    # завод после чужой правки, и падение обязано стать числом в проверке, а не концом
-    # прогона.
+    # Тот же вызов, но отказ здесь - не беда прогона, а ОТВЕТ: сцена спрашивает, переживает
+    # ли завод правку настройки мимо NAV, и отказ обязан стать числом в проверке.
     $file = Join-Path $outDir "try-$method.ps1"
     Write-Ps51 $file @"
 `$ErrorActionPreference = 'Stop'
@@ -283,19 +277,11 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
     $line = ($log -split "`r?`n" | Where-Object { $_ -match 'Invoke-NAVCodeunit|Sorry|ERROR|Ошибка' } | Select-Object -First 1)
     # Кавычки вокруг $line обязательны: строки ошибки на успешном вызове нет вовсе, а
     # $null -replace отдаёт ПУСТОЙ МАССИВ, а не пустую строку, и .Trim() на нём падает.
-    # Ловится это только на зелёном пути - там, где отказа и не ждали.
     return [pscustomobject]@{ Ok = ($LASTEXITCODE -eq 0); Log = (("$line" -replace '\s+', ' ')).Trim() }
 }
 
-function ProbeThresholdMs {
-    # Число заведомо не заводское: порог по умолчанию 5000, и совпадение с ним скрыло бы
-    # подмену - проверка прошла бы и на затёртой правке.
-    7777
-}
-
 # Тот же вызов, но с ОТВЕТОМ: слово инструмента приходит через MESSAGE, а командлет отдаёт
-# его предупреждением в свой вывод. Отдельная функция нужна затем, что обычный вызов ответа
-# не возвращает - иначе каждый StartWatch печатал бы приветствие модуля прямо в отчёт.
+# его предупреждением в свой вывод.
 function Ask-Method([string]$method) {
     $file = Join-Path $outDir "invoke-$method.ps1"
     Write-Ps51 $file @"
@@ -305,8 +291,6 @@ Invoke-NAVCodeunit -ServerInstance $Instance -CompanyName '$Company' -CodeunitId
 "@
     $log = & $ps51 -NoProfile -ExecutionPolicy Bypass -File $file 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { Fail "$method не отработал:`n$log" }
-    # Приветствие модуля управления режется по его же концу, а не по длине: длина завтра
-    # другая, а строка отчёта от него втрое длиннее самого ответа.
     $log = ($log -replace '\s+', ' ').Trim()
     $log = ($log -replace '^.*Microsoft\.Dynamics\.Nav\.Apps\.Management\s*', '') -replace '^WARNING: ', ''
     return $log.Trim()
@@ -320,26 +304,21 @@ function SilenceWaitSeconds {
     if ($ms -lt 60000) { $ms = 60000 }
     return [int][math]::Ceiling($ms / 1000)
 }
-function HistoryProbeMs {
-    # Две секунды. Опыт держит настоящую блокировку около пяти, и эпизод обязан этот порог
-    # ПЕРЕВАЛИТЬ - иначе он уехал бы не в историю, а в удаление, и проверка переезда
-    # покраснела бы не по делу. Заводские шестьдесят тысяч здесь не годятся вовсе.
-    2000
-}
 function GrowWaitSeconds {
     # Вдвое с лишним больше порога в две секунды, считая в секундах: ожидание растёт не
     # само по себе, а ОТМЕТКАМИ прохода - раз в период опроса, - и на занятой машине
     # заход может опоздать. Минута перекрывает десяток таких опозданий.
     60
 }
+function GrowProbeMs {
+    # Столько "ждал" обязан набрать пойманный эпизод, чтобы его длительность была видна.
+    # Две секунды - заводской порог записи; ниже него эпизода не было бы вовсе.
+    2000
+}
 function CeilingProbeRows {
-    # Потолок журнала на время опыта - одна строка. Нужен он затем, чтобы короткий эпизод
-    # ушёл по ПОТОЛКУ, а не по сроку: уехавший по сроку заведомо старше отметки охвата,
-    # поставленной этим же прогоном, и в срок охвата не попадает никогда. Свежий уходит по
-    # потолку и попадает.
-    #
-    # Единица, а не ноль: ноль означает "потолка нет". И ставится он до перезапуска -
-    # настройку служба держит в кэше (FINDINGS, раздел 67).
+    # Потолок журнала на время опыта - одна строка. Нужен он затем, чтобы проверить
+    # удаление по потолку, а не только по сроку. Единица, а не ноль: ноль означает
+    # "потолка нет". Ставится он до перезапуска - настройку служба держит в кэше.
     1
 }
 function ShortEpisodeMs {
@@ -359,45 +338,26 @@ $cleanupFail = @()
 try {
     Write-Host 'Подготовка стенда'
     if ((Get-Service $service).Status -ne 'Running') { Start-Service $service }
-    # Сбор взаимоблокировок на время опыта выключается. Он берёт графы из КОЛЬЦЕВОГО
-    # БУФЕРА сервера, а туда они попадают от кого угодно и когда угодно - хоть от прошлого
-    # прогона, хоть от чужой работы на той же базе. Строка в журнале получилась бы законной,
-    # но проверка "эпизод заведён ровно один" считает строки, и опыт судил бы инструмент по
-    # чужим кругам. Две дороги - два прогона, и каждый отвечает только за свою.
-    # Порог переезда в историю ставится ЗДЕСЬ, до перезапуска: настройку служба держит в
-    # кэше, и правка при работающей службе до прохода не дойдёт (FINDINGS, раздел 67).
-    # Заводское значение - минута, а опыт держит блокировку считанные секунды: по нему
-    # уехало бы в историю ничто, и проверка переезда мерила бы пустоту.
-    # Что правим - то и запоминаем. Опыт ставит потолок журнала в одну строку, и потолок
-    # этот пережил бы прогон: следующие сцены сметы остались бы без своих эпизодов, а
-    # покраснели бы три прогона, ни один из которых сторожа не касается. Ловилось это
-    # 13.09.2026 и стоило целой сметы.
-    #
-    # Порогов в настройке ДВА, и они про разное: срок переезда в историю и порог уведомления.
-    # Пока имя было одно (здесь стояло $thresholdWas), второе затирало первое: уборка
-    # возвращала в [History Threshold (ms)] значение [Alert Threshold (ms)], и срок
-    # переезда 60000 превращался в 5000 - то есть следующий прогон мерил переезд не тем
-    # сроком, каким его завели. Переменных поэтому две, и каждая возвращает своё поле.
+    # Запоминается ВСЁ, что прогон правит, и возвращается найденным: у установки свои
+    # значения этих полей, и заводские числа здесь стирали бы её настройку под видом уборки.
     $ceilingWas = Scalar "SELECT CONVERT(varchar(11),[Journal Rows Ceiling]) FROM $setup;"
-    $historyThresholdWas = Scalar "SELECT CONVERT(varchar(11),[History Threshold (ms)]) FROM $setup;"
+    $minWaitWas = Scalar "SELECT CONVERT(varchar(11),[Journal Min Wait (ms)]) FROM $setup;"
     $deadlocksWas = Scalar "SELECT CONVERT(varchar(2),[Deadlocks Enabled]) FROM $setup;"
-    # Охват прогон ВКЛЮЧАЕТ, а не берёт готовым у предшественника, и это лечение измеренной
-    # беды. Отметку "охват считается с" ставит первый же проход, а на выключенном охвате её
-    # не ставит никто - проверка согласия часов краснела бы не по делу. Выключенным он при
-    # этом остаётся ЗАКОННО: прогон прохода возвращает охват найденным, и на установке с
-    # выключенным охватом он выключен и после него. Полагаться на соседа значило бы мерить
-    # то, чем кончил он, вместо того, что делает сторож.
-    $coverageWas = Scalar "SELECT CONVERT(varchar(2),[Coverage Enabled]) FROM $setup;"
-    # Пустая находка - это не ноль, а НЕЧИТАННАЯ строка. Поля ниже прогон правит прямо
-    # следом, и возвращать их в уборке будет нечем: молчание тут означало бы полную уборку,
-    # которой не было.
-    if (-not ($ceilingWas -and $historyThresholdWas -and $deadlocksWas -and $coverageWas)) {
+    $documentsWas = Scalar "SELECT CONVERT(varchar(11),[Documents per Pass]) FROM $setup;"
+    if (-not ($ceilingWas -and $minWaitWas -and $deadlocksWas -and $documentsWas)) {
         $cleanupWarn += 'настройка прочиталась не вся - вернуть её поля в уборке нечем'
     }
+    # Сбор взаимоблокировок выключается: он берёт графы из КОЛЬЦЕВОГО БУФЕРА сервера, а
+    # туда они попадают от кого угодно и когда угодно. Строка в журнале была бы законной,
+    # но проверка "эпизод заведён ровно один" считает строки.
+    #
+    # Порог записи ставится в ноль: опыт держит блокировку считанные секунды, и на заводском
+    # пороге эпизод мог бы не открыться вовсе. Потолок - в одну строку, чтобы проверить
+    # удаление по потолку. Разбор документа выключается: проход с ним читает ВСЮ включённую
+    # таблицу контекста, а опыт держит её строку замком.
     Invoke-Sql @"
 UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0,
-       [Coverage Enabled] = 1,
-       [History Threshold (ms)] = $(HistoryProbeMs),
+       [Journal Min Wait (ms)] = 0, [Documents per Pass] = 0,
        [Journal Rows Ceiling] = $(CeilingProbeRows);
 "@ | Out-Null
 
@@ -417,18 +377,14 @@ UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0,
     if (-not (Wait-For { $now = LastPass; if ($now -eq $quiet) { Start-Sleep -Seconds 5; (LastPass) -eq $quiet } else { $script:quiet = $now; $false } } 60)) {
         Fail 'проходы прошлого прогона не прекратились'
     }
-    # Настройку через SQL НЕ обнуляем. Строка настройки одна на базу, и служба держит её
-    # в кэше: UPDATE мимо NAV до сессии не доходит. Здесь раньше стояло предположение, будто
-    # первое же обращение запишет кэшированную строку обратно; замер 13.09.2026 говорит
-    # другое - запись из NAV в правленную мимо строку не проходит ВОВСЕ и отказывает словами
-    # про страницу (FINDINGS, раздел 69). Вывод от этого не меняется: отметка не обнуляется,
-    # а ЗАПОМИНАЕТСЯ, и проверка ждёт её ИЗМЕНЕНИЯ.
-    Invoke-Sql "DELETE FROM $episode;" | Out-Null
-    Invoke-Sql "DELETE FROM $mark WHERE [Server Instance Id] = -1;" | Out-Null
-    # Отметка охвата обнуляется, чтобы её поставил ПЕРВЫЙ проход этого прогона: сравнивать
-    # её с отметкой того же прохода можно только пока обе свежие. Ставит её C/AL, а отметку
-    # прохода - часы SQL, и в этом вся соль сравнения.
-    Invoke-Sql "UPDATE $state SET [Coverage Since] = $blankDate;" | Out-Null
+    # Строки контекста для опыта лежат с отрицательными номерами и выключены: настоящая
+    # таблица контекста начинает с номера 110232, так что отрицательные ей не принадлежат.
+    Invoke-Sql @"
+DELETE FROM $episode;
+DELETE FROM $context WHERE [Table No_] BETWEEN -6000 AND -1;
+INSERT INTO $context ([Table No_],[Table Name],[Document Field No_],[Document Field Name],[Document Caption],[Enabled])
+VALUES (-1,N'LW Fixture',0,N'',N'',0);
+"@ | Out-Null
 
     Write-Host 'Завожу сторожа'
     $beforeStart = LastPass
@@ -446,25 +402,16 @@ UPDATE $setup SET [SQL Server] = N'$Server', [Deadlocks Enabled] = 0,
 
     # Время в журнале - UTC, и это не придирка к формату. Часы серверной сессии NAV идут по
     # UTC, в колонку момент ложится как есть, а в пояс читателя его переводит клиент; отдай
-    # туда местное - и человек увидит БУДУЩЕЕ ровно на разницу поясов. Ловилось на стенде +3
-    # (10.09.2026): отметка прохода лежала местным временем, а отметка охвата, которую
-    # ставит CURRENTDATETIME, - по UTC, и две половины сторожа расходились на три часа
-    # внутри одной строки.
-    #
-    # Спрашивается поэтому не формат, а согласие: обе отметки поставил ОДИН проход, и
-    # сойтись они обязаны. Сверка с UTC-часами сервера стоит рядом - без неё проверка
-    # прошла бы и на двух одинаково сдвинутых часах.
+    # туда местное - и человек увидит БУДУЩЕЕ ровно на разницу поясов.
     $clock = Scalar @"
 SELECT CONVERT(varchar(11),ABS(DATEDIFF(second,SYSUTCDATETIME(),[Last Pass At]))) + '|' +
-       CONVERT(varchar(11),ABS(DATEDIFF(second,[Last Pass At],[Coverage Since]))) + '|' +
        CONVERT(varchar(11),DATEDIFF(minute,SYSUTCDATETIME(),SYSDATETIME()))
 FROM $state;
 "@
     $c = @(($clock -split '\|') | ForEach-Object { $_.Trim() })
-    while ($c.Count -lt 3) { $c += '0' }
-    Check 'время записано по UTC, и обе половины сторожа сходятся' `
-        ((([int]$c[0]) -le (ClockSlackSeconds)) -and (([int]$c[1]) -le (ClockSlackSeconds))) `
-        "отметка прохода расходится с UTC на $($c[0]) с, с отметкой от NAV - на $($c[1]) с, пояс сервера $($c[2]) мин"
+    while ($c.Count -lt 2) { $c += '0' }
+    Check 'время записано по UTC' (([int]$c[0]) -le (ClockSlackSeconds)) `
+        "отметка прохода расходится с UTC на $($c[0]) с, пояс сервера $($c[1]) мин"
 
     $firstPass = LastPass
     $setupStamp = SetupStamp
@@ -482,29 +429,24 @@ FROM $state;
         "версия настройки $(if ($setupHeld) { 'не менялась' } else { 'СДВИНУЛАСЬ' }), версия состояния $(if ($stateMoved) { 'сдвинулась' } else { 'НЕ МЕНЯЛАСЬ' })"
 
     # Настройка, правленная МИМО NAV. На запертой установке это первый же порыв: поменять
-    # порог прямо в SQL. Служба такой правки не видит - строка лежит в её кэше, - и это
-    # полбеды; беда в том, что первая же запись из NAV в ту же строку падает совсем, а
-    # говорит при этом про страницу, которой нет (FINDINGS, раздел 69). Завод сторожа - как
-    # раз такая запись.
+    # галку прямо в SQL. Служба такой правки не видит, а первая же запись из NAV в ту же
+    # строку падает словами про страницу, которой нет (FINDINGS, раздел 69). Завод сторожа
+    # читает строку заново (SELECTLATESTVERSION) и обязан пережить эту правку.
     #
-    # Кэш прогревается НАРОЧНО: сцена спрашивает слово сторожа перед правкой. Без этого она
-    # зависела бы от того, читал ли кто-то настройку в этой жизни службы.
+    # Кэш прогревается НАРОЧНО: сцена спрашивает слово сторожа перед правкой. Выключатель
+    # гасится в SQL, а завод обязан поставить его обратно - обе половины и проверяются:
+    # отказ завода и незаписанное значение красят проверку.
     Ask-Method 'SayHealth' | Out-Null
-    $alertThresholdWas = Scalar "SELECT [Alert Threshold (ms)] FROM $setup;"
-    Invoke-Sql "UPDATE $setup SET [Alert Threshold (ms)] = $(ProbeThresholdMs);" | Out-Null
+    Invoke-Sql "UPDATE $setup SET [Enabled] = 0;" | Out-Null
     $armAgain = Try-Method 'StartWatch'
-    $thresholdNow = Scalar "SELECT [Alert Threshold (ms)] FROM $setup;"
-    Invoke-Sql "UPDATE $setup SET [Alert Threshold (ms)] = $alertThresholdWas;" | Out-Null
-    # Половины две, и порознь они пусты: завод, читающий кэш, падает - и первая краснеет; а
-    # завод, прочитавший кэш и всё же записавший, вернул бы прежний порог - краснеет вторая.
+    $enabledNow = Scalar "SELECT CONVERT(varchar(2),[Enabled]) FROM $setup;"
     Check 'настройка, правленная мимо NAV, не ломает завод сторожа' `
-        ($armAgain.Ok -and ($thresholdNow -eq "$(ProbeThresholdMs)")) `
-        "завод $(if ($armAgain.Ok) { 'отработал' } else { "ОТКАЗАЛ: $($armAgain.Log)" }), порог после завода $thresholdNow при ожидаемом $(ProbeThresholdMs)"
+        ($armAgain.Ok -and ($enabledNow -eq '1')) `
+        "завод $(if ($armAgain.Ok) { 'отработал' } else { "ОТКАЗАЛ: $($armAgain.Log)" }), выключатель после завода $enabledNow при ожидаемом 1"
 
     # Завод ПОВЕРХ идущего прохода. Строка исполняющейся задачи в таблице есть, но снятие
     # её не останавливает: она доходит до конца и на прежнем коде перевзводила себя уже
-    # после завода - цепочек становилось ДВЕ, обе живые, обе перевзводятся. На прежнем
-    # коде задач тут выходит 2.
+    # после завода - цепочек становилось ДВЕ, обе живые, обе перевзводятся.
     #
     # Обе руки готовятся заранее, и остановка - тоже: она понадобится в самом конце, а
     # ждать знака ей ничего не стоит.
@@ -519,8 +461,6 @@ FROM $state;
     $cover = $null
     if ($armSaid -ne 'ok') { Fail "подготовленный завод не отработал: $armSaid" }
     # Задержанный проход доходит до конца и на прежнем коде тут же ставит СВОЮ задачу.
-    # Сломано нарочно 09.09.2026 - сверка поколения снята: 8 из 9, и красная эта проверка,
-    # "задач в планировщике 2 при ожидаемой 1".
     # Ждём именно этого: появилась вторая - ответ есть сразу, не появилась за двадцать
     # секунд - тоже ответ. Строка задачи живёт и пока задача ИСПОЛНЯЕТСЯ, поэтому число
     # снимается в тишине: когда очередной проход уже отчитался.
@@ -531,12 +471,8 @@ FROM $state;
         "задач в планировщике $(TaskCount) при ожидаемой 1, сторож пишет: $(Scalar "SELECT [Watchdog Message] FROM $state;")"
 
     Write-Host 'Устраиваю блокировку и НИЧЕГО не нажимаю'
-    Invoke-Sql @"
-INSERT INTO $mark ([Server Instance Id],[Session Id],[User Id],[Company Name],[Table No_],[Document No_],[Marked At])
-VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
-"@ | Out-Null
-    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'HELD' WHERE [Server Instance Id] = -1`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
-    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $mark SET [Document No_] = N'WANT' WHERE [Server Instance Id] = -1`nROLLBACK`n"
+    $hold = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $context SET [Table Name] = N'HELD' WHERE [Table No_] = -1`nWAITFOR DELAY '00:05:00'`nROLLBACK`n"
+    $want = "SET LOCK_TIMEOUT -1`nBEGIN TRAN`nUPDATE $context SET [Table Name] = N'WANT' WHERE [Table No_] = -1`nROLLBACK`n"
     $blocker = Start-Sqlcmd 'watch-hold.sql' $hold
     Start-Sleep -Seconds 2
     $waiter = Start-Sqlcmd 'watch-want.sql' $want
@@ -544,25 +480,21 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     # Спрашивается эпизод НА СВОЕЙ таблице, а не "хоть какой-нибудь открытый". Счёт
     # открытых строк выполняется всякой чужой блокировкой: на тихом стенде её нет, а на
     # боевой базе - на той самой, ради которой инструмент и ставят, - она есть всегда.
-    # Условие выполнялось бы состоянием, которого опыт не создавал, и поймай сторож что
-    # угодно вместо нашего замка - сказать об этом было бы некому. Имя таблицы прогон и
-    # так печатал рядом: спросить его стоило ровно ничего.
-    $caught = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1 AND [NAV Table Name] = N'$markName';")) -gt 0 } 60
+    $caught = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1 AND [NAV Table Name] = N'$contextName';")) -gt 0 } 60
     # Номер СВОЕГО эпизода: по нему дальше спрашивается его судьба, а не судьба соседа.
-    $caughtNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [NAV Table Name] = N'$markName' ORDER BY [Entry No_] DESC;"
+    $caughtNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [NAV Table Name] = N'$contextName' ORDER BY [Entry No_] DESC;"
     if ('' -eq $caughtNo) { $caughtNo = '-1' }
-    $seen = Scalar "SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' + CONVERT(varchar(11),[Head SPID]) FROM $episode ORDER BY [Entry No_] DESC;"
+    $seen = Scalar "SELECT TOP 1 [NAV Table Name] + '|' + CONVERT(varchar(11),[NAV Key No_]) + '|' + CONVERT(varchar(11),[Blocker SPID]) FROM $episode ORDER BY [Entry No_] DESC;"
     Check 'сторож поймал настоящую блокировку сам' $caught `
-        "эпизод $caughtNo на [$markName]; последняя строка журнала: $seen"
+        "эпизод $caughtNo на [$contextName]; последняя строка журнала: $seen"
 
-    # Блокировка держится, пока ожидание не ПЕРЕВАЛИТ порог переезда. Отпустить её сразу
-    # значило бы отдать длительность эпизода на волю случая: на первом же заходе вышло
-    # 1397 мс, и проверка переезда мерила бы не порог, а то, в какой миг прохода пришла
-    # очередь. Держателя хватает: он взят на пять минут.
-    $grew = Wait-For { ([int](Scalar "SELECT ISNULL([Max Wait (ms)],0) FROM $episode WHERE [Entry No_] = $caughtNo;")) -ge (HistoryProbeMs) } (GrowWaitSeconds)
+    # Блокировка держится, пока ожидание не ПЕРЕВАЛИТ заводской порог записи: иначе
+    # длительность эпизода отдана воле случая, и проверка удаления мерила бы не срок, а то,
+    # в какой миг прохода пришла очередь. Держателя хватает: он взят на пять минут.
+    $grew = Wait-For { ([int](Scalar "SELECT ISNULL([Max Wait (ms)],0) FROM $episode WHERE [Entry No_] = $caughtNo;")) -ge (GrowProbeMs) } (GrowWaitSeconds)
     if (-not $grew) {
         $grewMs = Scalar "SELECT CONVERT(varchar(11),[Max Wait (ms)]) FROM $episode WHERE [Entry No_] = $caughtNo;"
-        Fail "эпизод $caughtNo за $(GrowWaitSeconds) с дорос лишь до $grewMs мс при пороге $(HistoryProbeMs) - опыт не удался"
+        Fail "эпизод $caughtNo за $(GrowWaitSeconds) с дорос лишь до $grewMs мс при ожидаемых $(GrowProbeMs) - опыт не удался"
     }
 
     Write-Host 'Отпускаю блокировку и жду, пока эпизод закроется САМ'
@@ -570,167 +502,83 @@ VALUES (-1,-1,N'STAND',N'$Company',0,N'LOCK-TARGET',GETUTCDATE());
     Stop-Sqlcmd $waiter
     $blocker = $null
     # Закрыться обязан ТОТ ЖЕ эпизод. "Есть закрытая строка" выполняется любой чужой,
-    # закрывшейся когда угодно и кем угодно, а наш при этом остался бы открытым навсегда -
-    # ровно та беда, ради которой закрытие и проверяют.
+    # закрывшейся когда угодно и кем угодно, а наш при этом остался бы открытым навсегда.
     $closed = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $caughtNo AND [Open] = 0;")) -gt 0 } 60
     Check 'эпизод закрылся сам, без нажатия' $closed `
         "эпизод $caughtNo $(if ($closed) { 'закрыт' } else { 'ОТКРЫТ' }); закрытых всего $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 0;"), открытых $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 1;")"
-
-    # Переезд в историю виден только на ЖИВОМ стороже. Мерный прогон журнала зовёт
-    # MoveOldEntries сам и потому проверяет арифметику срока, а не то, что переезд вообще
-    # СЛУЧАЕТСЯ: вынь этот вызов из прохода - и мерный прогон останется зелёным, а горячая
-    # таблица будет расти молча, пока в неё не упрётся сервер.
-    #
-    # Ждать настоящих суток нельзя, а трогать настройку незачем: срок берётся из неё какой
-    # есть, и эпизод СТАРИТСЯ на день больше срока. Так проверяется тот самый переезд, что
-    # пойдёт в бою, - с боевым сроком, а не с подставленным ради опыта.
-    #
-    # Сломано нарочно 10.09.2026 - вызов MoveOldEntries вынут из прохода целиком: 11 из 12,
-    # и красная ровно эта проверка, "эпизод из журнала НЕ ушёл, в истории его 0". Мерный
-    # прогон журнала на том же коде остался зелёным ВЕСЬ, 19 из 19: он зовёт переезд сам.
-    Write-Host 'Старю закрытый эпизод и снова НИЧЕГО не нажимаю'
-    $retention = [int](Scalar "SELECT [Retention (Days)] FROM $setup;")
-    # Старится и едет СВОЙ эпизод, тот самый, что поймал сторож. Самая свежая закрытая
-    # строка - это не то же самое: на базе, где наблюдение уже шло, ею оказалась бы чужая,
-    # и переезд проверялся бы на ней.
-    $movedNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [Open] = 0 AND [Entry No_] = $caughtNo;"
-    # Бед тут две, и они разные. Срок не задан - это стенд, и подставлять свой ради опыта
-    # нельзя: переезд меряется БОЕВЫМ сроком. Свой эпизод не закрылся - это инструмент, и
-    # проверка выше уже красная. А "закрытых эпизодов нет" было просто неправдой: чужих
-    # закрытых на базе сколько угодно, спор же идёт за СВОЙ.
-    if ($retention -le 0) {
-        Fail "срок переезда в настройке $retention дней - старить нечем, а подставлять свой срок значило бы мерить не то, что пойдёт в бою"
-    }
-    if ('' -eq $movedNo) {
-        Fail ("эпизод $caughtNo закрытым не стал, и переезд мерить не на чем - это отказ " +
+    if (-not $closed) {
+        Fail ("эпизод $caughtNo закрытым не стал, и срок хранения мерить не на чем - это отказ " +
               "инструмента, не опыта: закрытых эпизодов на базе $(Scalar "SELECT COUNT(*) FROM $episode WHERE [Open] = 0;"), но спор идёт за свой")
     }
-    # Строка сторожа обнуляется ПЕРЕД старением: её пишет каждый проход, и "уехало" от
-    # прошлого переезда осталось бы в ней от прежнего прогона. Проверка читала бы чужой
-    # ответ и проходила бы даже там, где не уехало ничто.
-    Invoke-Sql "UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
-    $historyBefore = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $movedNo;")
-    Invoke-Sql "UPDATE $episode SET [Started At] = DATEADD(day,-$($retention + 1),[Started At]) WHERE [Entry No_] = $movedNo;" | Out-Null
-    # Рядом кладётся ВТОРОЙ эпизод, точная копия первого, но ждавший всего ничего. Обоим
-    # пора уходить из журнала по сроку, и разойтись они обязаны: долгий - в историю,
-    # короткий - в удаление. Копия, а не выдуманная строка: у эпизода четыре десятка полей,
-    # и подставная строка проверяла бы не переезд, а умение прогона заполнять таблицу.
-    #
-    # Номер берётся MAX+1 одним оператором: сторож в этот миг работает, и вычисленный
-    # заранее номер мог бы достаться настоящему эпизоду.
-    $shortNo = [int](Scalar @"
+
+    # Копия пойманного эпизода кладётся ДО старения: она останется свежей и станет второй
+    # строкой для проверки потолка. Копия, а не выдуманная строка: у эпизода четыре десятка
+    # полей, и подставная строка проверяла бы не удаление, а умение прогона заполнять таблицу.
+    function New-EpisodeCopy([int]$fromNo, [int]$startShiftSeconds) {
+        Scalar @"
 DECLARE @cols nvarchar(max) = N'', @sel nvarchar(max) = N'', @s nvarchar(max);
 SELECT @cols = @cols + CASE WHEN @cols = N'' THEN N'' ELSE N',' END + QUOTENAME(c.name),
        @sel = @sel + CASE WHEN @sel = N'' THEN N'' ELSE N',' END +
          CASE c.name WHEN N'Entry No_' THEN N'@new'
                      WHEN N'Max Wait (ms)' THEN N'$(ShortEpisodeMs)'
-                     WHEN N'Started At' THEN N'DATEADD(day,-$($retention + 1),[Started At])'
+                     WHEN N'Open' THEN N'0'
+                     WHEN N'Started At' THEN N'DATEADD(second,@shift,GETUTCDATE())'
                      ELSE QUOTENAME(c.name) END
 FROM sys.columns c JOIN sys.types ty ON ty.user_type_id = c.user_type_id
 WHERE c.object_id = OBJECT_ID(N'$episode') AND c.is_computed = 0 AND ty.name <> N'timestamp';
-DECLARE @new int = (SELECT MAX([Entry No_]) + 1 FROM $episode);
-SET @s = N'INSERT INTO $episode (' + @cols + N') SELECT ' + @sel + N' FROM $episode WHERE [Entry No_] = $caughtNo;';
-EXEC sp_executesql @s, N'@new int', @new = @new;
+DECLARE @new int = (SELECT ISNULL(MAX([Entry No_]),0) + 1 FROM $episode);
+SET @s = N'INSERT INTO $episode (' + @cols + N') SELECT ' + @sel + N' FROM $episode WHERE [Entry No_] = $fromNo;';
+EXEC sp_executesql @s, N'@new int,@shift int', @new = @new, @shift = $startShiftSeconds;
 SELECT CONVERT(varchar(11),@new);
-"@)
-    if ($shortNo -le 0) { Fail 'подставной короткий эпизод не лёг - опыт не удался' }
-    $longMs = [int](Scalar "SELECT [Max Wait (ms)] FROM $episode WHERE [Entry No_] = $movedNo;")
-    if ($longMs -lt $(HistoryProbeMs)) {
-        Fail "пойманный эпизод ждал $longMs мс при пороге $(HistoryProbeMs) - мерить переезд не на чем, опыт не удался"
+"@
     }
+    $copyNo = [int](New-EpisodeCopy ([int]$caughtNo) 0)
+    if ($copyNo -le 0) { Fail 'копия пойманного эпизода не легла - опыт не удался' }
 
-    # Слово сторожа снимается В ТОТ ЖЕ МИГ, что и уход строки, а не после ожидания: строку
-    # эту переписывает КАЖДЫЙ проход, и следующий - через три секунды - затрёт "уехало"
-    # обычным отчётом. Проверка, читающая её спустя время, зависела бы от того, чем занята
-    # машина: то зелёная, то красная, и обе краски незаслуженные.
-    $leftJournal = Wait-For {
+    # Срок хранения в v2 - УДАЛЕНИЕ, и второго места, куда строка могла бы переехать, нет.
+    # Ждать настоящих суток нельзя, а подставлять свой срок - значит мерить не то, что
+    # пойдёт в бою: эпизод СТАРИТСЯ на день больше боевого срока из настройки.
+    Write-Host 'Старю закрытый эпизод и снова НИЧЕГО не нажимаю'
+    $retention = [int](Scalar "SELECT [Retention (Days)] FROM $setup;")
+    if ($retention -le 0) {
+        Fail "срок хранения в настройке $retention дней - старить нечем, а подставлять свой срок значило бы мерить не то, что пойдёт в бою"
+    }
+    $movedNo = Scalar "SELECT TOP 1 CONVERT(varchar(11),[Entry No_]) FROM $episode WHERE [Entry No_] = $caughtNo AND [Open] = 0;"
+    if ('' -eq $movedNo) { Fail "эпизод $caughtNo закрытым не стал, и удаление мерить не на чем - опыт не удался" }
+    # Строка сторожа обнуляется ПЕРЕД старением: её пишет каждый проход, и "удалено" от
+    # прошлого удаления осталось бы в ней от прежнего прогона.
+    Invoke-Sql "UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
+    Invoke-Sql "UPDATE $episode SET [Started At] = DATEADD(day,-$($retention + 1),[Started At]) WHERE [Entry No_] = $movedNo;" | Out-Null
+    # Слово снимается В ТОТ ЖЕ МИГ, что и уход строки: строку эту переписывает КАЖДЫЙ
+    # проход, и следующий затрёт "удалено" обычным отчётом.
+    $agedGone = Wait-For {
         if (([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $movedNo;")) -ne 0) { return $false }
         $script:movedSaid = Scalar "SELECT [Watchdog Message] FROM $state;"
         return $true
     } (MoveWaitSeconds)
-    if (-not $leftJournal) { $movedSaid = Scalar "SELECT [Watchdog Message] FROM $state;" }
-    $inHistory = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $movedNo;")
-    # Половины две, и порознь они пусты: переезд, увозящий ВСЁ, зелен по первой; переезд,
-    # удаляющий всё, зелен по второй. Слово сторожа спрашивается третьим: строка, пропавшая
-    # из журнала и не доехавшая до истории, без объяснения читается как потеря.
-    $shortLeft = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $shortNo;")
-    $shortInHistory = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $shortNo;")
-    Check 'в историю уезжает долгое, а короткое удаляется, и сказано об обоих' `
-        (($shortLeft -eq 0) -and ($shortInHistory -eq 0) -and ($inHistory -eq 1) -and
-         ($movedSaid -match 'deleted 1|удалено 1')) `
-        ("короткий эпизод $shortNo (ждал $(ShortEpisodeMs) мс при пороге $(HistoryProbeMs)): в журнале $shortLeft, " +
-         "в истории $shortInHistory; долгий $movedNo ждал $longMs мс, в истории $inHistory; сторож: $movedSaid")
-    # Спрашивается не "стало ли в журнале меньше", а судьба ИМЕННО ЭТОЙ строки: ушла из
-    # журнала и пришла в историю под своим номером. Счёт строк прошёл бы и на удалении - а
-    # удаление и переезд отличаются ровно тем, ради чего инструмент ставят.
-    # Слово сторожа стоит рядом с фактом нарочно: переезд, случившийся молча, человек
-    # объяснить не сможет - ненайденный вчерашний эпизод без объяснения стоит часа поисков.
-    Check 'журнал переезжает в историю сам, и сторож об этом говорит' `
-        ($leftJournal -and ($inHistory -eq 1) -and ($historyBefore -eq 0) -and
-         ($movedSaid -match 'Moved to history|Уехало в историю')) `
-        "эпизод $movedNo из журнала $(if ($leftJournal) { 'ушёл' } else { 'НЕ ушёл' }), в истории его $inHistory при ожидаемой 1 (было $historyBefore); сторож пишет: $movedSaid"
+    if (-not $agedGone) { $movedSaid = Scalar "SELECT [Watchdog Message] FROM $state;" }
+    # Истории в v2 нет вовсе: удаление обязано быть окончательным, и таблицы, куда строка
+    # могла бы переехать, в базе не должно быть ни одной.
+    $historyTables = [int](Scalar "SELECT COUNT(*) FROM sys.tables WHERE [name] LIKE '%LockWatch Episode History%';")
+    Check 'эпизод старше срока удалён из журнала насовсем, и сторож об этом говорит' `
+        ($agedGone -and ($historyTables -eq 0) -and ($movedSaid -match 'Deleted by retention or ceiling|Удалено по сроку или потолку')) `
+        ("эпизод $movedNo (ждал $(ShortEpisodeMs) мс, срок $retention дн.) из журнала $(if ($agedGone) { 'ушёл' } else { 'НЕ ушёл' }), " +
+         "таблиц истории $historyTables; сторож пишет: $movedSaid")
 
-    # Выброшенный эпизод исчезает насовсем, и охват держит его ТОЛЬКО счётом. Без этого
-    # доля названного падала бы сама собой по сроку и по потолку, а падение читалось бы как
-    # испортившееся наблюдение - ровно та беда, ради которой охват считается по журналу
-    # вместе с историей (раздел 74).
-    #
-    # Мерный прогон журнала зовёт переезд САМ и проверяет только его ответ. Сложить ответ в
-    # строку сторожа - дело ПРОХОДА, и сломать это можно, не тронув ни одной мерки.
-    #
-    # Уходит короткий по ПОТОЛКУ, а не по сроку, и это не выбор удобства. Выброшенное
-    # считается только в сроке охвата, а отметку этого срока ставит первый проход прогона;
-    # эпизод, состаренный на срок хранения, заведомо старше её. Отодвинуть отметку назад
-    # нельзя: строку сторожа служба держит в кэше, и правку мимо NAV проход не видит -
-    # замерено 13.09.2026, проход вернул поверх неё старое значение (FINDINGS, раздел 67).
-    Write-Host 'Кладу свежие короткие эпизоды и жду, пока лишний выбросит ПОТОЛОК'
-    $ceiling = [int](Scalar "SELECT [Journal Rows Ceiling] FROM $setup;")
-    if ($ceiling -ne (CeilingProbeRows)) {
-        Fail "потолок журнала $ceiling при ожидаемом $(CeilingProbeRows) - настройка до службы не дошла, опыт не удался"
-    }
-    # Строки берутся из ИСТОРИИ: зеркало повторяет журнал поле в поле, а в самом журнале к
-    # этому мигу пусто. Кладутся две - потолок в одну строку выбросит ровно лишнюю.
-    $ceilNo = [int](Scalar @"
-DECLARE @cols nvarchar(max) = N'', @sel nvarchar(max) = N'', @s nvarchar(max);
-SELECT @cols = @cols + CASE WHEN @cols = N'' THEN N'' ELSE N',' END + QUOTENAME(c.name),
-       @sel = @sel + CASE WHEN @sel = N'' THEN N'' ELSE N',' END +
-         CASE c.name WHEN N'Entry No_' THEN N'@new + @step'
-                     WHEN N'Max Wait (ms)' THEN N'$(ShortEpisodeMs)'
-                     WHEN N'Open' THEN N'0'
-                     WHEN N'Started At' THEN N'DATEADD(second,@step,GETUTCDATE())'
-                     ELSE QUOTENAME(c.name) END
-FROM sys.columns c JOIN sys.types ty ON ty.user_type_id = c.user_type_id
-WHERE c.object_id = OBJECT_ID(N'$episode') AND c.is_computed = 0 AND ty.name <> N'timestamp';
--- Конец ищется по ОБЕИМ таблицам, как его ищет и сам инструмент: журнал к этому мигу пуст,
--- и счёт, начатый с единицы, столкнулся бы с номером, уже занятым в истории.
-DECLARE @new int = (SELECT ISNULL(MAX(n),0) + 1 FROM
-    (SELECT [Entry No_] AS n FROM $episode UNION ALL SELECT [Entry No_] FROM $history) x), @step int = 0;
-SET @s = N'INSERT INTO $episode (' + @cols + N') SELECT TOP 1 ' + @sel + N' FROM $history WHERE [Entry No_] = $movedNo;';
-EXEC sp_executesql @s, N'@new int,@step int', @new = @new, @step = @step;
-SET @step = 1;
-EXEC sp_executesql @s, N'@new int,@step int', @new = @new, @step = @step;
-SELECT CONVERT(varchar(11),@new);
-"@)
-    if ($ceilNo -le 0) { Fail 'свежие короткие эпизоды не легли - опыт не удался' }
-    $coverFrom = Scalar "SELECT CONVERT(varchar(30),[Coverage Since],121) FROM $state;"
-    $freshAt = Scalar "SELECT CONVERT(varchar(30),[Started At],121) FROM $episode WHERE [Entry No_] = $ceilNo;"
-    if ($freshAt -le $coverFrom) {
-        Fail "свежий эпизод начат $freshAt, а охват считается с $coverFrom - в срок он не попадает, мерить нечего"
-    }
-    $dropBefore = [int](Scalar "SELECT [Dropped Episodes] FROM $state;")
-    $dropMsBefore = [int](Scalar "SELECT [Dropped Wait (ms)] FROM $state;")
-    # Лишнюю выбросит потолок сам, ближайшим проходом. Ждём УХОДА строки, а не времени:
-    # проход ходит раз в период опроса, и спать наугад значило бы то краснеть, то нет.
-    $ceilGone = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $ceilNo;")) -eq 0 } (MoveWaitSeconds)
-    $ceilInHistory = [int](Scalar "SELECT COUNT(*) FROM $history WHERE [Entry No_] = $ceilNo;")
-    $dropAfter = [int](Scalar "SELECT [Dropped Episodes] FROM $state;")
-    $dropMsAfter = [int](Scalar "SELECT [Dropped Wait (ms)] FROM $state;")
-    Check 'выброшенный эпизод остаётся в охвате числом' `
-        ($ceilGone -and ($ceilInHistory -eq 0) -and
-         (($dropAfter - $dropBefore) -eq 1) -and (($dropMsAfter - $dropMsBefore) -eq (ShortEpisodeMs))) `
-        ("эпизод $ceilNo из журнала $(if ($ceilGone) { 'ушёл' } else { 'НЕ ушёл' }), в истории его $ceilInHistory при ожидаемых 0; " +
-         "выброшено эпизодов $dropBefore -> $dropAfter при ожидаемом приросте 1, мс $dropMsBefore -> $dropMsAfter " +
-         "при ожидаемом приросте $(ShortEpisodeMs); эпизод начат $freshAt, охват считается с $coverFrom")
+    # Удаление по ПОТОЛКУ - вторая половина того же обещания, и меряется она иначе: строка
+    # не старая, а лишняя. Копия пойманного уже лежит в журнале свежей; вторая копия делает
+    # их две, и потолок в одну строку обязан унести СТАРУЮ.
+    Write-Host 'Кладу вторую свежую строку и жду, пока лишнюю выбросит ПОТОЛОК'
+    $ceilNo = [int](New-EpisodeCopy $copyNo 1)
+    if ($ceilNo -le 0) { Fail 'вторая свежая строка не легла - опыт не удался' }
+    Invoke-Sql "UPDATE $state SET [Watchdog Message] = N'';" | Out-Null
+    # Ждём УХОДА строки, а не времени: проход ходит раз в период опроса.
+    $ceilGone = Wait-For { ([int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $copyNo;")) -eq 0 } (MoveWaitSeconds)
+    $ceilSaid = Scalar "SELECT [Watchdog Message] FROM $state;"
+    $ceilLeft = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [Entry No_] = $ceilNo;")
+    Check 'лишняя по потолку строка удалена, свежая оставлена, и сторож об этом говорит' `
+        ($ceilGone -and ($ceilLeft -eq 1) -and ($ceilSaid -match 'Deleted by retention or ceiling|Удалено по сроку или потолку')) `
+        ("строка $copyNo из журнала $(if ($ceilGone) { 'ушла' } else { 'НЕ ушла' }), свежая $ceilNo осталась ($ceilLeft); сторож пишет: $ceilSaid")
 
     Write-Host 'Останавливаю сторожа'
     Invoke-Method 'StopWatch'
@@ -741,12 +589,9 @@ SELECT CONVERT(varchar(11),@new);
     # Одного выключателя мало: уже поставленная задача проснулась бы и после "стоп".
     # Поэтому проверяем не намерение, а результат - что проходов больше НЕТ.
     #
-    # Мерка эта краснела ЛОЖНО, и вот отчего: проход, начавшийся ДО остановки, дописывает
-    # свою отметку уже после неё, и окно, поставленное сразу за "стоп", засчитывало ЕГО как
-    # проход после остановки. Спросить, идёт ли проход сейчас, снаружи нечем, поэтому окно
-    # начинается с ТИШИНЫ: пока отметка двигается, идущий проход ещё не кончился, и мерить
-    # нечего. Тишина и есть тот миг, после которого всякое движение отметки - настоящий
-    # проход, а не хвост прежнего.
+    # Проход, начавшийся ДО остановки, дописывает свою отметку уже после неё, и окно,
+    # поставленное сразу за "стоп", засчитало бы ЕГО как проход после остановки. Поэтому
+    # окно начинается с ТИШИНЫ: пока отметка двигается, идущий проход ещё не кончился.
     $quietFrom = LastPass
     $settled = Wait-For {
         $now = LastPass
@@ -762,14 +607,9 @@ SELECT CONVERT(varchar(11),@new);
     Check 'после остановки проходов больше нет' (-not $moved) `
         "за 15 секунд отметка последнего прохода $(if ($moved) { 'СДВИНУЛАСЬ' } else { 'не сдвинулась' })"
 
-    # Зеркало опыта с заводом, и ловится тем же замком. Остановка гасит выключатель и
-    # снимает задачи, но идущую снять нечем: строка её на месте и после снятия (замер
-    # 09.09.2026 - задача та же самая, проход дошёл до конца). Значит не перевзвестись
-    # она должна САМА, и ради этого выключатель перечитывается ВТОРОЙ раз - перед
-    # перевзводом, а не только в начале задачи.
-    #
-    # Опасение, что для остановки замок пришлось бы держать вдвое дольше, замер снял:
-    # остановка укладывается в 466 мс при окне меньше десяти секунд - ставить ей нечего.
+    # Остановка гасит выключатель и снимает задачи, но идущую снять нечем: строка её на
+    # месте и после снятия. Значит не перевзвестись она должна САМА, и ради этого
+    # выключатель перечитывается ВТОРОЙ раз - перед перевзводом, а не только в начале задачи.
     Write-Host 'Завожу заново и останавливаю уже ВО ВРЕМЯ прохода'
     Invoke-Method 'StartWatch'
     $beforeStop = LastPass
@@ -780,8 +620,7 @@ SELECT CONVERT(varchar(11),@new);
     # своя строка от чужой. Строка идущей задачи в очереди одна и та же - это и меряем.
     $heldId = Scalar "SELECT TOP 1 CONVERT(varchar(40),[ID]) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';"
     # Задач тут обязана быть ровно одна, и обе стороны от единицы - беда ИНСТРУМЕНТА, а не
-    # опыта: ноль значит, что цепочка оборвалась, два - что она раздвоилась, и второе ровно
-    # то, о чём проверка выше. Опыт держит замок на журнале, а задачи ставит сторож.
+    # опыта: ноль значит, что цепочка оборвалась, два - что она раздвоилась.
     $tasksHeld = TaskCount
     if (($tasksHeld -ne 1) -or ('' -eq $heldId)) {
         Fail ("во время прохода задач в очереди $tasksHeld при ожидаемой одной" +
@@ -794,19 +633,9 @@ SELECT CONVERT(varchar(11),@new);
     Stop-Sqlcmd $cover
     $cover = $null
     if ($stopSaid -ne 'ok') { Fail "подготовленная остановка не отработала: $stopSaid" }
-    # Меряем ПОЯВЛЕНИЕ НОВОЙ задачи, а не итоговый ноль, и разница тут не в придирке.
-    # Снятая сверка воскрешает сторожа не навсегда, а на одно колено: воскресшая цепочка
-    # ставит ровно одну задачу, та просыпается, видит выключатель в НАЧАЛЕ задачи и умирает
-    # сама. Ноль наступает и на сломанном коде - секунды на три позже, - поэтому первая
-    # мера, ждавшая нуля, проходила вхолостую: на коде БЕЗ сверки она давала зелёные 10 из
-    # 10. А вот чужой номер в очереди - это факт: своя строка была ровно одна, и её номер
-    # записан выше.
-    #
-    # Сломано нарочно 09.09.2026 - сверка выключателя перед перевзводом снята: 9 из 10, и
-    # красная эта проверка, "новых задач после остановки ПОЯВИЛАСЬ, в очереди сейчас 1".
-    #
-    # Времени тут с запасом: воскресшая задача лежит в очереди период опроса, три секунды,
-    # и строка её не пропадает даже на время исполнения.
+    # Меряем ПОЯВЛЕНИЕ НОВОЙ задачи, а не итоговый ноль: воскресшая цепочка ставит ровно
+    # одну задачу, та просыпается, видит выключатель в НАЧАЛЕ задачи и умирает сама. Ноль
+    # наступает и на сломанном коде - секунды на три позже, - а чужой номер в очереди факт.
     $newTask = Wait-For {
         '' -ne (Scalar "SELECT TOP 1 CONVERT(varchar(40),[ID]) FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company' AND [ID] <> '$heldId';")
     } 20
@@ -815,17 +644,11 @@ SELECT CONVERT(varchar(11),@new);
 
     # Обещание, записанное рядом с CODEUNIT.RUN: своя ошибка внутри прохода откатывает его
     # транзакцию, но НЕ роняет задачу - иначе цепочка оборвалась бы на первой же
-    # неожиданности, и наблюдение кончилось бы молча, посреди ночи. Обещание это стояло с
-    # первого дня и прогоном закрыто не было: устроить проходу настоящую ошибку было нечем.
+    # неожиданности, и наблюдение кончилось бы молча, посреди ночи.
     #
     # Замок устраивает. Держим журнал ДОЛЬШЕ предела ожидания блокировки у NAV, и проход
-    # срывается сам, по-настоящему: не поддельной ошибкой из подмены, а той самой, которая
-    # случится в шторм. Дальше спрашивается не намерение, а результат - сказал ли сторож
-    # про падение и ПОШЛИ ЛИ проходы снова, когда замок отпустили.
-    #
-    # Сломано нарочно 10.09.2026 - ответ CODEUNIT.RUN не используется, и ошибка перестаёт
-    # перехватываться: 10 из 11, и красная эта проверка, "сорвался МОЛЧА, проходы после
-    # замка НЕ ПОШЛИ, задач 0". Записанное рядом с перехватом сбылось дословно.
+    # срывается сам, по-настоящему. Дальше спрашивается не намерение, а результат - сказал
+    # ли сторож про падение и ПОШЛИ ЛИ проходы снова, когда замок отпустили.
     Write-Host 'Завожу заново и держу журнал дольше предела ожидания NAV'
     Invoke-Method 'StartWatch'
     $beforeFall = LastPass
@@ -847,9 +670,9 @@ SELECT CONVERT(varchar(11),@new);
         "сорвался $(if ($fell) { 'и сказал об этом' } else { 'МОЛЧА' }), проходы после замка $(if ($resumed) { 'пошли' } else { 'НЕ ПОШЛИ' }), задач $(TaskCount); сторож писал: $fellSaid"
 
     # Цепочка умеет стоять в очереди и не исполняться НИ РАЗУ: при выключенном планировщике
-    # экземпляра завод отрабатывает молча, галка стоит, задача стоит - а проходов нет
-    # (замер 12.09.2026, FINDINGS, раздел 63). Сказать об этом некому: строку сторожа пишет
-    # проход, а прохода нет, - и наблюдение выглядит живым, пока никто не смотрит на дату.
+    # экземпляра завод отрабатывает молча, галка стоит, задача стоит - а проходов нет.
+    # Сказать об этом некому: строку сторожа пишет проход, а прохода нет, - и наблюдение
+    # выглядит живым, пока никто не смотрит на дату.
     #
     # Настоящий ключ экземпляра тут не трогается: это перезапуск службы посреди прогона.
     # Устраивается то же СОСТОЯНИЕ - задача снимается из очереди, а выключатель остаётся
@@ -880,9 +703,6 @@ SELECT CONVERT(varchar(11),@new);
     # Отметку прохода НЕ подставляем: писать её мимо NAV значило бы спорить с кэшем сервера,
     # а порог тут всего минута - его дешевле выждать по-настоящему. Заодно проверяется и сам
     # порог: слово обязано появиться не раньше, чем цепочка вправду замолчала.
-    #
-    # Ждём тут не события, а ЧАСОВ - другого способа перейти порог нет, - но смотрим на
-    # возраст отметки у СЕРВЕРА, а не на свой будильник: время инструмент берёт там же.
     $wait = (SilenceWaitSeconds) + (SilenceSlackSeconds)
     Write-Host "  жду порог молчания: $wait с"
     $aged = Wait-For {
@@ -907,54 +727,47 @@ finally {
     if ($armProc) { Stop-Sqlcmd $armProc.Process }
     if ($stopProc) { Stop-Sqlcmd $stopProc.Process }
     # Журнал чистится ПО СВОЕМУ ПРИЗНАКУ, а не целиком: свой эпизод здесь тот, что про нашу
-    # таблицу отметок, - ровно так же его называет и сам прогон, спрашивая его судьбу.
+    # таблицу контекста, - ровно так же его называет и сам прогон, спрашивая его судьбу.
     # Чужие строки журнала - это чьи-то настоящие блокировки, и сметать их заодно со своим
-    # значило бы унести не своё: на стенде с чужой работой такое не повторить.
-    $cleanup = "DELETE FROM $mark WHERE [Server Instance Id] = -1;"
-    $cleanup += " DELETE FROM $episode WHERE [NAV Table Name] = N'$markName';"
+    # значило бы унести не своё.
+    $cleanup = "DELETE FROM $context WHERE [Table No_] BETWEEN -6000 AND -1;"
+    $cleanup += " DELETE FROM $episode WHERE [NAV Table Name] = N'$contextName';"
     # Задачи снимаются С КОМПАНИЕЙ. Тот же кодюнит в другой компании той же базы - это чужая
-    # цепочка, и DELETE без компании унёс бы её заодно со своей. Читающие запросы этого
-    # прогона компанию называют все до одного (TaskCount) - снятие обязано называть её тоже.
+    # цепочка, и DELETE без компании унёс бы её заодно со своей.
     $cleanup += " DELETE FROM $tasks WHERE [Run Codeunit] = $TaskCodeunitId AND [Company] = N'$Company';"
-    # Выключатель гасится НАРОЧНО: прогон кончается остановленным сторожем. А сбор
-    # взаимоблокировок и охват возвращаются НАЙДЕННЫМИ: прогон трогал их только на время
-    # опыта, и заводские числа здесь стирали бы настройку установки под видом уборки за собой.
+    # Выключатель гасится НАРОЧНО: прогон кончается остановленным сторожем. Остальные поля
+    # возвращаются НАЙДЕННЫМИ: прогон трогал их только на время опыта.
     $cleanup += " UPDATE $setup SET [Enabled] = 0;"
     if ($deadlocksWas) { $cleanup += " UPDATE $setup SET [Deadlocks Enabled] = $deadlocksWas;" }
-    if ($coverageWas)  { $cleanup += " UPDATE $setup SET [Coverage Enabled] = $coverageWas;" }
-    # Потолок, срок переезда и порог уведомления возвращаются теми же, какими были: подставлять
-    # сюда заводские числа значило бы стереть настройку установки под видом уборки за собой.
-    if ($ceilingWas) { $cleanup += " UPDATE $setup SET [Journal Rows Ceiling] = $ceilingWas;" }
-    if ($historyThresholdWas) { $cleanup += " UPDATE $setup SET [History Threshold (ms)] = $historyThresholdWas;" }
-    if ($alertThresholdWas) { $cleanup += " UPDATE $setup SET [Alert Threshold (ms)] = $alertThresholdWas;" }
-    # Своя строка из истории уносится по НОМЕРУ, а не очисткой таблицы: история стенда -
-    # это чужие настоящие эпизоды, и смести их заодно со своим было бы дороже, чем
-    # оставить свой.
-    if ($movedNo) { $cleanup += " DELETE FROM $history WHERE [Entry No_] = $movedNo;" }
+    if ($minWaitWas)   { $cleanup += " UPDATE $setup SET [Journal Min Wait (ms)] = $minWaitWas;" }
+    if ($documentsWas) { $cleanup += " UPDATE $setup SET [Documents per Pass] = $documentsWas;" }
+    if ($ceilingWas)   { $cleanup += " UPDATE $setup SET [Journal Rows Ceiling] = $ceilingWas;" }
+    # Своя строка из журнала уносится по НОМЕРУ, а не очисткой таблицы: чужие строки - это
+    # чужие настоящие блокировки.
+    if ($movedNo) { $cleanup += " DELETE FROM $episode WHERE [Entry No_] = $movedNo;" }
+    if ($copyNo -gt 0) { $cleanup += " DELETE FROM $episode WHERE [Entry No_] = $copyNo;" }
+    if ($ceilNo -gt 0) { $cleanup += " DELETE FROM $episode WHERE [Entry No_] = $ceilNo;" }
     # Уборка судится по ФАКТУ, а не по намерению. Ключ -b здесь обязателен: без него sqlcmd
-    # вернёт НОЛЬ и на ошибке, и провалившаяся уборка выглядела бы сделанной, а её беды
-    # переживают прогон - оставленная задача идёт сама и сыграет в чужом замере, оставленная
-    # отметка сыграет чужой строкой в следующем прогоне.
+    # вернёт НОЛЬ и на ошибке, и провалившаяся уборка выглядела бы сделанной.
     $cleanupSaid = & sqlcmd -S $Server -d $Database -E -b -l 30 -t (QueryTimeoutSeconds) -h -1 -W -Q $cleanup 2>&1
     if ($LASTEXITCODE -ne 0) {
         $cleanupFail += "уборка отказала: sqlcmd вернул $LASTEXITCODE, $(($cleanupSaid -join ' ').Trim())"
     }
-    $leftMarks = [int](Scalar "SELECT COUNT(*) FROM $mark WHERE [Server Instance Id] = -1;")
-    $leftJournal = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [NAV Table Name] = N'$markName';")
-    if ($leftMarks -gt 0)   { $cleanupFail += "подложных отметок осталось $leftMarks" }
+    $leftRows = [int](Scalar "SELECT COUNT(*) FROM $context WHERE [Table No_] BETWEEN -6000 AND -1;")
+    $leftJournal = [int](Scalar "SELECT COUNT(*) FROM $episode WHERE [NAV Table Name] = N'$contextName';")
+    if ($leftRows -gt 0)    { $cleanupFail += "строк контекста опыта осталось $leftRows" }
     if ($leftJournal -gt 0) { $cleanupFail += "своих эпизодов в журнале осталось $leftJournal" }
     if ((TaskCount) -gt 0)  { $cleanupFail += "задач сторожа осталось $(TaskCount) (компания $Company)" }
     # Настройка спрашивается тем же счётом: возвращённая "почти" - это не возвращённая.
     # Сверяется она, только если была ПРОЧИТАНА: пустая находка - это не ноль, а нечитанная
-    # строка, и сравнивать с ней нечего (прогон, не дошедший до чтения, и не менял ничего).
-    if ($ceilingWas -and $historyThresholdWas -and $alertThresholdWas -and $deadlocksWas -and $coverageWas) {
-        $backWas = "$ceilingWas|$historyThresholdWas|$alertThresholdWas|$deadlocksWas|$coverageWas"
+    # строка, и сравнивать с ней нечего.
+    if ($ceilingWas -and $minWaitWas -and $deadlocksWas -and $documentsWas) {
+        $backWas = "$ceilingWas|$minWaitWas|$deadlocksWas|$documentsWas"
         $backNow = Scalar @"
 SELECT ISNULL(CONVERT(varchar(11),[Journal Rows Ceiling]),'') + '|' +
-       ISNULL(CONVERT(varchar(11),[History Threshold (ms)]),'') + '|' +
-       ISNULL(CONVERT(varchar(11),[Alert Threshold (ms)]),'') + '|' +
+       ISNULL(CONVERT(varchar(11),[Journal Min Wait (ms)]),'') + '|' +
        ISNULL(CONVERT(varchar(2),[Deadlocks Enabled]),'') + '|' +
-       ISNULL(CONVERT(varchar(2),[Coverage Enabled]),'')
+       ISNULL(CONVERT(varchar(11),[Documents per Pass]),'')
 FROM $setup;
 "@
         if ($backNow -ne $backWas) {
@@ -975,6 +788,6 @@ Write-Host ''
 $report | ForEach-Object { Write-Host $_ }
 if ($passed -lt $total) { Fail 'фоновая задача проверку не прошла' }
 # Уборка - часть прогона, а не вежливость в конце: оставленная задача идёт сама и сыграет в
-# следующем замере, оставленная отметка сыграет чужой строкой.
+# следующем замере, оставленная строка контекста сыграет чужой строкой.
 if ($cleanupFail) { Fail ("уборка за собой не обошлась:`n  " + ($cleanupFail -join "`n  ")) }
 Write-Host 'Готово: сторож заводится, идёт сам, ловит блокировку и умирает по кнопке' -ForegroundColor Green

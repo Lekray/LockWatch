@@ -80,20 +80,6 @@ OBJECT Page 110230 LockWatch Setup
                                  CurrPage.UPDATE(FALSE);
                                END;
                                 }
-      { 52      ;1   ;Action    ;
-                      Name=CheckPlatformRoad;
-                      CaptionML=[ENU=Check the Platform Road;
-                                 RUS=Проверить дорогу от платформы];
-                      ToolTipML=[ENU=Ask whether the platform road to a person name is alive. The answer goes into the status line next to the switch, in words - an empty column is not an answer.;
-                                 RUS=Спросить, жива ли дорога от платформы к имени человека. Ответ ложится словами в строку рядом с выключателем - пустая колонка ответом не является.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      Image=Check;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 CheckPlatformRoad;
-                               END;
-                                }
       { 43      ;1   ;Action    ;
                       Name=RunOnce;
                       CaptionML=[ENU=One pass now;
@@ -107,22 +93,6 @@ OBJECT Page 110230 LockWatch Setup
                       PromotedCategory=Process;
                       OnAction=BEGIN
                                  Task.RunOnce;
-                                 CurrPage.UPDATE(FALSE);
-                               END;
-                                }
-      { 46      ;1   ;Action    ;
-                      Name=RunDemo;
-                      CaptionML=[ENU=Demo;
-                                 RUS=Демо];
-                      ToolTipML=[ENU=Raise a real lock for a few seconds on the demo table of the tool, so that a live episode shows up in the journal. Two background sessions argue over one row: one holds it, the other waits behind it. No data of yours is touched.;
-                                 RUS=Поднять на несколько секунд настоящую блокировку на собственной таблице показа, чтобы в журнале появился живой эпизод. Спорят две фоновые сессии: одна держит строку, другая стоит за ней в очереди. Ваших данных это не касается вовсе.];
-                      ApplicationArea=#All;
-                      Promoted=Yes;
-                      Enabled="Demo Enabled";
-                      Image=Track;
-                      PromotedCategory=Process;
-                      OnAction=BEGIN
-                                 Demo.RunDemo;
                                  CurrPage.UPDATE(FALSE);
                                END;
                                 }
@@ -222,8 +192,8 @@ OBJECT Page 110230 LockWatch Setup
 
     { 55  ;2   ;Field     ;
                 Name=JournalLanguageId;
-                ToolTipML=[ENU=Specifies the language in which the watch writes WORDS into the journal - advice, reasons and messages of its own. A background task has no language of its own, so without this it writes in the language of the service. Switching the language in the client does not change what is stored.;
-                           RUS=Определяет язык, на котором сторож пишет в журнал СЛОВА - подсказки, причины и свои сообщения. У фоновой задачи нет своего языка, и без этой настройки она пишет на языке службы. Переключение языка в клиенте уже записанное не меняет.];
+                ToolTipML=[ENU=Specifies the language in which the watch writes WORDS into the journal - the reasons why a document was not found and its own messages. A background task has no language of its own, so without this it writes in the language of the service. Switching the language in the client does not change what is stored.;
+                           RUS=Определяет язык, на котором сторож пишет в журнал СЛОВА - причины, почему документ не найден, и свои сообщения. У фоновой задачи нет своего языка, и без этой настройки она пишет на языке службы. Переключение языка в клиенте уже записанное не меняет.];
                 ApplicationArea=#All;
                 SourceExpr="Journal Language ID" }
 
@@ -260,39 +230,23 @@ OBJECT Page 110230 LockWatch Setup
 
     { 9   ;2   ;Field     ;
                 Name=Retention;
-                CaptionML=[ENU=Days before an episode moves to history;
-                           RUS=Через сколько дней эпизод уезжает в историю];
-                ToolTipML=[ENU=Specifies how long an episode stays in the journal. Older than that it MOVES to history and is not deleted there: history lives until its own retention expires, and that term is named separately below.;
-                           RUS=Определяет, сколько эпизод живёт в журнале. Старше срока он ПЕРЕЕЗЖАЕТ в историю и не удаляется там: история живёт до истечения собственного срока хранения, и он задаётся отдельным полем ниже.];
+                CaptionML=[ENU=Days to keep an episode;
+                           RUS=Сколько дней хранить эпизод];
+                ToolTipML=[ENU=Specifies how long an episode stays in the journal. Older than that it is DELETED, and nothing is kept elsewhere: the journal is the only store. The background pass deletes in portions, so the term is a limit, not a moment.;
+                           RUS=Определяет, сколько эпизод живёт в журнале. Старше срока он УДАЛЯЕТСЯ, и больше нигде не хранится: журнал - единственное хранилище. Фоновый проход удаляет порциями, поэтому срок - предел, а не мгновение.];
                 ApplicationArea=#All;
                 SourceExpr="Retention (Days)" }
 
-    { 62  ;2   ;Field     ;
-                Name=HistoryRetention;
-                CaptionML=[ENU=Days to keep history;
-                           RUS=Хранить историю, дней];
-                ToolTipML=[ENU=Specifies how long an episode stays in history after it has moved there from the journal. Older entries are deleted by the background pass in portions. Zero means keep forever - and after the update the setup holds exactly zero, so the term has to be set by hand.;
-                           RUS=Определяет, сколько эпизод живёт в истории после переезда туда из журнала. Записи старше срока удаляет фоновый проход, порциями. Ноль означает хранить бессрочно, - и после обновления в настройке стоит именно ноль, поэтому срок надо выставить руками.];
-                ApplicationArea=#All;
-                SourceExpr="History Retention (Days)" }
 
     { 57  ;2   ;Field     ;
                 Name=JournalRowsCeiling;
                 CaptionML=[ENU=Journal Rows Ceiling;
                            RUS=Потолок строк в журнале];
-                ToolTipML=[ENU=Specifies how many rows the journal may hold before the oldest closed episodes move to history. The term alone cannot hold a hot table - in a storm everything in the journal is younger than the term. Zero means no ceiling.;
-                           RUS=Определяет, сколько строк держит журнал, прежде чем самые старые закрытые эпизоды уедут в историю. Одним сроком горячую таблицу не удержать - в шторм всё, что в ней лежит, моложе срока. Ноль означает, что потолка нет.];
+                ToolTipML=[ENU=Specifies how many rows the journal may hold before the oldest closed episodes are deleted. The term alone cannot hold a hot table - in a storm everything in the journal is younger than the term. Zero means no ceiling.;
+                           RUS=Определяет, сколько строк держит журнал, прежде чем самые старые закрытые эпизоды удаляются. Одним сроком горячую таблицу не удержать - в шторм всё, что в ней лежит, моложе срока. Ноль означает, что потолка нет.];
                 ApplicationArea=#All;
                 SourceExpr="Journal Rows Ceiling" }
 
-    { 60  ;2   ;Field     ;
-                Name=HistoryThreshold;
-                CaptionML=[ENU=Wait worth keeping in history (ms);
-                           RUS=Какое ожидание стоит хранить в истории, мс];
-                ToolTipML=[ENU=Specifies how long an episode had to wait to be worth keeping. When the term expires, episodes at or above this length MOVE to history and shorter ones are DELETED. History of half-second episodes is no longer history. Zero means no threshold: everything moves.;
-                           RUS=Определяет, сколько эпизод должен был ждать, чтобы его стоило хранить. По истечении срока эпизоды не короче этого ожидания ПЕРЕЕЗЖАЮТ в историю, а короткие УДАЛЯЮТСЯ. История из полусекундных эпизодов перестаёт быть историей. Ноль означает, что порога нет: уезжает всё.];
-                ApplicationArea=#All;
-                SourceExpr="History Threshold (ms)" }
 
     { 63  ;2   ;Field     ;
                 Name=JournalMinWait;
@@ -303,14 +257,6 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Journal Min Wait (ms)" }
 
-    { 10  ;2   ;Field     ;
-                Name=AlertThreshold;
-                CaptionML=[ENU=Alert Threshold (ms);
-                           RUS=Порог уведомления, мс];
-                ToolTipML=[ENU=Specifies how long a wait must last for a notification to be created. Zero means that no notifications are created.;
-                           RUS=Определяет, сколько должно длиться ожидание, чтобы было создано уведомление. Ноль - уведомления не создаются.];
-                ApplicationArea=#All;
-                SourceExpr="Alert Threshold (ms)" }
 
     { 11  ;2   ;Field     ;
                 Name=CollectStatementValues;
@@ -328,33 +274,9 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Deadlocks Enabled" }
 
-    { 37  ;2   ;Field     ;
-                Name=CoverageEnabled;
-                ToolTipML=[ENU=Specifies whether the cumulative counters of the server are read into the coverage. They cost fractions of a millisecond and are the only thing that sees the waits shorter than the poll period. Switching this off does not make the journal fuller, it only hides how full it is.;
-                           RUS=Определяет, читать ли накопительные счётчики сервера в охват. Стоят они доли миллисекунды и единственные видят ожидания короче периода опроса. Выключение не делает журнал полнее - оно только скрывает, насколько он полон.];
-                ApplicationArea=#All;
-                SourceExpr="Coverage Enabled" }
 
-    { 50  ;2   ;Field     ;
-                Name=AlertChannel;
-                ToolTipML=[ENU=Specifies where a notification goes when a wait crosses the threshold. Off writes no notification at all. Journal only writes the notification journal. Windows event log writes the notification journal and the Windows event log, which monitoring on the server already reads. Mail writes the notification journal and raises an event that the installation''s subscriber sends as mail.;
-                           RUS=Определяет, куда уходит уведомление, когда ожидание переваливает порог. Выключено - уведомление не пишется никуда. Только журнал - только в журнал уведомлений. Журнал событий Windows - в журнал уведомлений и в журнал событий Windows, который мониторинг на сервере уже читает. Почта - в журнал уведомлений и письмом через подписчика установки.];
-                ApplicationArea=#All;
-                SourceExpr="Alert Channel" }
 
-    { 64  ;2   ;Field     ;
-                Name=AlertNotifGroupID;
-                ToolTipML=[ENU=Specifies the number of the recipient group. The number is understood by the installation''s mail subscriber, not by LockWatch itself. Mail is sent only when the channel is Mail. Empty (0) means no mail is sent, and the notification row stays with a note saying so.;
-                           RUS=Определяет номер группы получателей. Номер понимает подписчик установки, а не сам LockWatch. Письмо уходит только при канале "Почта". Пусто (0) - письмо не отправляется, и строка уведомления остаётся с пометкой об этом.];
-                ApplicationArea=#All;
-                SourceExpr="Alert Notif. Group ID" }
 
-    { 51  ;2   ;Field     ;
-                Name=AlertEventSource;
-                ToolTipML=[ENU=Specifies the name of the Windows event source. An administrator registers it once per machine, and until then the channel outwards stays silent - but it says so in words, in the alert row itself.;
-                           RUS=Определяет имя источника событий Windows. Администратор заводит его один раз на машину, и до тех пор канал наружу молчит - но молчит словами, в самой строке уведомления.];
-                ApplicationArea=#All;
-                SourceExpr="Alert Event Source" }
 
     { 53  ;2   ;Field     ;
                 Name=PlatformNamesEnabled;
@@ -363,30 +285,8 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Platform Names Enabled" }
 
-    { 54  ;2   ;Field     ;
-                Name=PlatformRoadStatus;
-                ToolTipML=[ENU=Specifies what the last check of the platform road had to say. A refusal is invisible by itself - an empty screen looks the same on a healthy system and on a broken one - so the check asks for the rights and the monitor session, and cross-checks an empty platform table against the queue.;
-                           RUS=Определяет, что сказала последняя проверка дороги от платформы. Отказ сам по себе невидим - пустой экран одинаков на здоровой системе и на сломанной, - поэтому проверка спрашивает права и сессию мониторинга и сверяет пустую штатную таблицу с очередью.];
-                ApplicationArea=#All;
-                MultiLine=Yes;
-                Editable=FALSE;
-                SourceExpr="Platform Road Status" }
 
-    { 61  ;2   ;Field     ;
-                Name=NamesFromCulpritRows;
-                ToolTipML=[ENU=Specifies whether the tool may read the culprit's name from the culprit's own row. When the context mark still has not named anybody, the tool takes the tables the culprit holds locked and reads the user fields of those very rows - only fields that point at a NAV account, and only rows the culprit itself writes. It stays silent when NAV has not yet sent a deferred insert, when the culprit is only waiting and holds no locked row of its own, when the table has no user field at all, and when the accounts found in different rows disagree. It never guesses: a plausible wrong name is worse than an empty cell.;
-                           RUS=Определяет, вправе ли инструмент читать имя виновника из его собственной строки. Когда отметка контекста так и не назвала никого, инструмент берёт таблицы, заблокированные виновником, и читает поля-пользователи именно этих строк - только поля, указывающие на учётную запись NAV, и только строки, которые пишет сам виновник. Молчит он, когда NAV ещё не отправил отложенную вставку, когда виновник только ждёт и своей заблокированной строки не держит, когда в таблице вовсе нет поля-пользователя и когда учётки в разных строках расходятся. Он не гадает: правдоподобное чужое имя хуже пустой клетки.];
-                ApplicationArea=#All;
-                SourceExpr="Names From Culprit Rows" }
 
-    { 58  ;2   ;Field     ;
-                Name=DemoEnabled;
-                CaptionML=[ENU=Demo Button Enabled;
-                           RUS=Кнопка показа доступна];
-                ToolTipML=[ENU=Specifies whether the Demo button may raise a lock. Clear it and the button is unavailable. The demo deliberately holds a row for a few seconds: where a deliberate wait on the server is agreed with the security team, this switch settles the question.;
-                           RUS=Определяет, вправе ли кнопка "Демо" поднимать блокировку. Снимите галку - кнопка станет недоступна. Показ нарочно держит строку несколько секунд: там, где умышленное ожидание на сервере согласуют со службой безопасности, эта галка снимает и вопрос.];
-                ApplicationArea=#All;
-                SourceExpr="Demo Enabled" }
 
     { 25  ;1   ;Group     ;
                 CaptionML=[ENU=Parsing Limits;
@@ -411,23 +311,7 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="SQL Read Timeout (s)" }
 
-    { 20  ;2   ;Field     ;
-                Name=CulpritFullScanRows;
-                CaptionML=[ENU=Culprit Full Scan Rows;
-                           RUS=Таблица виновника целиком до, строк];
-                ToolTipML=[ENU=Specifies up to what size the culprit table is read whole, picking rows by page hash. The hash has no index, so the filter means a scan anyway - and scanning a small table is cheaper than any trick. A large table is read by its tail. Zero means the factory value.;
-                           RUS=До какого размера таблица виновника читается целиком, отбирая строки по хэшу страницы. У хэша индекса нет, поэтому отбор всё равно означает скан - и скан небольшой таблицы дешевле любой хитрости. Большая таблица читается хвостом. Ноль означает заводское значение.];
-                ApplicationArea=#All;
-                SourceExpr="Culprit Full Scan Rows" }
 
-    { 21  ;2   ;Field     ;
-                Name=CulpritTailRows;
-                CaptionML=[ENU=Culprit Tail Rows;
-                           RUS=Хвост большой таблицы, строк];
-                ToolTipML=[ENU=Specifies how many last rows of a large culprit table are read. Posting writes the newest rows and record numbers grow, so the wanted row sits at the tail of the clustered key. The longer the tail, the more expensive the read on every pass until the name is found. Zero means the factory value.;
-                           RUS=Сколько последних строк большой таблицы виновника читать. Проводка пишет свежие строки, и номера записей растут, поэтому нужная строка стоит в хвосте кластерного ключа. Чем длиннее хвост, тем дороже чтение на каждом проходе, пока имя не найдено. Ноль означает заводское значение.];
-                ApplicationArea=#All;
-                SourceExpr="Culprit Tail Rows" }
 
     { 22  ;2   ;Field     ;
                 Name=DocumentsPerPass;
@@ -438,23 +322,7 @@ OBJECT Page 110230 LockWatch Setup
                 ApplicationArea=#All;
                 SourceExpr="Documents per Pass" }
 
-    { 23  ;2   ;Field     ;
-                Name=CulpritTablesPerDocument;
-                CaptionML=[ENU=Culprit Tables per Document;
-                           RUS=Таблиц виновника на документ];
-                ToolTipML=[ENU=Specifies how many culprit tables are read per episode. A ceiling rather than an expectation: a posting touches a header, lines, a ledger and a setup - single digits. It cannot go above ten, because there is nowhere to put more tables. Zero means the factory value.;
-                           RUS=Сколько таблиц виновника читать по одному эпизоду. Верхний предел, а не ожидание: проводка трогает шапку, строки, книгу и настройку - это единицы. Выше десяти значение не поднимется, потому что больше таблиц некуда положить. Ноль означает заводское значение.];
-                ApplicationArea=#All;
-                SourceExpr="Culprit Tables per Document" }
 
-    { 24  ;2   ;Field     ;
-                Name=CulpritHashesPerTable;
-                CaptionML=[ENU=Culprit Hashes per Table;
-                           RUS=Хэшей на таблицу виновника];
-                ToolTipML=[ENU=Specifies how many different pages (hashes) are read per culprit table. Rows of one transaction land on neighbouring pages, and three hashes cover a header and a couple of lines. More than that is a table sample, and it is paid for on every pass until the name is found. It cannot go above three. Zero means the factory value.;
-                           RUS=Сколько разных страниц (хэшей) читать по одной таблице виновника. Строки одной транзакции ложатся на соседние страницы, и трёх хэшей хватает на шапку и пару строк. Больше - это уже выборка таблицы, и платить за неё приходится на каждом проходе, пока имя не найдено. Выше трёх значение не поднимется. Ноль означает заводское значение.];
-                ApplicationArea=#All;
-                SourceExpr="Culprit Hashes per Table" }
 
     { 12  ;1   ;Group     ;
                 CaptionML=[ENU=Last Pass;
@@ -505,13 +373,6 @@ OBJECT Page 110230 LockWatch Setup
                 Editable=FALSE;
                 SourceExpr="Deadlocks Read Until" }
 
-    { 38  ;2   ;Field     ;
-                Name=CoverageSince;
-                ToolTipML=[ENU=Specifies the moment the coverage gains started to be added up. Both halves of the coverage are counted from it, and the Start Over button on the coverage screen moves it.;
-                           RUS=Определяет миг, с которого складываются приросты охвата. Обе половины охвата считаются от него, и сдвигает его кнопка "Начать счёт заново" на экране охвата.];
-                ApplicationArea=#All;
-                Editable=FALSE;
-                SourceExpr="Coverage Since" }
 
     { 17  ;2   ;Field     ;
                 Name=WatchdogMessage;
@@ -527,9 +388,7 @@ OBJECT Page 110230 LockWatch Setup
   CODE
   {
     VAR
-      Task@1000000000 : Codeunit 110235;
-      Platform@1000000002 : Codeunit 110238;
-      Demo@1000000003 : Codeunit 110239;
+      Task@1000000000 : Codeunit 110232;
       ScheduledTasks@1000000001 : Integer;
       WatchSilent@1000000004 : Text;
       WatchSilentStyle@1000000005 : Text;
@@ -541,15 +400,6 @@ OBJECT Page 110230 LockWatch Setup
       StateManyTasksTxt@1000000011 : TextConst 'ENU=Running twice: %1 tasks in the scheduler, stop and start again;RUS=Работает дважды: задач в планировщике %1, остановите и заведите заново';
       StateFirstPassTxt@1000000012 : TextConst 'ENU=Armed, no pass yet;RUS=Заведён, проходов ещё не было';
       StateSilentTxt@1000000013 : TextConst 'ENU=Not running: no passes, see Chain Health;RUS=Не работает: проходов нет, см. "Здоровье цепочки"';
-
-    LOCAL PROCEDURE CheckPlatformRoad@1();
-    BEGIN
-      // Сам ответ и его запись в строку настройки живут в разборе дороги, а не здесь:
-      // кнопка на странице и вызов снаружи обязаны делать РОВНО ОДНО И ТО ЖЕ, иначе
-      // проверенным окажется не то, чем пользуются.
-      Platform.CheckRoad;
-      CurrPage.UPDATE(FALSE);
-    END;
 
     LOCAL PROCEDURE SetWatchState@5();
     BEGIN
@@ -622,13 +472,9 @@ OBJECT Page 110230 LockWatch Setup
 
     BEGIN
     {
-      Настройка и пульт. Кнопок семь, и четыре из них - про то, чтобы человек мог убедиться
-      своими глазами, а не поверить на слово: один проход сейчас, показ, журнал, таблицы
+      Настройка и пульт. Кнопок шесть, и три из них - про то, чтобы человек мог убедиться
+      своими глазами, а не поверить на слово: один проход сейчас, журнал, таблицы
       контекста.
-
-      Кнопка показа поднимает НАСТОЯЩУЮ блокировку на собственной строке инструмента, и
-      выключатель к ней стоит тут же, в настройке. Нарисовать эпизод в журнале было бы
-      проще и дешевле, но показ, рисующий сам себя, показывает не работу наблюдения.
 
       Число запланированных задач вынесено на экран нарочно. Ноль при включённом стороже
       означает, что цепочка оборвалась, и это единственный видимый признак: сама по себе
@@ -638,10 +484,7 @@ OBJECT Page 110230 LockWatch Setup
       она стоит в очереди и не исполняется НИ РАЗУ - замерено 12.09.2026. Поэтому рядом
       стоит здоровье цепочки: оно считает молчание в периодах опроса и называет его словами.
 
-      Всё, что пишет сюда сам инструмент, стоит только для чтения - и "Что с дорогой от
-      платформы" тоже. Строка эта выглядит обычным полем, а оставленная правимой, позволяла
-      человеку перебить ответ проверки своими словами: страница врала бы до следующей
-      проверки и врала бы при этом голосом инструмента.
+      Всё, что пишет сюда сам инструмент, стоит только для чтения.
     }
     END.
   }
