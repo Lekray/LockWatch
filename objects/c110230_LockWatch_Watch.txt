@@ -583,8 +583,9 @@ OBJECT Codeunit 110230 LockWatch Watch
     END;
 
     [External]
-    PROCEDURE WatchSilentNote@17(Enabled@1000000134 : Boolean;LastPassAt@1000000135 : DateTime;Asked@1000000136 : DateTime;PollPeriodMs@1000000137 : Integer) : Text;
+    PROCEDURE WatchSilentNote@17(Enabled@1000000134 : Boolean;LastPassAt@1000000135 : DateTime;ArmedAt@1000000981 : DateTime;Asked@1000000136 : DateTime;PollPeriodMs@1000000137 : Integer) : Text;
     VAR
+      Since@1000000982 : DateTime;
       SilentMs@1000000138 : Decimal;
     BEGIN
       // Молчащая цепочка не скажет о себе сама - в этом вся беда. Проходов нет, значит нет
@@ -600,6 +601,19 @@ OBJECT Codeunit 110230 LockWatch Watch
       // значило бы кричать при каждой остановке.
       IF NOT Enabled THEN
         EXIT('');
+      // Тишина считается от ПОЗДНЕГО из двух моментов - прохода и завода. Только что
+      // заведённый сторож прохода ещё не сделал, а первый стоит через секунду: тревога
+      // "ни одного прохода" в эту секунду - ложная, и человек видел её сразу после
+      // нажатия. То же после перезавода: прежний проход давний, а новая цепочка только
+      // пошла. Порог у обоих случаев один - тот же, что у молчания идущей цепочки.
+      Since := LastPassAt;
+      IF ArmedAt > Since THEN
+        Since := ArmedAt;
+      // Вложенным IF, а не через AND: C/AL считает оба операнда, и вычитание 0DT роняет
+      // проход ошибкой "The date is not valid".
+      IF Since <> 0DT THEN
+        IF Asked - Since <= SilenceCeilingMs(PollPeriodMs) THEN
+          EXIT('');
       IF LastPassAt = 0DT THEN
         EXIT(WatchNeverTxt);
       // Отметку прохода ставит SQL - моментом по UTC, с поправкой на пояс сессии (Codeunit 110231,
@@ -609,8 +623,6 @@ OBJECT Codeunit 110230 LockWatch Watch
       // минуты. Собирай проход момент через CREATEDATETIME - и проход с московского
       // клиента лёг бы на три часа назад: ровно "180 мин назад" (FINDINGS, раздел 102).
       SilentMs := Asked - LastPassAt;
-      IF SilentMs <= SilenceCeilingMs(PollPeriodMs) THEN
-        EXIT('');
       EXIT(STRSUBSTNO(WatchSilentTxt,ROUND(SilentMs / MsPerMinute,1)));
     END;
 

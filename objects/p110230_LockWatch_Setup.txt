@@ -418,7 +418,7 @@ OBJECT Page 110230 LockWatch Setup
           WatchState := StateNoTaskTxt;
         ScheduledTasks > 1:
           WatchState := STRSUBSTNO(StateManyTasksTxt,ScheduledTasks);
-        "Last Pass At" = 0DT:
+        ("Last Pass At" = 0DT) AND (WatchSilent = ''):
           BEGIN
             WatchState := StateFirstPassTxt;
             WatchStateStyle := PendingStyle;

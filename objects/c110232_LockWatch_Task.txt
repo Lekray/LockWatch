@@ -148,7 +148,7 @@ OBJECT Codeunit 110232 LockWatch Task
       Setup.FetchOnce;
       IF NOT Watchdog.GET THEN
         Watchdog.INIT;
-      EXIT(Watch.WatchSilentNote(Setup.Enabled,Watchdog."Last Pass At",CURRENTDATETIME,Setup."Poll Period (ms)"));
+      EXIT(Watch.WatchSilentNote(Setup.Enabled,Watchdog."Last Pass At",Watchdog."Armed At",CURRENTDATETIME,Setup."Poll Period (ms)"));
     END;
 
     [External]

@@ -69,7 +69,7 @@ OBJECT Codeunit 110233 LockWatch Parse Test
       ChkRingTxt@1000000047 : TextConst 'ENU=a ring gone silent is named, and a ring that spoke is not blamed;RUS=замолчавшее кольцо названо, а отдавшее - не оболгано';
       RingTxt@1000000048 : TextConst 'ENU=silent [%1], spoke [%2], quiet [%3];RUS=смолчало [%1], отдало [%2], тихо [%3]';
       ChkSilentTxt@1000000049 : TextConst 'ENU=a chain gone quiet is named, and a live one is not blamed;RUS=замолчавшая цепочка названа, а идущая - не оболгана';
-      SilentTxt@1000000050 : TextConst 'ENU=fresh [%1], silent [%2], never [%3], stopped [%4];RUS=свежий [%1], молчит [%2], ни разу [%3], остановлен [%4]';
+      SilentTxt@1000000050 : TextConst 'ENU=fresh [%1], silent [%2], never [%3], stopped [%4], just armed [%5], re-armed [%6], armed long ago [%7];RUS=свежий [%1], молчит [%2], ни разу [%3], остановлен [%4], только заведён [%5], перезаведён [%6], заведён давно [%7]';
       ChkCeilRingTxt@1000000051 : TextConst 'ENU=a ring the start does not belong to is stopped by the step ceiling and answers with the immediate blocker;RUS=кольцо, в которое начало не входит, обрывается потолком шагов и отвечает непосредственным блокирующим';
       ChkCeilChainTxt@1000000052 : TextConst 'ENU=a chain longer than the ceiling is cut at the ceiling instead of being unwound to the end;RUS=цепочка длиннее потолка обрывается на потолке, а не разматывается до конца';
       CeilChainTxt@1000000053 : TextConst 'ENU=links %1 with the array bound %2, head %3 at depth %4, ring %5;RUS=звеньев %1 при пределе массивов %2, голова %3 на глубине %4, кольцо %5';
@@ -628,6 +628,9 @@ OBJECT Codeunit 110233 LockWatch Parse Test
       Silent@1000000247 : Text;
       Never@1000000248 : Text;
       Stopped@1000000249 : Text;
+      JustArmed@1000000261 : Text;
+      Rearmed@1000000262 : Text;
+      ArmedLongAgo@1000000263 : Text;
     BEGIN
       // Цепочка, стоящая в очереди и не исполняющаяся ни разу, - состояние измеренное, а не
       // выдуманное (FINDINGS, раздел 63). Сказать о нём некому: строку сторожа пишет проход,
@@ -644,17 +647,26 @@ OBJECT Codeunit 110233 LockWatch Parse Test
       //
       // Остановлен: галку сняли нарочно, и молчание тут законно. Без этой половины сторож
       // кричал бы после каждой остановки и перестал бы читаться до того, как окажется прав.
+      //
+      // Только заведён: прохода нет, а завод был ровно порог назад - первый проход ещё
+      // впереди, и тревога в этот миг была бы ложной. Перезаведён: прежний проход давний,
+      // а завод свежий - тоже молчание по праву. Заведён давно и без прохода - это и есть
+      // "ни разу", слово то же.
       Asked := SilentObservedAt;
       Ceiling := Watch.SilenceCeilingMs(PollPeriodUnderTest);
       Gap := SilentMinutesUnderTest * Watch.MsPerMinute;
-      Fresh := Watch.WatchSilentNote(TRUE,Asked - Ceiling,Asked,PollPeriodUnderTest);
-      Silent := Watch.WatchSilentNote(TRUE,Asked - Gap,Asked,PollPeriodUnderTest);
-      Never := Watch.WatchSilentNote(TRUE,0DT,Asked,PollPeriodUnderTest);
-      Stopped := Watch.WatchSilentNote(FALSE,Asked - Gap,Asked,PollPeriodUnderTest);
+      Fresh := Watch.WatchSilentNote(TRUE,Asked - Ceiling,0DT,Asked,PollPeriodUnderTest);
+      Silent := Watch.WatchSilentNote(TRUE,Asked - Gap,0DT,Asked,PollPeriodUnderTest);
+      Never := Watch.WatchSilentNote(TRUE,0DT,0DT,Asked,PollPeriodUnderTest);
+      Stopped := Watch.WatchSilentNote(FALSE,Asked - Gap,0DT,Asked,PollPeriodUnderTest);
+      JustArmed := Watch.WatchSilentNote(TRUE,0DT,Asked - Ceiling,Asked,PollPeriodUnderTest);
+      Rearmed := Watch.WatchSilentNote(TRUE,Asked - Gap,Asked - Ceiling,Asked,PollPeriodUnderTest);
+      ArmedLongAgo := Watch.WatchSilentNote(TRUE,0DT,Asked - Gap,Asked,PollPeriodUnderTest);
       Check(Passed,Total,Report,ChkSilentTxt,
         (Fresh = '') AND (Stopped = '') AND (Never <> '') AND (Silent <> Never) AND
-        (STRPOS(Silent,FORMAT(SilentMinutesUnderTest)) > 0),
-        STRSUBSTNO(SilentTxt,Fresh,Silent,Never,Stopped));
+        (STRPOS(Silent,FORMAT(SilentMinutesUnderTest)) > 0) AND
+        (JustArmed = '') AND (Rearmed = '') AND (ArmedLongAgo = Never),
+        STRSUBSTNO(SilentTxt,Fresh,Silent,Never,Stopped,JustArmed,Rearmed,ArmedLongAgo));
     END;
 
     LOCAL PROCEDURE SqlNamePart@142(Name@1000000250 : Text) : Text;

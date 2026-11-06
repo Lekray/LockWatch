@@ -47,6 +47,9 @@ OBJECT Table 110233 LockWatch Watchdog
     { 51  ;   ;Watch Generation    ;Integer       ;CaptionML=[ENU=Watch Generation;
                                                               RUS=Поколение цепочки];
                                                    Editable=No }
+    { 52  ;   ;Armed At            ;DateTime      ;CaptionML=[ENU=Armed At;
+                                                              RUS=Сторож заведён];
+                                                   Editable=No }
   }
   KEYS
   {
@@ -102,8 +105,12 @@ OBJECT Table 110233 LockWatch Watchdog
       // Метка поколения цепочки. Поднимает её ТОЛЬКО завод, и по ней проход, начавшийся до
       // нового завода, узнаёт, что цепочка уже не его. Число, а не время: два завода подряд
       // укладываются в одну миллисекунду, и метка временем их бы не различила.
+      //
+      // Рядом ложится и момент завода: без него страница не отличит "первый проход ещё
+      // впереди" от "цепочка не пошла" и кричит о втором сразу после нажатия.
       FetchToWrite;
       "Watch Generation" := "Watch Generation" + 1;
+      "Armed At" := CURRENTDATETIME;
       MODIFY;
       EXIT("Watch Generation");
     END;
