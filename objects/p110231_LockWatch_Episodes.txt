@@ -21,8 +21,8 @@ OBJECT Page 110231 LockWatch Episodes
     PageType=List;
     RefreshOnActivate=Yes;
     OnAfterGetRecord=BEGIN
-                       BlockerText := COPYSTR(Watch.StatementText("Entry No.",TRUE),1,PreviewChars);
-                       VictimText := COPYSTR(Watch.StatementText("Entry No.",FALSE),1,PreviewChars);
+                       BlockerText := COPYSTR(Watch.Flatten(Watch.StatementText("Entry No.",TRUE)),1,PreviewChars);
+                       VictimText := COPYSTR(Watch.Flatten(Watch.StatementText("Entry No.",FALSE)),1,PreviewChars);
                      END;
 
     ActionList=ACTIONS

@@ -168,10 +168,9 @@ OBJECT Codeunit 110231 LockWatch Sql
           Observed."Blocker Program" :=
             COPYSTR(ReaderText(SqlReader,QueueColumnBlockerProgram),1,
                     MAXSTRLEN(Observed."Blocker Program"));
-          // Колонки 5, 6 и 23 (узел, процесс и логин жертвы), а также 3, 15 и 16 (тип
-          // ожидания и начало транзакции виновника) остаются в запросе, но в строку не
-          // ложатся: номера остальных столбцов от этого не съезжают. Программа жертвы
-          // читается колонкой 7 один раз - по ней решается, наш ли это сеанс.
+          // Не каждая колонка запроса ложится в строку, но номера столбцов держат только
+          // функции QueueColumn*: по прозе их не сверять. Программа жертвы читается один
+          // раз - по ней решается, наш ли это сеанс.
           Observed."Last Wait (ms)" := SqlReader.GetInt32(QueueColumnWaitMs);
           Observed."Resource Kind" := COPYSTR(UPPERCASE(Kind),1,MAXSTRLEN(Observed."Resource Kind"));
           Observed."Hobt Id" := HobtId;
@@ -600,9 +599,8 @@ OBJECT Codeunit 110231 LockWatch Sql
         Found."Blocker Login" :=
           COPYSTR(ReaderText(SqlReader,DeadlockColumnBlockerLogin),1,
                   MAXSTRLEN(Found."Blocker Login"));
-        // Колонки 5, 11, 12, 18 да 19 и 26 (программа, начало транзакции, режим, тип
-        // ожидания и логин жертвы) остаются в запросе ради нумерации, но в строку не
-        // ложатся: столбцы 16, 17 и 20 читаются по прежним номерам.
+        // Часть колонок остаётся в запросе ради нумерации и в строку не ложится; номера
+        // столбцов держат только функции DeadlockColumn*, по прозе их не сверять.
         Found."Blocker Transaction Id" := ReaderBigInt(SqlReader,DeadlockColumnBlockerTran);
         Found."Resource Kind" := COPYSTR(UPPERCASE(ReaderText(SqlReader,DeadlockColumnResourceKind)),1,
                                          MAXSTRLEN(Found."Resource Kind"));
