@@ -9,8 +9,14 @@ OBJECT Codeunit 110232 LockWatch Task
   }
   PROPERTIES
   {
+    TableNo=110233;
     OnRun=BEGIN
-            RunAndReschedule;
+            // Планировщик зовёт задачу без записи, и строка тогда пуста: это проход. Строка
+            // со словом - это запись слова об отказе, изолированная от задачи (NoteFailure).
+            IF "Watchdog Message" = '' THEN
+              RunAndReschedule
+            ELSE
+              Watchdog.Say("Watchdog Message");
           END;
 
   }
@@ -72,8 +78,13 @@ OBJECT Codeunit 110232 LockWatch Task
       Setup.Enabled := TRUE;
       Setup.MODIFY;
       Watchdog.Say(StartedTxt);
-      COMMIT;
+      // Задача ставится В ТОЙ ЖЕ транзакции, что поднятое поколение и снятие прежних, и
+      // COMMIT идёт только после неё. Строку состояния Arm держит под замком до COMMIT, и
+      // второй завод, нажатый одновременно, ждёт на ней: он снимет уже поставленную задачу
+      // первого и поставит свою. С COMMIT до постановки второй завод проходил бы в щель
+      // между ними, и обе задачи вставали бы с одним поколением - две живые цепочки.
       Schedule(FirstDelayMs);
+      COMMIT;
     END;
 
     [External]
@@ -255,6 +266,9 @@ OBJECT Codeunit 110232 LockWatch Task
       IF Floor > DelayMs THEN
         DelayMs := Floor;
       Schedule(DelayMs);
+      // Следующая задача фиксируется сразу: всё, что задача делает после, - слова, и их
+      // отказ не должен откатить перевзвод вместе с собой.
+      COMMIT;
     END;
 
     LOCAL PROCEDURE Schedule@7(DelayMs@1000000022 : Integer);
@@ -294,10 +308,11 @@ OBJECT Codeunit 110232 LockWatch Task
       EXIT(Cancelled);
     END;
 
-    [TryFunction]
     LOCAL PROCEDURE NoteFailure@9(ErrorText@1000000026 : Text);
+    VAR
+      TempNote@1000000027 : TEMPORARY Record 110233;
     BEGIN
-      // Запись идёт в TRY-функции, и это не перестраховка. Слово об упавшем проходе - это
+      // Запись идёт в отдельном CODEUNIT.RUN, и это не перестраховка. Слово об упавшем проходе - это
       // такая же запись в таблицу, как всё остальное, и отказать она может наравне с ней:
       // занятая чужим писателем строка состояния, оборванное соединение, снятое право.
       // Откажи она обычным порядком - упала бы ЗАДАЧА, а с ней и цепочка проходов: беда,
@@ -305,10 +320,12 @@ OBJECT Codeunit 110232 LockWatch Task
       // здесь - меньшее из зол, и оно не единственное: о мёртвой цепочке вслух говорит
       // сторож тишины (Watch.WatchSilentNote) - по факту, а не по причине.
       //
-      // Обрезает длинный текст ошибки сама таблица состояния: у неё это поле, ей и знать
-      // его длину. Здесь бы пришлось повторять MAXSTRLEN чужого поля.
-      Watchdog.Say(STRSUBSTNO(PassFailedTxt,ErrorText));
-      COMMIT;
+      // TRY-функция здесь не годится: её ответ надо использовать, иначе ошибка не
+      // перехватывается вовсе, а с использованным ответом платформа запрещает внутри неё
+      // запись в базу. Перевзвод к этому мигу уже зафиксирован (Reschedule), поэтому
+      // открытой записи нет, и CODEUNIT.RUN с ответом здесь разрешён.
+      TempNote."Watchdog Message" := COPYSTR(STRSUBSTNO(PassFailedTxt,ErrorText),1,MAXSTRLEN(TempNote."Watchdog Message"));
+      IF CODEUNIT.RUN(CODEUNIT::"LockWatch Task",TempNote) THEN;
     END;
 
     LOCAL PROCEDURE NoFailureCodeunit@15() : Integer;

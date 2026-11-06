@@ -26,6 +26,9 @@ OBJECT Table 110233 LockWatch Watchdog
     { 33  ;   ;Deadlocks Counted   ;BigInteger    ;CaptionML=[ENU=Deadlocks Counted by Server;
                                                               RUS=Кругов насчитано сервером];
                                                    Editable=No }
+    { 34  ;   ;Names Asked Up To   ;Integer       ;CaptionML=[ENU=Names Asked Up To;
+                                                              RUS=Имена спрошены по эпизод];
+                                                   Editable=No }
     { 40  ;   ;Last Pass At        ;DateTime      ;CaptionML=[ENU=Last Pass At;
                                                               RUS=Последний проход];
                                                    Editable=No }

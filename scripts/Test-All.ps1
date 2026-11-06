@@ -126,10 +126,10 @@ function Stop-Tree([int]$id) {
 $runs = @(
     @{
         Name = 'onstand'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        # 44 = 27 разбор без базы (Codeunit 110233) + 17 мерный прогон журнала (110234).
+        # 49 = 27 разбор без базы (Codeunit 110233) + 22 мерный прогон журнала (110234).
         # Обкатки печатают итог сами, и смета складывает их строки - значит число тут
         # обязано следовать за ними.
-        Checks = 44; Critical = $true; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO')
+        Checks = 49; Critical = $true; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO')
         Why = 'выкладка первой: всё дальнейшее меряет то, что она положила на стенд'
         What = 'сборка пакета, выкладка компилятором, разбор без базы, мерный прогон журнала'
     }
@@ -196,7 +196,7 @@ $runs = @(
     }
     @{
         Name = 'redeploy'; Script = 'Test-OnStand.ps1'; Extra = @('-Run')
-        Checks = 44; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO')
+        Checks = 49; WithInstance = $true; Needs = @('LW_DOC_TABLE_NO')
         Why = 'возвращает стенд в рабочее состояние - и это же второй замер: выкладка на ОЧИЩЕННУЮ базу'
         What = 'повторная выкладка на базу, с которой инструмент только что сняли'
     }

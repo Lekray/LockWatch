@@ -67,6 +67,16 @@ OBJECT Codeunit 110234 LockWatch Journal Bench
       MinWaitOffTxt@1000000045 : TextConst 'ENU=threshold 0, wait %1 ms, opened %2, rows in the journal %3;RUS=порог 0, ожидание %1 мс, открыто %2, строк в журнале %3';
       NoAnswerTxt@1000000046 : TextConst 'ENU=bench run: the lock hash named no document;RUS=мерный прогон: хэш блокировки не назвал документа';
       FailedRunErr@1000000047 : TextConst 'ENU=%1;RUS=%1';
+      ChkCulpritTxt@1000000168 : TextConst 'ENU=a changed culprit clears his name and takes the new statement;RUS=сменившийся виновник теряет прежнее имя и берёт новый текст запроса';
+      CulpritTxt@1000000169 : TextConst 'ENU=name "%1", source %2, statement "%3", expected an empty name, source None and statement "%4";RUS=имя "%1", источник %2, текст "%3", ожидались пустое имя, источник None и текст "%4"';
+      ChkCulpritKeepTxt@1000000170 : TextConst 'ENU=an unchanged culprit keeps both the name and the statement taken at the opening;RUS=неизменный виновник сохраняет и имя, и текст запроса, взятый при открытии';
+      CulpritKeepTxt@1000000171 : TextConst 'ENU=name "%1", source %2, statement "%3", expected "%4" and statement "%5";RUS=имя "%1", источник %2, текст "%3", ожидались "%4" и текст "%5"';
+      ChkCutoffShortTxt@1000000172 : TextConst 'ENU=in a truncated pass an episode that would still wait no longer than the cutoff stays open;RUS=в усечённом проходе эпизод, который ждал бы не дольше порога, остаётся открытым';
+      CutoffShortTxt@1000000173 : TextConst 'ENU=cutoff %1 ms, gap %2 ms, wait %3 ms, open %4;RUS=порог %1 мс, промежуток %2 мс, ожидание %3 мс, открыт %4';
+      ChkCutoffLongTxt@1000000174 : TextConst 'ENU=in a truncated pass an episode that would outwait the cutoff is closed;RUS=в усечённом проходе эпизод, который переждал бы порог, закрывается';
+      CutoffLongTxt@1000000175 : TextConst 'ENU=cutoff %1 ms, gap %2 ms, wait %3 ms, open %4;RUS=порог %1 мс, промежуток %2 мс, ожидание %3 мс, открыт %4';
+      ChkCutoffFullTxt@1000000176 : TextConst 'ENU=a full pass closes every absent episode, whatever its wait;RUS=полный съём закрывает всякий не наблюдённый эпизод, каким бы ни было ожидание';
+      CutoffFullTxt@1000000177 : TextConst 'ENU=open %1 of %2 absent episodes;RUS=открыто %1 из %2 не наблюдённых эпизодов';
 
     [External]
     PROCEDURE Bench@1();
@@ -366,6 +376,12 @@ OBJECT Codeunit 110234 LockWatch Journal Bench
             (BenchRowsWithWait(TinyWaitUnderTest) = 1),
             STRSUBSTNO(MinWaitOffTxt,TinyWaitUnderTest,Opened,BenchRowCount));
       Sweep;
+
+      // ---------- смена виновника и усечённый проход ----------
+      // Две беды, которые видно ТОЛЬКО на сцене: обе живут в ведении уже открытого
+      // эпизода, и обе молчат на полном съёме с одним ждущим.
+      CulpritScene(Passed,Total,Report);
+      CutoffScene(Passed,Total,Report);
 
       Worst := OpenMs;
       IF UpdateMs > Worst THEN
@@ -1050,6 +1066,307 @@ OBJECT Codeunit 110234 LockWatch Journal Bench
       EXIT(1);
     END;
 
+    LOCAL PROCEDURE SetBlockerText@69(VAR Observed@1000000178 : Record 110231;Value@1000000179 : Text);
+    VAR
+      OutStr@1000000180 : OutStream;
+    BEGIN
+      // Текст виновника в съёме. Пишется потоком в BLOB - так его пишет и сам проход:
+      // поле "Blocker Statement" в таблице несёт только начало, а проверяется полный текст.
+      Observed."Blocker Statement Text".CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+      OutStr.WRITETEXT(Value);
+    END;
+
+    LOCAL PROCEDURE OpenEpisode@70(Index@1000000181 : Integer;WaitMs@1000000182 : Integer;
+                                   BlockerText@1000000183 : Text;At@1000000184 : DateTime) : Integer;
+    VAR
+      Observed@1000000185 : TEMPORARY Record 110231;
+      EntryNo@1000000186 : Integer;
+    BEGIN
+      // Один открывающий проход. Съём временный: строка журнала из него и заводится, а
+      // сам он в базу не ложится - так же, как настоящий съём в RunPass.
+      Watch.BeginPass(At,NoMinWait);
+      MakeObserved(Observed,Index,WaitMs);
+      IF BlockerText <> '' THEN
+        SetBlockerText(Observed,BlockerText);
+      Watch.Observe(Observed);
+      Watch.FinishPass;
+      COMMIT;
+      EntryNo := EntryOfIndex(Index);
+      EXIT(EntryNo);
+    END;
+
+    LOCAL PROCEDURE CulpritScene@71(VAR Passed@1000000187 : Integer;
+                                    VAR Total@1000000188 : Integer;
+                                    VAR Report@1000000189 : Text);
+    VAR
+      Snap@1000000190 : TEMPORARY Record 110231;
+      Row@1000000191 : Record 110231;
+      EntryNo@1000000192 : Integer;
+      At@1000000193 : DateTime;
+      Gap@1000000194 : Duration;
+      Act@1000000195 : DateTime;
+      TextSeen@1000000196 : Text;
+    BEGIN
+      // Сцена смены виновника. Эпизод ОДИН на все три прохода: сессия, транзакция и ресурс
+      // жертвы не меняются, ожидание только растёт - по ключу это тот же эпизод.
+      Gap := CulpritGapMs;
+      At := CURRENTDATETIME;
+      EntryNo := OpenEpisode(CulpritIndex,CulpritFirstWaitMs,CulpritTextOld,At);
+      Row.GET(EntryNo);
+      Row."User Name" := NameCulprit;
+      Row."User Source" := Row."User Source"::FromPlatform;
+      Row.MODIFY;
+      COMMIT;
+
+      // Второй проход: виновник ТОТ ЖЕ, а текст в съёме другой. Имя и текст обязаны устоять:
+      // оба ставятся один раз, и до смены виновника переписывать их нечем.
+      Act := At + Gap;
+      Watch.BeginPass(Act,NoMinWait);
+      MakeObserved(Snap,CulpritIndex,CulpritSecondWaitMs);
+      SetBlockerText(Snap,CulpritTextOther);
+      Watch.Observe(Snap);
+      Watch.FinishPass;
+      COMMIT;
+      Row.GET(EntryNo);
+      TextSeen := Watch.StatementText(EntryNo,TRUE);
+      Check(Passed,Total,Report,ChkCulpritKeepTxt,
+            (Row."User Name" = NameCulprit) AND
+            (Row."User Source" = Row."User Source"::FromPlatform) AND
+            (TextSeen = CulpritTextOld),
+            STRSUBSTNO(CulpritKeepTxt,Row."User Name",FORMAT(Row."User Source",0,0),TextSeen,
+                       NameCulprit,CulpritTextOld));
+
+      // Третий проход: виновник СМЕНИЛСЯ - другой сеанс и другая транзакция. Имя прежнего
+      // обязано исчезнуть: иначе строка назвала бы новый сеанс именем старого. Текст берётся
+      // из этого же съёма, а не остаётся прежним.
+      Gap := CulpritThirdGapMs;
+      Act := At + Gap;
+      Watch.BeginPass(Act,NoMinWait);
+      MakeObserved(Snap,CulpritIndex,CulpritThirdWaitMs);
+      Snap."Blocker SPID" := -CulpritIndex - 1 - CulpritBlockerShift;
+      Snap."Blocker Transaction Id" := ObservedBlockerTransactionBase + CulpritIndex +
+                                       CulpritTransactionShift;
+      SetBlockerText(Snap,CulpritTextNew);
+      // Строка съёма вставляется во временную таблицу, как это делает съём очереди: перенос
+      // текста читает блоб через CALCFIELDS, а у невставленной временной строки он пуст.
+      Snap.INSERT;
+      Watch.Observe(Snap);
+      Watch.FinishPass;
+      COMMIT;
+      Row.GET(EntryNo);
+      TextSeen := Watch.StatementText(EntryNo,TRUE);
+      Check(Passed,Total,Report,ChkCulpritTxt,
+            (Row."User Name" = '') AND
+            (Row."User Source" = Row."User Source"::None) AND
+            (TextSeen = CulpritTextNew),
+            STRSUBSTNO(CulpritTxt,Row."User Name",FORMAT(Row."User Source",0,0),TextSeen,
+                       CulpritTextNew));
+      Sweep;
+    END;
+
+    LOCAL PROCEDURE CutoffScene@72(VAR Passed@1000000198 : Integer;
+                                   VAR Total@1000000199 : Integer;
+                                   VAR Report@1000000200 : Text);
+    VAR
+      Snap@1000000201 : TEMPORARY Record 110231;
+      Row@1000000202 : Record 110231;
+      At@1000000203 : DateTime;
+      Gap@1000000204 : Duration;
+      Act@1000000205 : DateTime;
+      ShortNo@1000000206 : Integer;
+      LongNo@1000000207 : Integer;
+      CtrlShortNo@1000000208 : Integer;
+      CtrlLongNo@1000000209 : Integer;
+      ShortOpen@1000000210 : Integer;
+      LongOpen@1000000211 : Integer;
+      CtrlOpen@1000000212 : Integer;
+    BEGIN
+      // Усечённый проход. Оба эпизода открыты одним съёмом и в следующем не встречаются:
+      // съём упёрся в потолок, и за ним мог остаться кто угодно. Порог 5000 мс, промежуток
+      // 1000 мс: короткий ждал 1000 и набрал бы 2000 - он мог не попасть в съём, закрывать
+      // его нельзя. Долгий ждал 4500 и набрал бы 5500 - он попал бы в съём, значит его
+      // отсутствие и есть уход из очереди.
+      Gap := CutoffGapMs;
+      At := CURRENTDATETIME;
+      Watch.BeginPass(At,NoMinWait);
+      MakeObserved(Snap,CutoffShortIndex,CutoffShortWaitMs);
+      Watch.Observe(Snap);
+      MakeObserved(Snap,CutoffLongIndex,CutoffLongWaitMs);
+      Watch.Observe(Snap);
+      Watch.FinishPass;
+      COMMIT;
+      ShortNo := EntryOfIndex(CutoffShortIndex);
+      LongNo := EntryOfIndex(CutoffLongIndex);
+
+      Act := At + Gap;
+      Watch.BeginPass(Act,NoMinWait);
+      Watch.MarkIncomplete(CutoffMs);
+      Watch.FinishPass;
+      COMMIT;
+      Row.GET(ShortNo);
+      ShortOpen := 0;
+      IF Row.Open THEN
+        ShortOpen := 1;
+      Row.GET(LongNo);
+      LongOpen := 0;
+      IF Row.Open THEN
+        LongOpen := 1;
+      Check(Passed,Total,Report,ChkCutoffShortTxt,ShortOpen = 1,
+            STRSUBSTNO(CutoffShortTxt,CutoffMs,CutoffGapMs,CutoffShortWaitMs,ShortOpen));
+      Check(Passed,Total,Report,ChkCutoffLongTxt,LongOpen = 0,
+            STRSUBSTNO(CutoffLongTxt,CutoffMs,CutoffGapMs,CutoffLongWaitMs,LongOpen));
+
+      // Контроль: тот же уход из очереди, но съём полный. Усечения нет - закрыты оба.
+      // Без него обе проверки выше прошли бы и на коде, который не закрывает никогда.
+      At := Act + Gap;
+      Watch.BeginPass(At,NoMinWait);
+      MakeObserved(Snap,CutoffCtrlShortIndex,CutoffShortWaitMs);
+      Watch.Observe(Snap);
+      MakeObserved(Snap,CutoffCtrlLongIndex,CutoffLongWaitMs);
+      Watch.Observe(Snap);
+      Watch.FinishPass;
+      COMMIT;
+      CtrlShortNo := EntryOfIndex(CutoffCtrlShortIndex);
+      CtrlLongNo := EntryOfIndex(CutoffCtrlLongIndex);
+      Act := At + Gap;
+      Watch.BeginPass(Act,NoMinWait);
+      Watch.FinishPass;
+      COMMIT;
+      CtrlOpen := 0;
+      Row.GET(CtrlShortNo);
+      IF Row.Open THEN
+        CtrlOpen := CtrlOpen + 1;
+      Row.GET(CtrlLongNo);
+      IF Row.Open THEN
+        CtrlOpen := CtrlOpen + 1;
+      Check(Passed,Total,Report,ChkCutoffFullTxt,CtrlOpen = 0,
+            STRSUBSTNO(CutoffFullTxt,CtrlOpen,CutoffPairSize));
+      Sweep;
+    END;
+
+    LOCAL PROCEDURE CulpritIndex@73() : Integer;
+    BEGIN
+      // Далеко за индексами основного замера (500), проверки имён (901-902) и порога (911):
+      // строки сцены не должны попасть ни под чей чужой счёт.
+      EXIT(921);
+    END;
+
+    LOCAL PROCEDURE CulpritFirstWaitMs@74() : Integer;
+    BEGIN
+      EXIT(1200);
+    END;
+
+    LOCAL PROCEDURE CulpritSecondWaitMs@75() : Integer;
+    BEGIN
+      // Ожидание РАСТЁТ, иначе проход честно сочтёт этот заход новым эпизодом: сцена
+      // проверяла бы открытие, а не сохранение имени.
+      EXIT(2200);
+    END;
+
+    LOCAL PROCEDURE CulpritThirdWaitMs@76() : Integer;
+    BEGIN
+      EXIT(3200);
+    END;
+
+    LOCAL PROCEDURE CulpritGapMs@77() : Integer;
+    BEGIN
+      // Промежуток между проходами сцены: три секунды, как период опроса по умолчанию.
+      EXIT(3000);
+    END;
+
+    LOCAL PROCEDURE CulpritThirdGapMs@78() : Integer;
+    BEGIN
+      // Двойной промежуток - миг третьего прохода. Арифметикой он не собирается нарочно:
+      // проверке нужен МОМЕНТ, а не сумма, и лишнее сложение тут ничего не доказывает.
+      EXIT(6000);
+    END;
+
+    LOCAL PROCEDURE CulpritBlockerShift@79() : Integer;
+    BEGIN
+      // Сдвиг номера сеанса виновника. Сто - заведомо другой сеанс и заведомо не сосед
+      // жертвы по основному замеру: у той номера идут подряд от единицы.
+      EXIT(100);
+    END;
+
+    LOCAL PROCEDURE CulpritTransactionShift@80() : Decimal;
+    BEGIN
+      // Сдвиг номера транзакции виновника: другая транзакция, а не другая запись той же.
+      // Тысяча - на два порядка меньше базы и на три - меньше самого номера.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE CulpritTextOld@81() : Text;
+    BEGIN
+      EXIT('UPDATE "BENCH" SET "Qty" WHERE "No_" - OPENING STATEMENT');
+    END;
+
+    LOCAL PROCEDURE CulpritTextOther@82() : Text;
+    BEGIN
+      // Текст второго съёма. Он ОТЛИЧЕН от первого, и в журнал попасть не должен: пока
+      // виновник тот же, текст остаётся тем, который взял блокировку.
+      EXIT('UPDATE "BENCH" SET "Qty" WHERE "No_" - SECOND STATEMENT');
+    END;
+
+    LOCAL PROCEDURE CulpritTextNew@83() : Text;
+    BEGIN
+      // Текст третьего съёма - уже от НОВОГО виновника. Именно он и обязан лечь в журнал.
+      EXIT('UPDATE "BENCH" SET "Qty" WHERE "No_" - NEW CULPRIT STATEMENT');
+    END;
+
+    LOCAL PROCEDURE CutoffMs@84() : Integer;
+    BEGIN
+      // Порог усечённого съёма: самое короткое ожидание, попавшее под потолок строк. Пять
+      // секунд - между коротким (1000 + 1000 = 2000) и долгим (4500 + 1000 = 5500).
+      EXIT(5000);
+    END;
+
+    LOCAL PROCEDURE CutoffGapMs@85() : Integer;
+    BEGIN
+      // Промежуток между съёмом и усечённым проходом. Секунда: короче порога, поэтому
+      // короткий эпизод остаётся под ним, а долгий его перекрывает.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE CutoffShortWaitMs@86() : Integer;
+    BEGIN
+      // Ожидание короткого эпизода. С промежутком даёт 2000 мс - меньше порога 5000.
+      EXIT(1000);
+    END;
+
+    LOCAL PROCEDURE CutoffLongWaitMs@87() : Integer;
+    BEGIN
+      // Ожидание долгого эпизода. С промежутком даёт 5500 мс - больше порога 5000.
+      EXIT(4500);
+    END;
+
+    LOCAL PROCEDURE CutoffShortIndex@88() : Integer;
+    BEGIN
+      // Индексы четырёх строк сцены усечения: пара под усечённым проходом и пара под
+      // контрольным. Разные индексы - разные личности ожидания, иначе пары слились бы.
+      EXIT(931);
+    END;
+
+    LOCAL PROCEDURE CutoffLongIndex@89() : Integer;
+    BEGIN
+      EXIT(932);
+    END;
+
+    LOCAL PROCEDURE CutoffCtrlShortIndex@90() : Integer;
+    BEGIN
+      EXIT(933);
+    END;
+
+    LOCAL PROCEDURE CutoffCtrlLongIndex@91() : Integer;
+    BEGIN
+      EXIT(934);
+    END;
+
+    LOCAL PROCEDURE CutoffPairSize@92() : Integer;
+    BEGIN
+      // В контрольной паре два эпизода, и оба обязаны закрыться полным съёмом.
+      EXIT(2);
+    END;
+
     BEGIN
     {
       Мерный прогон NAV-половины прохода - той самой, что дольше всех жила на обещании
@@ -1060,7 +1377,7 @@ OBJECT Codeunit 110234 LockWatch Journal Bench
       все открываются, все обновляются, все закрываются. Каждый - с COMMIT, потому что
       без него замер вдвое красивее и вдвое бесполезнее.
 
-      Проверок семнадцать (счёт на 04.11.2026), и каждая ловит свою ошибку:
+      Проверок двадцать две (счёт на 06.11.2026), и каждая ловит свою ошибку:
         открытие   - что эпизод заводится на ждущего, а не на наблюдение;
         обновление - что второй проход НЕ плодит строки (иначе в шторм журнал растёт
                      на полтысячи строк каждые три секунды, и это заметят по диску);
@@ -1078,6 +1395,11 @@ OBJECT Codeunit 110234 LockWatch Journal Bench
                      прекращаются на объявленном потолке;
         порог      - что короткое ожидание не открывает эпизода, равное порогу открывает,
                      уже открытый эпизод обновляется и ниже порога, а ноль пишет всё;
+        виновник   - что смена виновника сбрасывает прежнее имя и берёт новый текст из съёма,
+                     а без смены имя и прежний текст остаются;
+        усечение   - что в усечённом проходе эпизод, не попавший в съём, закрывается только
+                     когда он ждал бы дольше самого короткого попавшего, а полный съём
+                     закрывает всех;
         цена       - что NAV-половина прохода укладывается между полом и потолком.
 
       Мерный прогон работает только на пустом журнале и только при выключенном стороже:

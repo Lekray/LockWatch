@@ -19,6 +19,7 @@ OBJECT Codeunit 110231 LockWatch Sql
       SqlConn@1000000003 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlConnection";
       SqlReader@1000000004 : DotNet "'System.Data, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Data.SqlClient.SqlDataReader";
       LocksTruncated@1000000005 : Boolean;
+      QueueCutoff@1000000191 : Integer;
       NoServerErr@1000000006 : TextConst 'ENU=The SQL server name is not filled in the LockWatch setup. The platform does not tell it to C/AL: Active Session carries the NAV server, not the database one.;RUS=В настройке сторожа блокировок не заполнено имя сервера SQL. Платформа его коду не отдаёт: в Active Session записан сервер NAV, а не сервер базы.';
       NoClockErr@1000000007 : TextConst 'ENU=The server did not return the observation moment. Substituting the NAV clock here would silently shift every episode start.;RUS=Сервер не отдал момент наблюдения. Подставить сюда часы NAV значило бы молча сдвинуть начало каждого эпизода.';
       NoDatabaseErr@1000000008 : TextConst 'ENU=The database name is not known: the current session is missing from Active Session.;RUS=Имя базы неизвестно: текущего сеанса нет в Active Session.';
@@ -36,6 +37,7 @@ OBJECT Codeunit 110231 LockWatch Sql
       LastError := '';
       RowCount := 0;
       OtherDatabase := 0;
+      QueueCutoff := 0;
       ObservedAt := 0DT;
       Observed.RESET;
       Observed.DELETEALL;
@@ -94,6 +96,15 @@ OBJECT Codeunit 110231 LockWatch Sql
     END;
 
     [External]
+    PROCEDURE QueueCutoffMs@117() : Integer;
+    BEGIN
+      // Самое короткое ожидание последнего съёма, своей базы или чужой. Нужно только
+      // усечённому проходу: эпизод, который до сих пор ждал бы дольше этого, в съём бы
+      // попал, и раз его нет - он кончился.
+      EXIT(QueueCutoff);
+    END;
+
+    [External]
     PROCEDURE LocksTruncatedNote@5() : Text;
     BEGIN
       // Слово об обрезке списка интересных блокировок. Уходит наружу тем же путём, что и
@@ -138,6 +149,10 @@ OBJECT Codeunit 110231 LockWatch Sql
       SqlReader.NextResult;
 
       WHILE SqlReader.Read DO BEGIN
+        // Очередь идёт по убыванию ожидания, и чужие базы в ней стоят наравне с нашей:
+        // последняя прочитанная строка - самое короткое ожидание, попавшее под TOP. Им
+        // проход судит, ушёл ли из очереди эпизод, которого в усечённом съёме нет.
+        QueueCutoff := SqlReader.GetInt32(QueueColumnWaitMs);
         ResourceText := ReaderText(SqlReader,QueueColumnResourceDescription);
         Parsed := Watch.ParseWaitResource(ResourceText,Kind,HobtId,ObjectId,DatabaseId);
         // Чужая база на том же сервере - не наша беда и не наш журнал. Считается

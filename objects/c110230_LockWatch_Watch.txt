@@ -21,6 +21,7 @@ OBJECT Codeunit 110230 LockWatch Watch
       Sql@1000000001 : Codeunit 110231;
       PassAt@1000000002 : DateTime;
       NextEntryNo@1000000003 : Integer;
+      PassCutoffMs@1000000962 : Integer;
       PassStarted@1000000004 : Boolean;
       OpenedCount@1000000005 : Integer;
       UpdatedCount@1000000006 : Integer;
@@ -1068,6 +1069,7 @@ OBJECT Codeunit 110230 LockWatch Watch
       // своё значение, не заводя строку настройки.
       PassMinWaitMs := MinWaitMs;
       NextEntryNo := 0;
+      PassCutoffMs := 0;
       OpenedCount := 0;
       UpdatedCount := 0;
       ClosedCount := 0;
@@ -1152,10 +1154,43 @@ OBJECT Codeunit 110230 LockWatch Watch
       Journal.SETFILTER("Last Seen At",'<%1',PassAt);
       IF Journal.FINDSET(TRUE) THEN
         REPEAT
-          CloseRow;
+          IF LeftQueue THEN
+            CloseRow;
         UNTIL Journal.NEXT = 0;
       PassStarted := FALSE;
       EXIT(ClosedCount);
+    END;
+
+    [External]
+    PROCEDURE MarkIncomplete@1000000970(CutoffMs@1000000971 : Integer);
+    BEGIN
+      // Съём упёрся в потолок строк: в нём только самые долгие ожидания, и отсутствие
+      // эпизода в нём ещё не значит, что эпизод кончился. Зовётся между BeginPass и
+      // FinishPass; ноль, как и отсутствие вызова, значит "съём полный".
+      IF NOT PassStarted THEN
+        ERROR(NoPassErr);
+      PassCutoffMs := CutoffMs;
+    END;
+
+    LOCAL PROCEDURE LeftQueue@1000000972() : Boolean;
+    VAR
+      Gap@1000000973 : Duration;
+      GapMs@1000000974 : Integer;
+    BEGIN
+      // Полный съём видит всю очередь, и кого в нём нет - тот ушёл. В усечённом съёме
+      // уход доказывается только длительностью: ожидание растёт, и эпизод, который ждал бы
+      // сейчас ДОЛЬШЕ самого короткого попавшего под потолок, в съём бы попал. Кто короче
+      // или вровень - мог остаться за потолком, и закрыть его значило бы оборвать идущее
+      // ожидание; его закроет первый проход, который об уходе будет знать.
+      IF PassCutoffMs <= 0 THEN
+        EXIT(TRUE);
+      // Сравнение разнесено так, чтобы ни одна сумма не переполнила Integer: эпизод,
+      // оставшийся от прошлой жизни задачи, мог не видеться неделями.
+      Gap := PassAt - Journal."Last Seen At";
+      IF Gap > PassCutoffMs THEN
+        EXIT(TRUE);
+      GapMs := Gap;
+      EXIT(Journal."Last Wait (ms)" > PassCutoffMs - GapMs);
     END;
 
     [External]
@@ -1290,11 +1325,11 @@ OBJECT Codeunit 110230 LockWatch Watch
       Journal."Entry No." := NextNo;
       Journal.Open := FALSE;
       Journal.INSERT;
-      CopyStatements(Row,Journal);
+      CopyStatements(Row,Journal,TRUE);
       EXIT(TRUE);
     END;
 
-    LOCAL PROCEDURE CopyStatements@72(VAR From@1000000193 : Record 110231;VAR Into@1000000194 : Record 110231);
+    LOCAL PROCEDURE CopyStatements@72(VAR From@1000000193 : Record 110231;VAR Into@1000000194 : Record 110231;WithVictim@1000000961 : Boolean);
     VAR
       InStr@1000000195 : InStream;
       OutStr@1000000196 : OutStream;
@@ -1302,7 +1337,8 @@ OBJECT Codeunit 110230 LockWatch Watch
       Line@1000000198 : Text;
       Touched@1000000199 : Boolean;
     BEGIN
-      // Текст запроса переносится ОДИН раз, при открытии эпизода, и дальше не трогается.
+      // Текст запроса переносится ОДИН раз, при открытии эпизода (или смене виновника), и
+      // дальше не трогается.
       // Довод не в экономии: строка эпизода обновляется каждым проходом, и переписывать
       // текст заново значило бы менять его под читателем. Виновник за три секунды успевает
       // послать другой оператор, и в журнале оказался бы не тот, который взял блокировку.
@@ -1311,8 +1347,11 @@ OBJECT Codeunit 110230 LockWatch Watch
       // ждёшь: у временной таблицы значения и так в памяти. Без него HASVALUE отвечает
       // "нет" при полностью заполненном источнике, текст молча не переносится, а на экране
       // это выглядит как "запрос не сняли". Измерено на себе 08.09.2026.
+      //
+      // Без жертвы текст переносится при смене виновника (UpdateRow): жертва та же, и её
+      // запрос, взявший очередь, остаётся прежним.
       From.CALCFIELDS("Victim Statement","Blocker Statement Text");
-      IF From."Victim Statement".HASVALUE THEN BEGIN
+      IF WithVictim AND From."Victim Statement".HASVALUE THEN BEGIN
         From."Victim Statement".CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
         Body.READ(InStr);
         Body.GETSUBTEXT(Line,1,Body.LENGTH);
@@ -1508,13 +1547,14 @@ OBJECT Codeunit 110230 LockWatch Watch
       Journal.Outcome := Journal.Outcome::Undetermined;
       Journal.Open := TRUE;
       Journal.INSERT;
-      CopyStatements(Observed,Journal);
+      CopyStatements(Observed,Journal,TRUE);
       OpenedCount := OpenedCount + 1;
     END;
 
     LOCAL PROCEDURE UpdateRow@81(VAR Observed@1000000224 : Record 110231);
     VAR
       Keep@1000000225 : Record 110231;
+      CulpritChanged@1000000960 : Boolean;
     BEGIN
       // Наблюдаемое перекрывает строку ЦЕЛИКОМ, кроме того, что устанавливается один раз.
       // Так новое поле съёма начинает обновляться само, а не забывается молча; список
@@ -1535,6 +1575,14 @@ OBJECT Codeunit 110230 LockWatch Watch
       // при удалении. Читается он тут на каждое обновление, и платит за это только та
       // установка, где сбор операторов включён.
       Keep.CALCFIELDS("Victim Statement","Blocker Statement Text");
+      // Виновник у идущего эпизода может смениться: в цепочке A -> B -> C голова уходит, и
+      // жертва остаётся ждать уже другого. Сеанс и транзакция виновника приходят со съёмом
+      // свежими, а имя и текст запроса - из списка "устанавливается один раз". Оставь их -
+      // и строка назвала бы новый сеанс именем и запросом прежнего. Поэтому при смене
+      // виновника весь его набор берётся заново: имя спросит платформа следующим шагом
+      // прохода, текст запроса ляжет из съёма.
+      CulpritChanged := (Keep."Blocker SPID" <> Observed."Blocker SPID") OR
+                        (Keep."Blocker Transaction Id" <> Observed."Blocker Transaction Id");
       Journal := Observed;
       Journal."Entry No." := Keep."Entry No.";
       Journal."Started At" := Keep."Started At";
@@ -1543,8 +1591,10 @@ OBJECT Codeunit 110230 LockWatch Watch
       Journal."Document No." := Keep."Document No.";
       Journal."Document Source" := Keep."Document Source";
       Journal."No Document Reason" := Keep."No Document Reason";
-      Journal."User Name" := Keep."User Name";
-      Journal."User Source" := Keep."User Source";
+      IF NOT CulpritChanged THEN BEGIN
+        Journal."User Name" := Keep."User Name";
+        Journal."User Source" := Keep."User Source";
+      END;
       // Имя жертвы - из того же списка, и забыть его тут стоило дороже всего: оно
       // писалось исправно и затиралось следующим же проходом через три секунды, а
       // выглядело это как "дорога к имени жертвы не работает вовсе".
@@ -1556,13 +1606,18 @@ OBJECT Codeunit 110230 LockWatch Watch
       // наблюдаемой строке лежит оператор ТЕКУЩИЙ, а в журнале обязан лежать тот, который
       // взял блокировку, - см. довод и CALCFIELDS выше.
       Journal."Victim Statement" := Keep."Victim Statement";
-      Journal."Blocker Statement Text" := Keep."Blocker Statement Text";
+      IF CulpritChanged THEN
+        CLEAR(Journal."Blocker Statement Text")
+      ELSE
+        Journal."Blocker Statement Text" := Keep."Blocker Statement Text";
       Journal.Open := TRUE;
       Journal."Last Seen At" := PassAt;
       Journal."Max Wait (ms)" := Keep."Max Wait (ms)";
       IF Observed."Last Wait (ms)" > Journal."Max Wait (ms)" THEN
         Journal."Max Wait (ms)" := Observed."Last Wait (ms)";
       Journal.MODIFY;
+      IF CulpritChanged THEN
+        CopyStatements(Observed,Journal,FALSE);
       UpdatedCount := UpdatedCount + 1;
     END;
 
@@ -1713,6 +1768,11 @@ OBJECT Codeunit 110230 LockWatch Watch
       // Порог записи идёт тем же путём, что и прочие настройки прохода: проход читает
       // настройку один раз и отдаёт журналу, а журнал не знает, откуда он вызван.
       BeginPass(ObservedAt,Setup."Journal Min Wait (ms)");
+      // Потолок считается по ВСЕМ строкам съёма, и чужим тоже: TOP стоит в запросе до
+      // отсева чужих баз, и долгие чужие ожидания вытесняют свои так же, как свои.
+      Truncated := (RowLimit > 0) AND (RowCount + OtherDatabase >= RowLimit);
+      IF Truncated THEN
+        MarkIncomplete(Sql.QueueCutoffMs);
       Observed.RESET;
       IF Observed.FINDSET THEN
         REPEAT
@@ -1731,7 +1791,7 @@ OBJECT Codeunit 110230 LockWatch Watch
 
       // Имена от платформы - последней дорогой и только туда, где прежние имени не дали:
       // штатная таблица дорога.
-      Note := Note + NameInPass;
+      Note := Note + NameInPass(State);
 
       // Взаимоблокировки собираются ПОСЛЕ очереди и не каждым проходом. Они приходят
       // готовыми эпизодами и ведению не подлежат: сервер уже разорвал круг.
@@ -1743,7 +1803,6 @@ OBJECT Codeunit 110230 LockWatch Watch
                                 TrimRowsPerPass(Setup."Max Rows per Pass"));
       Note := Note + MovedNote(Deleted);
 
-      Truncated := (RowLimit > 0) AND (RowCount >= RowLimit);
       Elapsed := CURRENTDATETIME - StartedAt;
       Note := STRSUBSTNO(CountsTxt,Opened,Updated,Closed,Restarted) + Note;
       // Превышение потолка идёт ПЕРВЫМ словом, а не последним: строка сторожа - Text250,
@@ -1907,12 +1966,13 @@ OBJECT Codeunit 110230 LockWatch Watch
       // Запись у прохода ОДНА и в самом конце. Строка перечитывается под замком прямо
       // перед ней: между началом прохода и его концом человек мог нажать "стоп" или
       // "запустить", а NAV сверяет версию строки при записи. Отметки, добытые проходом,
-      // переносятся в свежую строку поимённо - их три, и список этот стоит держать на виду.
+      // переносятся в свежую строку поимённо - их четыре, и список этот стоит держать на виду.
       Milliseconds := Elapsed;
       Fresh.FetchToWrite;
       Fresh."Deadlocks Read At" := State."Deadlocks Read At";
       Fresh."Deadlocks Read Until" := State."Deadlocks Read Until";
       Fresh."Deadlocks Counted" := State."Deadlocks Counted";
+      Fresh."Names Asked Up To" := State."Names Asked Up To";
       Fresh."Last Pass At" := At;
       Fresh."Last Pass (ms)" := Milliseconds;
       Fresh."Last Pass Rows" := Rows;
@@ -1983,7 +2043,7 @@ OBJECT Codeunit 110230 LockWatch Watch
     END;
 
     [External]
-    PROCEDURE NameInPass@95() : Text;
+    PROCEDURE NameInPass@95(VAR State@1000000975 : Record 110233) : Text;
     VAR
       Episode@1000000291 : Record 110231;
       Setup@1000000292 : Record 110230;
@@ -2012,23 +2072,24 @@ OBJECT Codeunit 110230 LockWatch Watch
       Setup.FetchOnce;
       IF NOT Setup."Platform Names Enabled" THEN
         EXIT('');
-      Episode.SETCURRENTKEY(Open,"Victim SPID","Victim Transaction Id","Hobt Id");
+      //
+      // Спрашивается по кругу, а не с начала журнала: платформа знает не всякую транзакцию,
+      // и первые двадцать безымянных, которых она не назовёт никогда, загородили бы собой
+      // всех остальных. Проход продолжает после эпизода, на котором остановился прошлый
+      // (Names Asked Up To в строке сторожа), и дойдя до конца, начинает сначала.
       Episode.SETRANGE(Open,TRUE);
       Episode.SETFILTER("Blocker Transaction Id",'<>%1',0);
-      IF Episode.FINDSET THEN
-        REPEAT
-          IF (Episode."User Name" = '') OR
-             ((Episode."Victim User Name" = '') AND (Episode."Victim Transaction Id" <> 0))
-          THEN
-            IF Episodes < PassEpisodeLimit THEN BEGIN
-              Episodes := Episodes + 1;
-              EntryNos[Episodes] := Episode."Entry No.";
-              Trans[2 * Episodes - 1] := Episode."Blocker Transaction Id";
-              Trans[2 * Episodes] := Episode."Victim Transaction Id";
-            END;
-        UNTIL Episode.NEXT = 0;
-      IF Episodes = 0 THEN
+      Episode.SETFILTER("Entry No.",'>%1',State."Names Asked Up To");
+      PickNameless(Episode,EntryNos,Trans,Episodes);
+      IF Episodes < PassEpisodeLimit THEN BEGIN
+        Episode.SETRANGE("Entry No.",0,State."Names Asked Up To");
+        PickNameless(Episode,EntryNos,Trans,Episodes);
+      END;
+      IF Episodes = 0 THEN BEGIN
+        State."Names Asked Up To" := 0;
         EXIT('');
+      END;
+      State."Names Asked Up To" := EntryNos[Episodes];
 
       IF NOT TryReadUsers(Trans,Users,2 * Episodes) THEN
         EXIT(' ' + STRSUBSTNO(PassFailedTxt,GETLASTERRORTEXT));
@@ -2051,6 +2112,21 @@ OBJECT Codeunit 110230 LockWatch Watch
           END;
         END;
       EXIT(' ' + STRSUBSTNO(PassNamedTxt,Named,Episodes));
+    END;
+
+    LOCAL PROCEDURE PickNameless@1000000976(VAR Episode@1000000977 : Record 110231;VAR EntryNos@1000000978 : ARRAY [20] OF Integer;VAR Trans@1000000979 : ARRAY [40] OF BigInteger;VAR Episodes@1000000980 : Integer);
+    BEGIN
+      IF Episode.FINDSET THEN
+        REPEAT
+          IF (Episode."User Name" = '') OR
+             ((Episode."Victim User Name" = '') AND (Episode."Victim Transaction Id" <> 0))
+          THEN BEGIN
+            Episodes := Episodes + 1;
+            EntryNos[Episodes] := Episode."Entry No.";
+            Trans[2 * Episodes - 1] := Episode."Blocker Transaction Id";
+            Trans[2 * Episodes] := Episode."Victim Transaction Id";
+          END;
+        UNTIL (Episodes >= PassEpisodeLimit) OR (Episode.NEXT = 0);
     END;
 
     [TryFunction]
